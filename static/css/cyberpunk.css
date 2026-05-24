@@ -1,0 +1,925 @@
+/* ========================================
+   赛博朋克主题 v2 — 暗黑霓虹金融风
+   深蓝黑底 + 毛玻璃卡片 + 金/青双色
+   ======================================== */
+
+/* ── 核心设计令牌覆盖 ── */
+[data-theme="cyberpunk"] {
+  --bg:           #0B0E17;
+  --bg-card:      rgba(16, 20, 35, 0.85);
+  --bg-hover:     rgba(22, 28, 50, 0.90);
+  --bg-sidebar:   #0A0D15;
+
+  --text-primary:   #E8EAF0;
+  --text-secondary: #7B82A0;
+  --text-muted:     #4A5070;
+
+  --color-up:       #FF4D6A;    /* 涨=亮红 */
+  --color-down:     #00D4A1;    /* 跌=翡翠绿 */
+  --color-accent:   #4EA8DE;    /* 蓝=冷青 */
+  --color-accent-2: #F0A030;    /* 金=琥珀强调 */
+  --color-warn:     #FFB020;    /* 警告=暖金 */
+
+  --color-primary:  #4EA8DE;
+
+  --gradient-warm:  linear-gradient(135deg, rgba(240,160,48,0.06), rgba(78,168,222,0.06));
+  --gradient-cool:  linear-gradient(135deg, rgba(78,168,222,0.05), rgba(0,212,161,0.05));
+
+  --shadow-card:    0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04);
+  --shadow-hover:   0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(78,168,222,0.12);
+  --border-light:   rgba(255,255,255,0.06);
+
+  --font-sans:  'Inter', 'PingFang SC', 'Noto Sans SC', -apple-system, sans-serif;
+  --font-mono:  'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+}
+
+/* ── 全局背景 ── */
+[data-theme="cyberpunk"] body {
+  background: #0B0E17;
+  color: var(--text-primary);
+}
+
+/* ── 顶部Banner ── */
+[data-theme="cyberpunk"] .banner {
+  background: rgba(12, 15, 26, 0.92);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  box-shadow: 0 1px 8px rgba(0,0,0,0.3);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+[data-theme="cyberpunk"] .logo {
+  color: #E8EAF0;
+}
+
+/* ── 导航Tab ── */
+[data-theme="cyberpunk"] .tab-btn {
+  color: var(--text-secondary);
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+[data-theme="cyberpunk"] .tab-btn:hover {
+  color: #E8EAF0;
+  background: rgba(255,255,255,0.04);
+}
+
+[data-theme="cyberpunk"] .tab-btn.active {
+  color: #4EA8DE;
+  background: rgba(78,168,222,0.10);
+  font-weight: 600;
+}
+
+/* ── 股票列表区域 ── */
+[data-theme="cyberpunk"] .stock-list {
+  background: rgba(12, 15, 26, 0.90);
+  border-right: 1px solid rgba(255,255,255,0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+[data-theme="cyberpunk"] .stock-search input {
+  background: rgba(16, 20, 35, 0.60);
+  border-color: rgba(255,255,255,0.06);
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .stock-search input:focus {
+  border-color: rgba(78,168,222,0.40);
+  box-shadow: 0 0 0 2px rgba(78,168,222,0.08);
+}
+
+/* ── 股票卡片 ── */
+[data-theme="cyberpunk"] .stock-card {
+  background: rgba(16, 20, 35, 0.70);
+  border: 1px solid rgba(255,255,255,0.05);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme="cyberpunk"] .stock-card:hover {
+  border-color: rgba(78,168,222,0.20);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3), 0 0 0 1px rgba(78,168,222,0.10);
+  transform: translateY(-1px);
+}
+
+[data-theme="cyberpunk"] .stock-card.active {
+  border-color: rgba(78,168,222,0.35);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3), 0 0 0 1px rgba(78,168,222,0.20);
+}
+
+[data-theme="cyberpunk"] .sc-grip {
+  background: rgba(255,255,255,0.02);
+  border-right: 1px solid rgba(255,255,255,0.04);
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .sc-name {
+  color: #E8EAF0;
+}
+
+[data-theme="cyberpunk"] .sc-code {
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .sc-data-lbl {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .sc-data-val {
+  color: var(--text-secondary);
+}
+
+/* 底部色条 — 柔和渐变 */
+[data-theme="cyberpunk"] .stock-card-bar.up {
+  background: linear-gradient(90deg, #FF4D6A, #FF8FA0);
+}
+
+[data-theme="cyberpunk"] .stock-card-bar.down {
+  background: linear-gradient(90deg, #00D4A1, #40E8C0);
+}
+
+[data-theme="cyberpunk"] .stock-card-bar.flat {
+  background: rgba(255,255,255,0.04);
+}
+
+/* ── 删除按钮 ── */
+[data-theme="cyberpunk"] .stock-card .btn-remove {
+  background: rgba(255, 77, 106, 0.88);
+  box-shadow: 0 4px 16px rgba(255, 77, 106, 0.20);
+}
+
+[data-theme="cyberpunk"] .stock-card .btn-remove:hover {
+  background: rgba(255, 77, 106, 1);
+  box-shadow: 0 6px 20px rgba(255, 77, 106, 0.30);
+}
+
+/* ── 大盘指数条 ── */
+[data-theme="cyberpunk"] .index-bar,
+[data-theme="cyberpunk"] .indices-bar {
+  background: rgba(16, 20, 35, 0.60);
+  border-bottom-color: rgba(255,255,255,0.04);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme="cyberpunk"] .idx-name,
+[data-theme="cyberpunk"] .index-name {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .idx-value,
+[data-theme="cyberpunk"] .index-price {
+  color: var(--text-primary);
+}
+
+/* ── 详情Tab ── */
+[data-theme="cyberpunk"] .detail-tabs {
+  background: rgba(255,255,255,0.03);
+}
+
+[data-theme="cyberpunk"] .detail-tab {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .detail-tab.active {
+  background: rgba(78,168,222,0.10);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .detail-tab:hover:not(.active) {
+  color: #E8EAF0;
+  background: rgba(255,255,255,0.03);
+}
+
+/* ── 新闻/研报子Tab ── */
+[data-theme="cyberpunk"] .news-tab {
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .news-tab:hover {
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .news-tab.active {
+  background: rgba(78,168,222,0.12);
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+}
+
+/* ── 卡片通用 ── */
+[data-theme="cyberpunk"] .card {
+  background: rgba(16, 20, 35, 0.75);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  position: relative;
+}
+
+[data-theme="cyberpunk"] .card:hover {
+  box-shadow: var(--shadow-hover);
+}
+
+[data-theme="cyberpunk"] .card-title {
+  color: var(--text-secondary);
+}
+
+/* ── 表格 ── */
+[data-theme="cyberpunk"] .data-table th {
+  color: var(--text-muted);
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="cyberpunk"] .data-table td {
+  border-bottom-color: rgba(255,255,255,0.03);
+}
+
+[data-theme="cyberpunk"] .data-table tr:hover td {
+  background: rgba(255,255,255,0.02);
+}
+
+[data-theme="cyberpunk"] .suggestions-table th {
+  color: var(--text-secondary);
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="cyberpunk"] .suggestions-table td {
+  border-bottom-color: rgba(255,255,255,0.03);
+}
+
+[data-theme="cyberpunk"] .suggestions-table tr:hover {
+  background: rgba(255,255,255,0.02);
+}
+
+/* ── 按钮 ── */
+[data-theme="cyberpunk"] .btn-primary {
+  background: linear-gradient(135deg, #4EA8DE, #3B90C4);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(78,168,222,0.20);
+}
+
+[data-theme="cyberpunk"] .btn-primary:hover {
+  box-shadow: 0 4px 14px rgba(78,168,222,0.30);
+  filter: brightness(1.08);
+}
+
+[data-theme="cyberpunk"] .btn-ghost {
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .btn-ghost:hover {
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+  background: rgba(78,168,222,0.05);
+}
+
+[data-theme="cyberpunk"] .btn-icon:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+[data-theme="cyberpunk"] .btn-refresh-now {
+  background: linear-gradient(135deg, #4EA8DE, #3B90C4);
+  color: #fff;
+  font-weight: 600;
+}
+
+[data-theme="cyberpunk"] .btn-refresh-now:hover {
+  box-shadow: 0 4px 14px rgba(78,168,222,0.25);
+}
+
+/* ── Badge ── */
+[data-theme="cyberpunk"] .badge-up {
+  background: rgba(255, 77, 106, 0.12);
+  color: #FF4D6A;
+}
+
+[data-theme="cyberpunk"] .badge-down {
+  background: rgba(0, 212, 161, 0.10);
+  color: #00D4A1;
+}
+
+[data-theme="cyberpunk"] .badge-warn {
+  background: rgba(255, 176, 32, 0.10);
+  color: #FFB020;
+}
+
+[data-theme="cyberpunk"] .badge-info {
+  background: rgba(78, 168, 222, 0.10);
+  color: #4EA8DE;
+}
+
+/* ── 进度条 ── */
+[data-theme="cyberpunk"] .progress-bar {
+  background: rgba(255,255,255,0.05);
+}
+
+[data-theme="cyberpunk"] .progress-fill {
+  background: linear-gradient(90deg, #4EA8DE, #00D4A1);
+}
+
+[data-theme="cyberpunk"] .progress-bar-container {
+  background: rgba(255,255,255,0.04);
+}
+
+/* ── 信号 ── */
+[data-theme="cyberpunk"] .signal-buy {
+  color: #FF4D6A;
+}
+
+[data-theme="cyberpunk"] .signal-sell {
+  color: #00D4A1;
+}
+
+[data-theme="cyberpunk"] .signal-hold {
+  color: #F0A030;
+}
+
+[data-theme="cyberpunk"] .signal-buy,
+[data-theme="cyberpunk"] .report-signal.signal-buy {
+  background: rgba(255, 77, 106, 0.12);
+}
+
+[data-theme="cyberpunk"] .signal-sell,
+[data-theme="cyberpunk"] .report-signal.signal-sell {
+  background: rgba(0, 212, 161, 0.10);
+}
+
+[data-theme="cyberpunk"] .signal-hold,
+[data-theme="cyberpunk"] .report-signal.signal-hold {
+  background: rgba(240, 160, 48, 0.10);
+}
+
+/* ── Alert ── */
+[data-theme="cyberpunk"] .alert-warn {
+  background: rgba(255, 176, 32, 0.08);
+  color: #FFB020;
+  border-left: 3px solid rgba(255, 176, 32, 0.50);
+}
+
+[data-theme="cyberpunk"] .alert-error {
+  background: rgba(255, 77, 106, 0.08);
+  color: #FF8FA0;
+  border-left: 3px solid rgba(255, 77, 106, 0.50);
+}
+
+[data-theme="cyberpunk"] .alert-info {
+  background: rgba(78, 168, 222, 0.06);
+  color: #4EA8DE;
+  border-left: 3px solid rgba(78, 168, 222, 0.40);
+}
+
+/* ── 情绪Badge ── */
+[data-theme="cyberpunk"] .sent-badge.positive {
+  background: rgba(255, 77, 106, 0.12);
+  color: #FF8FA0;
+}
+
+[data-theme="cyberpunk"] .sent-badge.negative {
+  background: rgba(0, 212, 161, 0.10);
+  color: #00D4A1;
+}
+
+[data-theme="cyberpunk"] .sent-badge.neutral {
+  background: rgba(255,255,255,0.04);
+  color: var(--text-muted);
+}
+
+/* ── 研报评级 ── */
+[data-theme="cyberpunk"] .report-rating {
+  background: rgba(78, 168, 222, 0.10);
+  color: #4EA8DE;
+}
+
+/* ── 公告类型 ── */
+[data-theme="cyberpunk"] .announce-type {
+  background: rgba(187, 134, 252, 0.10);
+  color: #BB86FC;
+}
+
+/* ── 新闻/研报/公告列表项 ── */
+[data-theme="cyberpunk"] .news-item,
+[data-theme="cyberpunk"] .research-item,
+[data-theme="cyberpunk"] .announce-item {
+  background: rgba(16, 20, 35, 0.70);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.03);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="cyberpunk"] .news-item:hover,
+[data-theme="cyberpunk"] .research-item:hover,
+[data-theme="cyberpunk"] .announce-item:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3), 0 0 0 1px rgba(78,168,222,0.10);
+}
+
+[data-theme="cyberpunk"] .news-item-title a,
+[data-theme="cyberpunk"] .announce-item-title a {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .news-item-title a:hover,
+[data-theme="cyberpunk"] .announce-item-title a:hover {
+  color: #4EA8DE;
+}
+
+/* ── 信息网格 ── */
+[data-theme="cyberpunk"] .info-label {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .info-value {
+  color: var(--text-primary);
+}
+
+/* ── K线Tab ── */
+[data-theme="cyberpunk"] .chart-tab:hover {
+  color: #4EA8DE;
+  background: rgba(78,168,222,0.06);
+}
+
+[data-theme="cyberpunk"] .chart-tab.active {
+  color: #4EA8DE;
+  background: rgba(78,168,222,0.08);
+  border-bottom-color: #4EA8DE;
+}
+
+/* ── 盈亏 ── */
+[data-theme="cyberpunk"] .pnl-label {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .pnl-value {
+  color: var(--text-primary);
+}
+
+/* ── 盈亏日历 ── */
+[data-theme="cyberpunk"] .calendar-header button {
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .calendar-header button:hover {
+  background: rgba(255,255,255,0.04);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .calendar-stats {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .calendar-day-header {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .calendar-day-num {
+  color: var(--text-primary);
+}
+
+/* ── 确认弹窗 ── */
+[data-theme="cyberpunk"] .modal-overlay {
+  background: rgba(0,0,0,0.60);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="cyberpunk"] .modal-box {
+  background: rgba(18, 22, 40, 0.95);
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+[data-theme="cyberpunk"] .modal-title {
+  color: #E8EAF0;
+}
+
+[data-theme="cyberpunk"] .modal-body {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .modal-body strong {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .btn-cancel {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .btn-cancel:hover {
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .btn-danger {
+  background: linear-gradient(135deg, #FF4D6A, #E03050);
+  box-shadow: 0 2px 10px rgba(255, 77, 106, 0.20);
+}
+
+[data-theme="cyberpunk"] .btn-danger:hover {
+  box-shadow: 0 4px 16px rgba(255, 77, 106, 0.30);
+}
+
+/* ── 表单控件 ── */
+[data-theme="cyberpunk"] .form-control,
+[data-theme="cyberpunk"] .form-select,
+[data-theme="cyberpunk"] .form-input-sm,
+[data-theme="cyberpunk"] .form-group input,
+[data-theme="cyberpunk"] .form-group select {
+  background: rgba(16, 20, 35, 0.60);
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .form-control:focus,
+[data-theme="cyberpunk"] .form-select:focus,
+[data-theme="cyberpunk"] .form-input-sm:focus,
+[data-theme="cyberpunk"] .form-group input:focus,
+[data-theme="cyberpunk"] .form-group select:focus {
+  border-color: rgba(78,168,222,0.40);
+  box-shadow: 0 0 0 2px rgba(78,168,222,0.08);
+}
+
+[data-theme="cyberpunk"] select.form-control {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%237B82A0'/%3E%3C/svg%3E");
+}
+
+/* ── 条件单卡片 ── */
+[data-theme="cyberpunk"] .order-card {
+  background: rgba(16, 20, 35, 0.70);
+  border-color: rgba(255,255,255,0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="cyberpunk"] .order-code {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .order-body {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .order-meta {
+  color: var(--text-muted);
+}
+
+/* ── 筛选栏 ── */
+[data-theme="cyberpunk"] .filter-bar > span {
+  color: var(--text-secondary);
+}
+
+/* ── EPS 预测 ── */
+[data-theme="cyberpunk"] .eps-forecast-card {
+  background: linear-gradient(135deg, rgba(240,160,48,0.05), rgba(78,168,222,0.05));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── 七层数据 ── */
+[data-theme="cyberpunk"] .layer-card {
+  background: rgba(16, 20, 35, 0.70);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+[data-theme="cyberpunk"] .layer-card .layer-title {
+  color: var(--text-primary);
+  border-bottom-color: rgba(255,255,255,0.05);
+}
+
+[data-theme="cyberpunk"] .layer-row .label {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .layer-row .value {
+  color: var(--text-primary);
+}
+
+/* ── 状态Badge ── */
+[data-theme="cyberpunk"] .status-danger {
+  background: rgba(255, 77, 106, 0.12);
+  color: #FF8FA0;
+}
+
+[data-theme="cyberpunk"] .status-warning {
+  background: rgba(255, 176, 32, 0.10);
+  color: #FFB020;
+}
+
+[data-theme="cyberpunk"] .status-info {
+  background: rgba(78, 168, 222, 0.10);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .status-default {
+  background: rgba(255,255,255,0.03);
+  color: var(--text-secondary);
+}
+
+/* ── AI分析台 ── */
+[data-theme="cyberpunk"] .ai-left {
+  background: rgba(12, 15, 26, 0.90);
+  border-right-color: rgba(255,255,255,0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+[data-theme="cyberpunk"] .ai-right {
+  background: rgba(12, 15, 26, 0.90);
+  border-left-color: rgba(255,255,255,0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+[data-theme="cyberpunk"] .ai-container > .queue-panel {
+  background: rgba(78,168,222,0.04);
+  border-bottom-color: rgba(255,255,255,0.04);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .ai-toggle-left,
+[data-theme="cyberpunk"] .ai-toggle-right {
+  background: rgba(16, 20, 35, 0.90);
+  border-color: rgba(255,255,255,0.06);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme="cyberpunk"] .ai-toggle-left:hover,
+[data-theme="cyberpunk"] .ai-toggle-right:hover {
+  background: rgba(22, 28, 50, 0.95);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .ai-section {
+  background: rgba(16, 20, 35, 0.70);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+[data-theme="cyberpunk"] .section-header h3 {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .update-time {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .analysis-progress {
+  background: transparent;
+}
+
+[data-theme="cyberpunk"] .stage-indicator {
+  background: rgba(16, 20, 35, 0.60);
+}
+
+[data-theme="cyberpunk"] .stage-name {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .stage-dot.running {
+  color: #F0A030;
+}
+
+[data-theme="cyberpunk"] .stage-dot.completed {
+  color: #00D4A1;
+}
+
+/* ── 分析结果 ── */
+[data-theme="cyberpunk"] .result-section {
+  background: rgba(78,168,222,0.04);
+}
+
+[data-theme="cyberpunk"] .result-section h4 {
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .advice-item {
+  background: rgba(16, 20, 35, 0.60);
+}
+
+[data-theme="cyberpunk"] .advice-label {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .advice-value {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .advice-reasoning {
+  color: var(--text-secondary);
+}
+
+/* ── 风控Tab ── */
+[data-theme="cyberpunk"] .risk-tab {
+  border-color: rgba(255,255,255,0.08);
+  background: rgba(16, 20, 35, 0.60);
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .risk-tab:hover {
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .risk-tab.active {
+  background: rgba(78,168,222,0.12);
+  color: #4EA8DE;
+  border-color: rgba(78,168,222,0.30);
+}
+
+[data-theme="cyberpunk"] .risk-content {
+  background: rgba(16, 20, 35, 0.60);
+  color: var(--text-secondary);
+}
+
+/* ── 异动日志 ── */
+[data-theme="cyberpunk"] .anomaly-item {
+  background: rgba(16, 20, 35, 0.50);
+}
+
+[data-theme="cyberpunk"] .anomaly-empty {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .anomaly-stock {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .anomaly-change {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .anomaly-message {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .anomaly-advice {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .anomaly-time {
+  color: var(--text-muted);
+}
+
+/* ── 历史报告 ── */
+[data-theme="cyberpunk"] .report-item {
+  background: rgba(16, 20, 35, 0.50);
+}
+
+[data-theme="cyberpunk"] .report-item:hover {
+  background: rgba(78,168,222,0.05);
+}
+
+[data-theme="cyberpunk"] .report-code {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .report-time {
+  color: var(--text-muted);
+}
+
+[data-theme="cyberpunk"] .report-item-meta {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .report-expander {
+  background: rgba(16, 20, 35, 0.70);
+  border-color: rgba(255,255,255,0.05);
+}
+
+[data-theme="cyberpunk"] .report-expander summary {
+  background: rgba(255,255,255,0.02);
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .report-expander summary:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+[data-theme="cyberpunk"] .report-content {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .report-content h3,
+[data-theme="cyberpunk"] .report-content h4,
+[data-theme="cyberpunk"] .report-content h5 {
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .report-content strong {
+  color: var(--text-primary);
+}
+
+[data-theme="cyberpunk"] .report-content code {
+  background: rgba(78,168,222,0.08);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .report-content hr {
+  border-top-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="cyberpunk"] .report-chars {
+  color: var(--text-muted);
+}
+
+/* ── 信号Banner ── */
+[data-theme="cyberpunk"] .signal-banner {
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(16, 20, 35, 0.80);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ── 持仓页 ── */
+[data-theme="cyberpunk"] .portfolio-container {
+  color: var(--text-primary);
+}
+
+/* ── 设置页 ── */
+[data-theme="cyberpunk"] .settings-container {
+  color: var(--text-primary);
+}
+
+/* ── 空状态 ── */
+[data-theme="cyberpunk"] .empty-state {
+  color: var(--text-muted);
+}
+
+/* ── 滚动条 ── */
+[data-theme="cyberpunk"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-theme="cyberpunk"] ::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+}
+
+[data-theme="cyberpunk"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.14);
+}
+
+/* ── 通知Badge ── */
+[data-theme="cyberpunk"] .notify-badge {
+  background: linear-gradient(135deg, #4EA8DE, #3B90C4);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(78,168,222,0.20);
+}
+
+[data-theme="cyberpunk"] .notify-badge span {
+  background: #0B0E17;
+  color: #4EA8DE;
+}
+
+/* ── 账户切换器 ── */
+[data-theme="cyberpunk"] #accountSwitcher {
+  background: rgba(16, 20, 35, 0.60);
+  color: var(--text-primary);
+  border-color: rgba(255,255,255,0.08);
+}
+
+/* ── 移动端底部Tab ── */
+[data-theme="cyberpunk"] .mobile-tab-bar {
+  background: rgba(12, 15, 26, 0.95);
+  border-top: 1px solid rgba(255,255,255,0.05);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+[data-theme="cyberpunk"] .mobile-tab-item {
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .mobile-tab-item.active {
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .mobile-tab-item:hover {
+  color: #4EA8DE;
+}
+
+/* ── 换肤按钮 ── */
+[data-theme="cyberpunk"] .theme-switcher {
+  background: rgba(255,255,255,0.04);
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+}
+
+[data-theme="cyberpunk"] .theme-switcher:hover {
+  background: rgba(78,168,222,0.08);
+  border-color: rgba(78,168,222,0.25);
+  color: #4EA8DE;
+}

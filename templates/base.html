@@ -1,0 +1,200 @@
+<!-- base.html — 共用壳：顶部Tab栏 + 内容区 + 移动端底部Tab -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}炒股小牛马{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- 赛博朋克主题 -->
+    <link rel="stylesheet" href="/static/css/cyberpunk.css">
+    <!-- 午夜主题 -->
+    <link rel="stylesheet" href="/static/css/midnight.css">
+    <!-- Orbitron字体（赛博朋克主题用） -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script src="/static/js/app.js"></script>
+    {% block head_extras %}{% endblock %}
+    <style>
+        /* ── 换肤按钮 ── */
+        .theme-switcher {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border: 1px solid rgba(0,0,0,0.10);
+            border-radius: 6px;
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+            margin-left: 4px;
+        }
+        .theme-switcher:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+            border-color: rgba(0,0,0,0.20);
+        }
+        .theme-switcher .theme-icon {
+            font-size: 1rem;
+        }
+        .theme-switcher .theme-name {
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <header class="banner">
+            <a href="/" class="logo">🐂 炒股小牛马</a>
+            <nav class="nav-tabs">
+                <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}">📊 自选股</a>
+                <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}">💼 持仓</a>
+                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}">🤖 AI分析台</a>
+                <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}">⚙️ 设置</a>
+            </nav>
+            <select id="accountSwitcher" style="margin-left:auto;padding:2px 8px;border-radius:4px;font-size:0.75rem;background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);">
+              <option value="default">默认账户</option>
+            </select>
+            <div class="notify-badge" id="notifyBadge" title="通知" style="display:none;">🔔 <span id="notifyCount">0</span></div>
+            <button class="theme-switcher" id="themeSwitcher" title="切换主题">
+                <span class="theme-icon" id="themeIcon">🎨</span>
+                <span class="theme-name" id="themeName">经典</span>
+            </button>
+        </header>
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+
+        <!-- 移动端底部Tab栏（CSS media query控制显示） -->
+        <nav class="mobile-tab-bar">
+            <a href="/" class="mobile-tab-item {% if request.url.path == '/' %}active{% endif %}">
+                <span class="tab-icon">📊</span>
+                <span>自选股</span>
+            </a>
+            <a href="/portfolio" class="mobile-tab-item {% if request.url.path == '/portfolio' %}active{% endif %}">
+                <span class="tab-icon">💼</span>
+                <span>持仓</span>
+            </a>
+            <a href="/ai" class="mobile-tab-item {% if request.url.path == '/ai' %}active{% endif %}">
+                <span class="tab-icon">🤖</span>
+                <span>AI分析台</span>
+            </a>
+            <a href="/settings" class="mobile-tab-item {% if request.url.path == '/settings' %}active{% endif %}">
+                <span class="tab-icon">⚙️</span>
+                <span>设置</span>
+            </a>
+        </nav>
+    </div>
+
+    <!-- 换肤逻辑 -->
+    <script>
+    (function() {
+        const THEMES = [
+            { id: 'classic',   name: '经典',   icon: '🎨' },
+            { id: 'cyberpunk', name: '赛博',   icon: '🌆' },
+            { id: 'midnight',  name: '午夜',   icon: '🌙' },
+        ];
+
+        function getTheme() {
+            return localStorage.getItem('theme') || 'classic';
+        }
+
+        function setTheme(id) {
+            localStorage.setItem('theme', id);
+            applyTheme(id);
+        }
+
+        function applyTheme(id) {
+            if (id === 'classic') {
+                document.body.removeAttribute('data-theme');
+            } else {
+                document.body.setAttribute('data-theme', id);
+            }
+            // 更新按钮
+            const t = THEMES.find(t => t.id === id) || THEMES[0];
+            const iconEl = document.getElementById('themeIcon');
+            const nameEl = document.getElementById('themeName');
+            if (iconEl) iconEl.textContent = t.icon;
+            if (nameEl) nameEl.textContent = t.name;
+        }
+
+        // 初始化
+        applyTheme(getTheme());
+
+        // 点击切换
+        document.addEventListener('DOMContentLoaded', function() {
+            const btn = document.getElementById('themeSwitcher');
+            if (btn) {
+                btn.addEventListener('click', function() {
+                    const cur = getTheme();
+                    const idx = THEMES.findIndex(t => t.id === cur);
+                    const next = THEMES[(idx + 1) % THEMES.length];
+                    setTheme(next.id);
+                });
+            }
+        });
+    })();
+    </script>
+
+    <!-- 全局通知轮询 -->
+    <script>
+    (function() {
+        let lastNotifyCount = 0;
+        let notifiedTags = new Set();
+        let notifyEnabled = false;
+
+        if ('Notification' in window && Notification.permission === 'granted') {
+            notifyEnabled = localStorage.getItem('browser_notify_enabled') === 'true';
+        }
+
+        async function pollNotifications() {
+            try {
+                const resp = await fetch('/api/notifications');
+                if (!resp.ok) return;
+                const data = await resp.json();
+
+                const badge = document.getElementById('notifyBadge');
+                const countEl = document.getElementById('notifyCount');
+                if (data.count > 0) {
+                    badge.style.display = 'flex';
+                    countEl.textContent = data.count;
+                } else {
+                    badge.style.display = 'none';
+                    notifiedTags.clear();
+                }
+
+                if (notifyEnabled && data.notifications.length > 0) {
+                    for (const n of data.notifications) {
+                        const tag = 'notify-' + n.type + '-' + (n.data && n.data.code || n.data && n.data.id || '');
+                        if (!notifiedTags.has(tag)) {
+                            notifiedTags.add(tag);
+                            new Notification('🐂 ' + n.title, {
+                                body: n.body,
+                                tag: tag,
+                            });
+                        }
+                    }
+                }
+                lastNotifyCount = data.count;
+            } catch (e) {}
+        }
+
+        setInterval(pollNotifications, 30000);
+        setTimeout(pollNotifications, 2000);
+
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'browser_notify_enabled') {
+                notifyEnabled = e.newValue === 'true';
+            }
+        });
+    })();
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

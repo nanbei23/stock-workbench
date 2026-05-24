@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}AI分析台 — 炒股小牛马{% endblock %}
+
+{% block content %}
+<div class="ai-container" id="aiContainer">
+    <!-- 队列状态面板（全宽横跨，有任务时显示） -->
+    <div id="queuePanel" class="queue-panel" style="display:none">
+        <span id="queuePanelText"></span>
+    </div>
+
+    <!-- 左栏：自选股卡片列表（可单选/批量选） -->
+    <aside class="ai-left" id="aiLeft">
+    <div class="ai-left-header">
+        <h3>📊 自选股</h3>
+        <div class="ai-left-actions">
+            <button class="btn btn-sm ai-batch-toggle" id="batchToggleBtn" onclick="toggleBatchMode()" title="批量选择">☑ 批量</button>
+            <button class="btn btn-sm ai-panel-close" onclick="toggleLeftPanel()" title="收起左栏">✕</button>
+        </div>
+    </div>
+        <div class="ai-stock-list" id="aiStockList">
+            <!-- JS填充：复用 stock-card 样式 -->
+        </div>
+        <!-- 批量操作栏 -->
+        <div id="batchBar" class="ai-batch-bar" style="display:none">
+            <span id="batchCount">已选 0 只</span>
+            <button class="btn btn-sm btn-primary" onclick="batchAnalyze()">🔄 批量分析</button>
+            <button class="btn btn-sm" onclick="clearSelection()">取消</button>
+        </div>
+    </aside>
+
+    <!-- 中栏 -->
+    <main class="ai-center" id="aiCenter">
+        <!-- 响应式切换按钮 -->
+        <button class="ai-toggle-left" id="toggleLeftBtn" onclick="toggleLeftPanel()" title="显示自选股">☰</button>
+        <button class="ai-toggle-right" id="toggleRightBtn" onclick="toggleRightPanel()" title="报告与异动">📋</button>
+
+        <!-- ─── 顶部固定区：指数 + 控制 ─── -->
+        <div class="ai-center-top" id="aiCenterTop">
+            <!-- 大盘指数条 -->
+            <div id="indicesBar" class="indices-bar">
+                <!-- JS填充 -->
+            </div>
+
+            <!-- 深度分析控制 -->
+            <div class="center-control">
+                <div class="center-control-row">
+                    <span class="control-label">🔬 深度分析</span>
+                    <label class="control-field">
+                        <span class="control-field-label">分析深度</span>
+                        <select id="depthSelect" class="control-select" onchange="setResearchDepth(this.value)">
+                            <option value="quick">⚡ 快速</option>
+                            <option value="standard" selected>📋 标准</option>
+                            <option value="deep">🔬 深度</option>
+                            <option value="custom">🛠️ 自定义</option>
+                        </select>
+                    </label>
+                    <label class="control-field">
+                        <span class="control-field-label">模型模式</span>
+                        <select id="modelModeSelect" class="control-select" onchange="setModelMode(this.value)">
+                            <option value="economy">💰 经济</option>
+                            <option value="balanced" selected>⚖️ 均衡</option>
+                            <option value="flagship">👑 旗舰</option>
+                        </select>
+                    </label>
+                    <button id="btnStartAnalysis" class="btn btn-primary btn-start" onclick="startAnalysis()">🚀 开始分析</button>
+                    <span id="selectedStockInfo" class="selected-stock-info"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── 底部动态区：卡通 / 进度 / 报告详情 ─── -->
+        <div class="ai-center-bottom" id="aiCenterBottom">
+            <!-- 进度模块（始终显示） -->
+            <div class="center-progress" id="centerProgress">
+                <div class="progress-header">
+                    <span id="progressTitle" class="progress-title">选择股票，点击"开始分析"</span>
+                    <span id="progressElapsed" class="progress-elapsed"></span>
+                </div>
+                <div class="stage-group">
+                    <div class="stage-group-label">ANALYSTS</div>
+                    <div id="analystStages" class="stage-row"></div>
+                </div>
+                <div class="stage-group">
+                    <div class="stage-group-label">PIPELINE</div>
+                    <div id="pipelineStages" class="stage-row"></div>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progressBar" class="progress-bar"></div>
+                    <span id="progressText" class="progress-text"></span>
+                </div>
+                <div id="tokenStats" class="token-stats" style="margin-top:6px;font-size:0.8rem;color:var(--text-secondary);font-family:var(--font-mono);"></div>
+                <div id="cancelContainer" style="margin-top: 8px; display:none;">
+                    <button id="btnCancelAnalysis" class="btn btn-sm" style="color: #E07A5F; border: 1px solid #E07A5F;" onclick="cancelAnalysis()">✕ 取消分析</button>
+                    <span id="queuePosition" class="text-muted" style="margin-left: 10px; font-size: 0.85em;"></span>
+                </div>
+            </div>
+
+            <!-- 报告详情态（点击报告后替换进度） -->
+            <div class="center-report" id="centerReport" style="display:none">
+                <div class="report-header">
+                    <div class="report-header-left">
+                        <span id="reportStockName" class="report-stock-name"></span>
+                        <span id="reportSignal" class="report-signal"></span>
+                        <span id="reportFactBadge" class="report-signal" style="display:none"></span>
+                    </div>
+                    <div class="report-header-right">
+                        <button class="btn btn-sm" onclick="saveToGbrain()">📥 存入gbrain</button>
+                        <button class="btn btn-sm btn-primary" id="btnGenCondOrder" onclick="generateCondOrder()" style="display:none;">📋 条件单</button>
+                        <button class="btn btn-sm" onclick="downloadPdf()">📄 下载</button>
+                        <button class="btn btn-sm" onclick="closeReport()">✕ 关闭</button>
+                    </div>
+                </div>
+                <!-- 报告导航 + 内容 -->
+                <div class="report-workspace">
+                    <div class="report-nav" id="reportNav">
+                        <div class="nav-group">
+                            <div class="nav-group-title">分析师</div>
+                            <button class="nav-item active" data-target="market" onclick="switchReportTab(this, 'market')">📊 技术</button>
+                            <button class="nav-item" data-target="social" onclick="switchReportTab(this, 'social')">💬 情绪</button>
+                            <button class="nav-item" data-target="news" onclick="switchReportTab(this, 'news')">📰 新闻</button>
+                            <button class="nav-item" data-target="fundamentals" onclick="switchReportTab(this, 'fundamentals')">📋 基本面</button>
+                            <button class="nav-item" data-target="policy" onclick="switchReportTab(this, 'policy')">🏛️ 政策</button>
+                            <button class="nav-item" data-target="hot_money" onclick="switchReportTab(this, 'hot_money')">🔥 游资</button>
+                            <button class="nav-item" data-target="lockup" onclick="switchReportTab(this, 'lockup')">🔒 解禁</button>
+                        </div>
+                        <div class="nav-group">
+                            <div class="nav-group-title">决策链</div>
+                            <button class="nav-item" data-target="debate" onclick="switchReportTab(this, 'debate')">⚔️ 辩论</button>
+                            <button class="nav-item" data-target="risk" onclick="switchReportTab(this, 'risk')">🛡️ 风控</button>
+                            <button class="nav-item" data-target="pm" onclick="switchReportTab(this, 'pm')">👔 决策</button>
+                        </div>
+                        <div class="nav-group">
+                            <div class="nav-group-title">报告验证</div>
+                            <button class="nav-item" data-target="factcheck" onclick="switchReportTab(this, 'factcheck')">事实账本</button>
+                            <button class="nav-item" data-target="verify" onclick="switchReportTab(this, 'verify')">报告复核</button>
+                        </div>
+                        <div class="nav-group">
+                            <button class="nav-item nav-item-full" onclick="showFullReport()">📥 完整报告</button>
+                        </div>
+                    </div>
+                    <div class="report-content" id="reportContent"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 右栏：异动监控 + 历史报告 -->
+    <aside class="ai-right" id="aiRight">
+        <div class="ai-right-header">
+            <h3>辅助面板</h3>
+            <button class="btn btn-sm ai-panel-close" onclick="toggleRightPanel()" title="收起右栏">✕</button>
+        </div>
+
+        <!-- 异动日志 -->
+        <div class="ai-section ai-right-section">
+            <div class="section-header">
+                <h3>🔔 异动监控</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="triggerL1()">手动检测</button>
+                </div>
+            </div>
+            <div id="anomalyLog" class="anomaly-log">
+                <div class="anomaly-empty">暂无异动</div>
+            </div>
+        </div>
+
+        <!-- 历史报告 -->
+        <div class="ai-section ai-right-section" id="reportsSection">
+            <div class="section-header">
+                <h3>📋 历史报告</h3>
+                <div class="section-actions">
+                    <input id="reportSearch" type="text" class="form-input-sm" placeholder="搜索代码..." onkeyup="searchReports(event)">
+                </div>
+            </div>
+            <div id="reportsList" class="reports-list">
+                <!-- JS填充 -->
+            </div>
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ai.js"></script>
+{% endblock %}

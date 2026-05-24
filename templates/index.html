@@ -1,0 +1,488 @@
+{% extends "base.html" %}
+{% set active = "watchlist" %}
+{% block title %}自选股 — 炒股小牛马{% endblock %}
+
+{% block content %}
+<!-- 左侧：股票列表 -->
+<div class="stock-list">
+  <div class="stock-list-header">
+    <h2>自选股</h2>
+    <div class="stock-list-actions">
+      <button class="btn btn-sm btn-ghost" onclick="toggleSearch()">+ 添加</button>
+    </div>
+  </div>
+
+  <!-- 搜索框（默认隐藏） -->
+  <div class="stock-search" id="searchBox" style="display:none;">
+    <input type="text" id="searchInput" placeholder="输入股票代码..."
+           onkeydown="if(event.key==='Enter')addStock()">
+  </div>
+
+  <!-- 股票列表 -->
+  <div class="stock-list-body" id="stockList">
+    <div class="empty-state" id="emptyState" style="padding:32px 16px;">
+      <div class="icon">📋</div>
+      <p>暂无自选股</p>
+    </div>
+  </div>
+</div>
+
+<!-- 右侧：详情区 -->
+<div class="detail-area">
+  <!-- 大盘指数条 -->
+  <div class="index-bar">
+    <div class="index-item">
+      <div class="idx-name">上证指数</div>
+      <div class="idx-value flat" id="idx-sh">--</div>
+      <div class="idx-change flat" id="idx-sh-chg">--</div>
+    </div>
+    <div class="index-item">
+      <div class="idx-name">深证成指</div>
+      <div class="idx-value flat" id="idx-sz">--</div>
+      <div class="idx-change flat" id="idx-sz-chg">--</div>
+    </div>
+    <div class="index-item">
+      <div class="idx-name">创业板指</div>
+      <div class="idx-value flat" id="idx-cyb">--</div>
+      <div class="idx-change flat" id="idx-cyb-chg">--</div>
+    </div>
+  </div>
+
+  <!-- 未选中股票时的提示 -->
+  <div id="detailEmpty">
+    <div class="empty-state">
+      <div class="icon">👈</div>
+      <p>从左侧选择一只股票查看详情</p>
+    </div>
+  </div>
+
+  <!-- 股票详情（默认隐藏） -->
+  <div id="detailView" style="display:none;">
+    <!-- 股票头部 -->
+    <div class="card" id="stockHeader">
+      <!-- 名称 + 价格 -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;">
+        <div>
+          <div style="font-size:1.2rem;font-weight:700;" id="d-name">--</div>
+          <div style="font-size:1.2rem;font-weight:700;color:var(--color-accent);font-family:var(--font-mono);" id="d-code">--</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="quote-price" id="d-price">--</div>
+          <div class="quote-change" id="d-change">-- --</div>
+        </div>
+      </div>
+      <!-- 3×3 数据网格 -->
+      <div class="info-grid" id="infoGrid">
+        <div class="info-cell"><span class="info-label">今开</span><span class="info-value" id="d-open">--</span></div>
+        <div class="info-cell"><span class="info-label">最高</span><span class="info-value" id="d-high">--</span></div>
+        <div class="info-cell"><span class="info-label">成交额</span><span class="info-value" id="d-amount">--</span></div>
+        <div class="info-cell"><span class="info-label">昨收</span><span class="info-value" id="d-prev">--</span></div>
+        <div class="info-cell"><span class="info-label">最低</span><span class="info-value" id="d-low">--</span></div>
+        <div class="info-cell"><span class="info-label">成交量</span><span class="info-value" id="d-volume">--</span></div>
+        <div class="info-cell"><span class="info-label">总市值</span><span class="info-value" id="d-mcap">--</span></div>
+        <div class="info-cell"><span class="info-label">市盈TTM</span><span class="info-value" id="d-pe">--</span></div>
+        <div class="info-cell"><span class="info-label">换手率</span><span class="info-value" id="d-turnover">--</span></div>
+      </div>
+      <!-- 盈亏行 -->
+      <div class="pnl-row" id="pnlRow" style="display:none;">
+        <div class="pnl-cell">
+          <span class="pnl-label">持仓盈亏</span>
+          <span class="pnl-value" id="d-unrealized-pnl">--</span>
+        </div>
+        <div class="pnl-cell">
+          <span class="pnl-label">当日盈亏</span>
+          <span class="pnl-value" id="d-daily-pnl">--</span>
+        </div>
+        <div class="pnl-cell">
+          <span class="pnl-label">当日涨幅</span>
+          <span class="pnl-value" id="d-daily-change">--</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- K线图 -->
+    <div class="card">
+      <div class="chart-tabs" id="klineTabs">
+        <div class="chart-tabs-left">
+          <button class="chart-tab active" data-period="m1" data-count="240" data-chart-type="intraday" data-label="分时">分时</button>
+          <button class="chart-tab" data-period="day" data-count="5" data-chart-type="line" data-label="五日">五日</button>
+          <button class="chart-tab" data-period="day" data-count="120" data-label="日K">日K</button>
+          <button class="chart-tab" data-period="week" data-count="120" data-label="周K">周K</button>
+          <button class="chart-tab" data-period="month" data-count="120" data-label="月K">月K</button>
+        </div>
+        <div class="chart-tabs-right">
+          <label class="refresh-toggle">
+            <input type="checkbox" id="autoRefreshToggle">
+            <span>自动刷新</span>
+          </label>
+          <select id="refreshInterval" class="refresh-select">
+            <option value="10">10 秒</option>
+            <option value="20">20 秒</option>
+            <option value="30" selected>30 秒</option>
+            <option value="40">40 秒</option>
+            <option value="50">50 秒</option>
+            <option value="60">60 秒</option>
+            <option value="70">70 秒</option>
+            <option value="80">80 秒</option>
+            <option value="90">90 秒</option>
+            <option value="100">100 秒</option>
+            <option value="110">110 秒</option>
+            <option value="120">120 秒</option>
+          </select>
+          <button class="btn-refresh-now" id="btnRefreshNow" onclick="manualRefresh()">立即刷新行情</button>
+        </div>
+      </div>
+      <div id="klineDataDate" style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:2px;min-height:1em;"></div>
+      <div class="chart-container" id="klineChart">
+        <div class="empty-state" style="padding:24px;"><p>K线图加载中...</p></div>
+      </div>
+    </div>
+
+    <!-- 详情Tab -->
+    <div class="detail-tabs">
+      <button class="detail-tab active" onclick="switchDetail('7layer')">七层数据</button>
+      <button class="detail-tab" onclick="switchDetail('strategy')">策略</button>
+      <button class="detail-tab" onclick="switchDetail('buypoints')">买点</button>
+      <button class="detail-tab" onclick="switchDetail('news')">新闻</button>
+      <button class="detail-tab" onclick="switchDetail('ai')">AI分析</button>
+      <button class="detail-tab" onclick="switchDetail('research')">研报</button>
+      <button class="detail-tab" onclick="switchDetail('announce')">公告</button>
+    </div>
+
+    <!-- 七层数据 -->
+    <div id="dtab-7layer">
+      <div class="layer-grid" id="layerGrid">
+        <div class="layer-card">
+          <div class="layer-title">📊 基本面</div>
+          <div class="layer-row"><span class="label">PE(TTM)</span><span class="value" id="l-pe">--</span></div>
+          <div class="layer-row"><span class="label">PB</span><span class="value" id="l-pb">--</span></div>
+          <div class="layer-row"><span class="label">ROE</span><span class="value" id="l-roe">--</span></div>
+          <div class="layer-row"><span class="label">EPS</span><span class="value" id="l-eps">--</span></div>
+          <div class="layer-row"><span class="label">毛利率</span><span class="value" id="l-margin">--</span></div>
+        </div>
+        <div class="layer-card">
+          <div class="layer-title">📈 技术指标</div>
+          <div class="layer-row"><span class="label">RSI(14)</span><span class="value" id="l-rsi">--</span></div>
+          <div class="layer-row"><span class="label">MACD</span><span class="value" id="l-macd">--</span></div>
+          <div class="layer-row"><span class="label">KDJ</span><span class="value" id="l-kdj">--</span></div>
+          <div class="layer-row"><span class="label">布林带</span><span class="value" id="l-boll">--</span></div>
+          <div class="layer-row"><span class="label">均线</span><span class="value" id="l-ma">--</span></div>
+        </div>
+        <div class="layer-card">
+          <div class="layer-title">💰 资金面</div>
+          <div class="layer-row"><span class="label">主力净流入</span><span class="value" id="l-mainflow">--</span></div>
+          <div class="layer-row"><span class="label">北向资金</span><span class="value" id="l-north">--</span></div>
+          <div class="layer-row"><span class="label">融资余额</span><span class="value" id="l-margin-bal">--</span></div>
+          <div class="layer-row"><span class="label">龙虎榜</span><span class="value" id="l-dragon">--</span></div>
+        </div>
+        <div class="layer-card">
+          <div class="layer-title">📰 消息面</div>
+          <div class="layer-row"><span class="label">新闻情绪</span><span class="value" id="l-sentiment">--</span></div>
+          <div class="layer-row"><span class="label">研报评级</span><span class="value" id="l-rating">--</span></div>
+          <div class="layer-row"><span class="label">机构动向</span><span class="value" id="l-institution">--</span></div>
+        </div>
+        <div class="layer-card">
+          <div class="layer-title">🏛️ 政策面</div>
+          <div class="layer-row"><span class="label">行业政策</span><span class="value" id="l-policy">--</span></div>
+          <div class="layer-row"><span class="label">板块热度</span><span class="value" id="l-sector">--</span></div>
+        </div>
+        <div class="layer-card">
+          <div class="layer-title">⚠️ 风险面</div>
+          <div class="layer-row"><span class="label">解禁压力</span><span class="value" id="l-lockup">--</span></div>
+          <div class="layer-row"><span class="label">质押比例</span><span class="value" id="l-pledge">--</span></div>
+          <div class="layer-row"><span class="label">商誉占比</span><span class="value" id="l-goodwill">--</span></div>
+        </div>
+        <div class="layer-card">
+          <div class="layer-title">📋 策略</div>
+          <div class="layer-row"><span class="label">止盈价</span><span class="value" id="l-target">--</span></div>
+          <div class="layer-row"><span class="label">止损价</span><span class="value" id="l-stoploss">--</span></div>
+          <div class="layer-row"><span class="label">加仓价</span><span class="value" id="l-buypoint">--</span></div>
+          <div class="layer-row"><span class="label">策略状态</span><span class="value" id="l-strategy-state">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 策略 -->
+    <div id="dtab-strategy" style="display:none;">
+      <!-- 策略状态 -->
+      <div class="card">
+        <div class="card-title">策略状态</div>
+        <div class="strategy-state" id="strategyState">
+          <div class="state-badge" id="stateBadge">--</div>
+          <div class="state-desc" id="stateDesc">--</div>
+        </div>
+      </div>
+      
+      <!-- 关键价位 -->
+      <div class="card">
+        <div class="card-title">关键价位</div>
+        <div class="key-prices" id="keyPrices">
+          <div class="price-row">
+            <span class="label">目标买入价</span>
+            <span class="value" id="kpBuy">--</span>
+          </div>
+          <div class="price-row">
+            <span class="label">止损价</span>
+            <span class="value" id="kpStop">--</span>
+          </div>
+          <div class="price-row">
+            <span class="label">止盈价</span>
+            <span class="value" id="kpProfit">--</span>
+          </div>
+          <div class="price-row">
+            <span class="label">下次加仓价</span>
+            <span class="value" id="kpNextBuy">--</span>
+          </div>
+          <div class="price-row">
+            <span class="label">下次减仓价</span>
+            <span class="value" id="kpNextSell">--</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 计划表 -->
+      <div class="card">
+        <div class="card-title">加仓/减仓计划</div>
+        <div class="plan-table-wrap">
+          <table class="plan-table" id="planTable">
+            <thead>
+              <tr>
+                <th>轮次</th>
+                <th>触发价</th>
+                <th>数量</th>
+                <th>动作</th>
+                <th>累计持仓</th>
+              </tr>
+            </thead>
+            <tbody id="planBody"></tbody>
+          </table>
+        </div>
+      </div>
+      
+      <!-- 费用测算 -->
+      <div class="card">
+        <div class="card-title">费用测算</div>
+        <div class="pnl-estimate" id="pnlEstimate">
+          <div class="pnl-row">
+            <span class="label">当前成本</span>
+            <span class="value" id="pnlCost">--</span>
+          </div>
+          <div class="pnl-row">
+            <span class="label">目标利润</span>
+            <span class="value" id="pnlTarget">--</span>
+          </div>
+          <div class="pnl-row">
+            <span class="label">预计佣金</span>
+            <span class="value" id="pnlCommission">--</span>
+          </div>
+          <div class="pnl-row">
+            <span class="label">预计印花税</span>
+            <span class="value" id="pnlStamp">--</span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- 策略参数编辑 -->
+      <div class="card">
+        <div class="card-title">策略参数</div>
+        <div class="strategy-params" id="strategyParams">
+          <div class="param-row">
+            <span class="label">总预算</span>
+            <input type="number" id="paramBudget" class="param-input">
+            <span class="unit">元</span>
+          </div>
+          <div class="param-row">
+            <span class="label">参考买入价</span>
+            <input type="number" id="paramEntry" class="param-input">
+            <span class="unit">元</span>
+          </div>
+          <div class="param-row">
+            <span class="label">跌幅触发</span>
+            <input type="number" id="paramDropPct" class="param-input">
+            <span class="unit">%</span>
+          </div>
+          <div class="param-row">
+            <span class="label">加仓倍数</span>
+            <input type="number" id="paramAddMult" class="param-input">
+            <span class="unit">倍</span>
+          </div>
+          <div class="param-row">
+            <span class="label">反弹减仓</span>
+            <input type="number" id="paramBouncePct" class="param-input">
+            <span class="unit">%</span>
+          </div>
+          <div class="param-row">
+            <span class="label">减仓比例</span>
+            <input type="number" id="paramSellPct" class="param-input">
+            <span class="unit">%</span>
+          </div>
+          <button class="btn btn-primary" onclick="saveStrategyParams()">保存参数</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 买点 -->
+    <div id="dtab-buypoints" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">📋 买点管理</div>
+          <button class="btn btn-sm btn-primary" onclick="showAddBuyPoint()">+ 添加买点</button>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr><th>价格</th><th>数量</th><th>理由</th><th>状态</th><th>时间</th><th>操作</th></tr>
+          </thead>
+          <tbody id="buyPointsBody">
+            <tr><td colspan="6" class="empty-state"><p>暂无买点记录</p></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <!-- 添加买点弹窗（内联） -->
+      <div class="card" id="addBuyPointForm" style="display:none;">
+        <div class="card-title">添加买点</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <div class="form-group">
+            <label>价格</label>
+            <input type="number" id="bpPrice" step="0.01" placeholder="75.00" required>
+          </div>
+          <div class="form-group">
+            <label>数量（股）</label>
+            <input type="number" id="bpShares" step="100" placeholder="500">
+          </div>
+          <div class="form-group" style="flex:1;min-width:200px;">
+            <label>理由</label>
+            <input type="text" id="bpReason" placeholder="均线支撑、放量突破...">
+          </div>
+          <button class="btn btn-primary" onclick="submitBuyPoint()">保存</button>
+          <button class="btn btn-ghost" onclick="hideAddBuyPoint()">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新闻 -->
+    <div id="dtab-news" style="display:none;">
+      <div class="news-tabs">
+        <button class="news-tab active" data-target="stock" onclick="switchNewsTab('stock')">个股新闻</button>
+        <button class="news-tab" data-target="industry" onclick="switchNewsTab('industry')">行业新闻</button>
+        <button class="news-tab" data-target="global" onclick="switchNewsTab('global')">全球资讯</button>
+        <button class="news-tab" data-target="cls" onclick="switchNewsTab('cls')">财联社快讯</button>
+        <button class="news-tab" data-target="wechat" onclick="switchNewsTab('wechat')">公众号</button>
+      </div>
+      <!-- 情感统计条 -->
+      <div class="news-sentiment-bar" id="newsSentimentBar" style="display:none;">
+        <span class="sentiment-tag positive" id="sentPos">👍 0</span>
+        <span class="sentiment-tag neutral" id="sentNeu">😐 0</span>
+        <span class="sentiment-tag negative" id="sentNeg">👎 0</span>
+      </div>
+      <!-- 个股新闻列表 -->
+      <div id="newsStockList">
+        <div class="empty-state" style="padding:24px;"><p>请选择股票查看新闻</p></div>
+      </div>
+      <!-- 行业新闻列表 -->
+      <div id="newsIndustryList" style="display:none;">
+        <div class="empty-state" style="padding:24px;"><p>加载中...</p></div>
+      </div>
+      <!-- 全球资讯列表 -->
+      <div id="newsGlobalList" style="display:none;">
+        <div class="empty-state" style="padding:24px;"><p>加载中...</p></div>
+      </div>
+      <!-- 财联社快讯列表 -->
+      <div id="newsClsList" style="display:none;">
+        <div class="empty-state" style="padding:24px;"><p>加载中...</p></div>
+      </div>
+      <!-- 公众号文章列表 -->
+      <div id="newsWechatList" style="display:none;">
+        <div class="empty-state" style="padding:24px;"><p>加载中...</p></div>
+      </div>
+    </div>
+
+    <!-- AI分析 -->
+    <div id="dtab-ai" style="display:none;">
+      <div class="card">
+        <div class="card-title">AI分析</div>
+        <button class="btn btn-primary" onclick="triggerAnalysis()">🤖 启动深度分析</button>
+        <p id="ai-analysis-status" style="color:var(--text-secondary);margin-top:12px;font-size:0.85rem;"></p>
+      </div>
+    </div>
+
+    <!-- 研报 -->
+    <div id="dtab-research" style="display:none;">
+      <div class="filter-bar">
+        <select id="research-org-filter" onchange="filterResearch()" class="form-control">
+          <option value="">全部机构</option>
+        </select>
+        <select id="research-rating-filter" onchange="filterResearch()" class="form-control">
+          <option value="">全部评级</option>
+          <option value="买入">买入</option>
+          <option value="增持">增持</option>
+          <option value="中性">中性</option>
+          <option value="减持">减持</option>
+        </select>
+      </div>
+      <div id="researchList">
+        <div class="empty-state" style="padding:24px;"><p>请选择股票查看研报</p></div>
+      </div>
+    </div>
+
+    <!-- 公告 -->
+    <div id="dtab-announce" style="display:none;">
+      <div class="filter-bar">
+        <input type="date" id="announce-date-from" onchange="filterAnnouncements()" class="form-control" />
+        <span>至</span>
+        <input type="date" id="announce-date-to" onchange="filterAnnouncements()" class="form-control" />
+      </div>
+      <div id="announceList">
+        <div class="empty-state" style="padding:24px;"><p>请选择股票查看公告</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- 删除确认弹窗 -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal-box">
+    <div class="modal-title">删除自选股</div>
+    <div class="modal-body" id="deleteModalBody">确定要删除该自选股票吗？</div>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" onclick="closeDeleteModal()">取消</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">确认删除</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/static/js/chart.js"></script>
+<script src="/static/js/stock.js"></script>
+<script src="/static/js/strategy.js"></script>
+<script>
+function switchDetail(name) {
+  document.querySelectorAll('[id^="dtab-"]').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.detail-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('dtab-' + name).style.display = 'block';
+  event.target.classList.add('active');
+  // 加载新闻
+  if (name === 'news') {
+    if (currentCode) {
+      loadStockNews(currentCode);
+      loadIndustryNews(currentCode);
+    }
+    loadClsNews();
+    loadGlobalNews();
+  }
+  if (name === 'strategy') {
+    if (currentCode) loadStrategy(currentCode);
+  }
+  if (name === 'buypoints') {
+    if (currentCode) loadBuyPoints(currentCode);
+  }
+  if (name === 'research') {
+    if (currentCode) loadResearch(currentCode);
+  }
+  if (name === 'announce') {
+    if (currentCode) loadAnnounce(currentCode);
+  }
+}
+</script>
+{% endblock %}

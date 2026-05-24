@@ -1,0 +1,893 @@
+/* ========================================
+   午夜主题 — Midnight
+   交易所暗夜风：纯黑底 + 石灰绿 + 纯平无玻璃
+   参考：Binance/OKX 移动端暗色模式
+   ======================================== */
+
+/* ── 核心设计令牌覆盖 ── */
+[data-theme="midnight"] {
+  --bg:           #121212;
+  --bg-card:      #1E1E1E;
+  --bg-hover:     #2A2A2A;
+  --bg-sidebar:   #0A0A0A;
+
+  --text-primary:   #FFFFFF;
+  --text-secondary: #9CA3AF;
+  --text-muted:     #6B7280;
+
+  --color-up:       #EF4444;    /* 涨=红 */
+  --color-down:     #22C55E;    /* 跌=绿 */
+  --color-accent:   #F59E0B;    /* 主强调=琥珀金 */
+  --color-accent-2: #A3E635;    /* 副强调=石灰绿（买入/成功） */
+  --color-warn:     #F59E0B;
+
+  --color-primary:  #F59E0B;
+
+  --gradient-warm:  linear-gradient(135deg, rgba(245,158,11,0.06), rgba(163,230,53,0.06));
+  --gradient-cool:  linear-gradient(135deg, rgba(163,230,53,0.06), rgba(34,197,94,0.06));
+
+  --shadow-card:    none;
+  --shadow-hover:   0 4px 12px rgba(0,0,0,0.4);
+  --border-light:   rgba(255,255,255,0.06);
+
+  --font-sans:  'Inter', 'PingFang SC', 'Noto Sans SC', -apple-system, sans-serif;
+  --font-mono:  'JetBrains Mono', 'SF Mono', monospace;
+}
+
+/* ── 全局背景 ── */
+[data-theme="midnight"] body {
+  background: #121212;
+  color: var(--text-primary);
+}
+
+/* ── 顶部Banner ── */
+[data-theme="midnight"] .banner {
+  background: #121212;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .logo {
+  color: #FFFFFF;
+}
+
+/* ── 导航Tab ── */
+[data-theme="midnight"] .tab-btn {
+  color: #6B7280;
+  border-radius: 8px;
+}
+
+[data-theme="midnight"] .tab-btn:hover {
+  color: #FFFFFF;
+  background: rgba(255,255,255,0.05);
+}
+
+[data-theme="midnight"] .tab-btn.active {
+  color: #F59E0B;
+  background: rgba(245,158,11,0.08);
+  font-weight: 600;
+}
+
+/* ── 股票列表区域 ── */
+[data-theme="midnight"] .stock-list {
+  background: #0A0A0A;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .stock-search input {
+  background: #1E1E1E;
+  border-color: rgba(255,255,255,0.08);
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .stock-search input:focus {
+  border-color: rgba(245,158,11,0.40);
+  box-shadow: none;
+}
+
+/* ── 股票卡片 ── */
+[data-theme="midnight"] .stock-card {
+  background: #1E1E1E;
+  border: none;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .stock-card:hover {
+  background: #2A2A2A;
+  box-shadow: none;
+  transform: none;
+}
+
+[data-theme="midnight"] .stock-card.active {
+  background: #2A2A2A;
+  border-left: 3px solid #F59E0B;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .sc-grip {
+  background: transparent;
+  border-right: 1px solid rgba(255,255,255,0.04);
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .sc-name {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .sc-code {
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .sc-data-lbl {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .sc-data-val {
+  color: #9CA3AF;
+}
+
+/* 底部色条 */
+[data-theme="midnight"] .stock-card-bar.up {
+  background: #EF4444;
+}
+
+[data-theme="midnight"] .stock-card-bar.down {
+  background: #22C55E;
+}
+
+[data-theme="midnight"] .stock-card-bar.flat {
+  background: rgba(255,255,255,0.06);
+}
+
+/* ── 删除按钮 ── */
+[data-theme="midnight"] .stock-card .btn-remove {
+  background: #EF4444;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .stock-card .btn-remove:hover {
+  background: #DC2626;
+  box-shadow: 0 4px 12px rgba(239,68,68,0.30);
+}
+
+/* ── 大盘指数条 ── */
+[data-theme="midnight"] .index-bar,
+[data-theme="midnight"] .indices-bar {
+  background: #1E1E1E;
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .idx-name,
+[data-theme="midnight"] .index-name {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .idx-value,
+[data-theme="midnight"] .index-price {
+  color: #FFFFFF;
+}
+
+/* ── 详情Tab ── */
+[data-theme="midnight"] .detail-tabs {
+  background: #1E1E1E;
+}
+
+[data-theme="midnight"] .detail-tab {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .detail-tab.active {
+  background: #2A2A2A;
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .detail-tab:hover:not(.active) {
+  color: #FFFFFF;
+  background: rgba(255,255,255,0.03);
+}
+
+/* ── 新闻/研报子Tab ── */
+[data-theme="midnight"] .news-tab {
+  border-color: rgba(255,255,255,0.08);
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .news-tab:hover {
+  border-color: rgba(245,158,11,0.30);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .news-tab.active {
+  background: rgba(245,158,11,0.10);
+  border-color: rgba(245,158,11,0.30);
+  color: #F59E0B;
+}
+
+/* ── 卡片通用 ── */
+[data-theme="midnight"] .card {
+  background: #1E1E1E;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .card:hover {
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .card-title {
+  color: #9CA3AF;
+}
+
+/* ── 表格 ── */
+[data-theme="midnight"] .data-table th {
+  color: #6B7280;
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .data-table td {
+  border-bottom-color: rgba(255,255,255,0.04);
+}
+
+[data-theme="midnight"] .data-table tr:hover td {
+  background: rgba(255,255,255,0.03);
+}
+
+[data-theme="midnight"] .suggestions-table th {
+  color: #9CA3AF;
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .suggestions-table td {
+  border-bottom-color: rgba(255,255,255,0.04);
+}
+
+[data-theme="midnight"] .suggestions-table tr:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+/* ── 按钮 ── */
+[data-theme="midnight"] .btn-primary {
+  background: #A3E635;
+  color: #121212;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .btn-primary:hover {
+  background: #84CC16;
+  box-shadow: 0 4px 12px rgba(163,230,53,0.25);
+}
+
+[data-theme="midnight"] .btn-ghost {
+  border-color: rgba(255,255,255,0.10);
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .btn-ghost:hover {
+  border-color: rgba(245,158,11,0.30);
+  color: #F59E0B;
+  background: transparent;
+}
+
+[data-theme="midnight"] .btn-icon:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .btn-refresh-now {
+  background: #A3E635;
+  color: #121212;
+  font-weight: 700;
+}
+
+[data-theme="midnight"] .btn-refresh-now:hover {
+  background: #84CC16;
+}
+
+/* ── Badge ── */
+[data-theme="midnight"] .badge-up {
+  background: rgba(239, 68, 68, 0.12);
+  color: #EF4444;
+}
+
+[data-theme="midnight"] .badge-down {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22C55E;
+}
+
+[data-theme="midnight"] .badge-warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .badge-info {
+  background: rgba(245, 158, 11, 0.10);
+  color: #F59E0B;
+}
+
+/* ── 进度条 ── */
+[data-theme="midnight"] .progress-bar {
+  background: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .progress-fill {
+  background: #A3E635;
+}
+
+[data-theme="midnight"] .progress-bar-container {
+  background: rgba(255,255,255,0.06);
+}
+
+/* ── 信号 ── */
+[data-theme="midnight"] .signal-buy {
+  color: #EF4444;
+}
+
+[data-theme="midnight"] .signal-sell {
+  color: #22C55E;
+}
+
+[data-theme="midnight"] .signal-hold {
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .signal-buy,
+[data-theme="midnight"] .report-signal.signal-buy {
+  background: rgba(239, 68, 68, 0.10);
+}
+
+[data-theme="midnight"] .signal-sell,
+[data-theme="midnight"] .report-signal.signal-sell {
+  background: rgba(34, 197, 94, 0.10);
+}
+
+[data-theme="midnight"] .signal-hold,
+[data-theme="midnight"] .report-signal.signal-hold {
+  background: rgba(245, 158, 11, 0.10);
+}
+
+/* ── Alert ── */
+[data-theme="midnight"] .alert-warn {
+  background: rgba(245, 158, 11, 0.08);
+  color: #F59E0B;
+  border-left: 3px solid #F59E0B;
+}
+
+[data-theme="midnight"] .alert-error {
+  background: rgba(239, 68, 68, 0.08);
+  color: #EF4444;
+  border-left: 3px solid #EF4444;
+}
+
+[data-theme="midnight"] .alert-info {
+  background: rgba(245, 158, 11, 0.06);
+  color: #F59E0B;
+  border-left: 3px solid #F59E0B;
+}
+
+/* ── 情绪Badge ── */
+[data-theme="midnight"] .sent-badge.positive {
+  background: rgba(239, 68, 68, 0.10);
+  color: #EF4444;
+}
+
+[data-theme="midnight"] .sent-badge.negative {
+  background: rgba(34, 197, 94, 0.10);
+  color: #22C55E;
+}
+
+[data-theme="midnight"] .sent-badge.neutral {
+  background: rgba(255,255,255,0.05);
+  color: #6B7280;
+}
+
+/* ── 研报评级 ── */
+[data-theme="midnight"] .report-rating {
+  background: rgba(245, 158, 11, 0.10);
+  color: #F59E0B;
+}
+
+/* ── 公告类型 ── */
+[data-theme="midnight"] .announce-type {
+  background: rgba(163, 230, 53, 0.10);
+  color: #A3E635;
+}
+
+/* ── 新闻/研报/公告列表项 ── */
+[data-theme="midnight"] .news-item,
+[data-theme="midnight"] .research-item,
+[data-theme="midnight"] .announce-item {
+  background: #1E1E1E;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .news-item:hover,
+[data-theme="midnight"] .research-item:hover,
+[data-theme="midnight"] .announce-item:hover {
+  background: #2A2A2A;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .news-item-title a,
+[data-theme="midnight"] .announce-item-title a {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .news-item-title a:hover,
+[data-theme="midnight"] .announce-item-title a:hover {
+  color: #F59E0B;
+}
+
+/* ── 信息网格 ── */
+[data-theme="midnight"] .info-label {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .info-value {
+  color: #FFFFFF;
+}
+
+/* ── K线Tab ── */
+[data-theme="midnight"] .chart-tab:hover {
+  color: #F59E0B;
+  background: rgba(245,158,11,0.06);
+}
+
+[data-theme="midnight"] .chart-tab.active {
+  color: #F59E0B;
+  background: rgba(245,158,11,0.08);
+  border-bottom-color: #F59E0B;
+}
+
+/* ── 盈亏 ── */
+[data-theme="midnight"] .pnl-label {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .pnl-value {
+  color: #FFFFFF;
+}
+
+/* ── 盈亏日历 ── */
+[data-theme="midnight"] .calendar-header button {
+  border-color: rgba(255,255,255,0.08);
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .calendar-header button:hover {
+  background: #2A2A2A;
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .calendar-stats {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .calendar-day-header {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .calendar-day-num {
+  color: #FFFFFF;
+}
+
+/* ── 确认弹窗 ── */
+[data-theme="midnight"] .modal-overlay {
+  background: rgba(0,0,0,0.70);
+}
+
+[data-theme="midnight"] .modal-box {
+  background: #1E1E1E;
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+}
+
+[data-theme="midnight"] .modal-title {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .modal-body {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .modal-body strong {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .btn-cancel {
+  background: #2A2A2A;
+  border-color: rgba(255,255,255,0.08);
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .btn-cancel:hover {
+  border-color: rgba(255,255,255,0.15);
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .btn-danger {
+  background: #EF4444;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .btn-danger:hover {
+  background: #DC2626;
+  box-shadow: 0 4px 12px rgba(239,68,68,0.25);
+}
+
+/* ── 表单控件 ── */
+[data-theme="midnight"] .form-control,
+[data-theme="midnight"] .form-select,
+[data-theme="midnight"] .form-input-sm,
+[data-theme="midnight"] .form-group input,
+[data-theme="midnight"] .form-group select {
+  background: #2A2A2A;
+  border-color: rgba(255,255,255,0.08);
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .form-control:focus,
+[data-theme="midnight"] .form-select:focus,
+[data-theme="midnight"] .form-input-sm:focus,
+[data-theme="midnight"] .form-group input:focus,
+[data-theme="midnight"] .form-group select:focus {
+  border-color: rgba(245,158,11,0.40);
+  box-shadow: none;
+}
+
+[data-theme="midnight"] select.form-control {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239CA3AF'/%3E%3C/svg%3E");
+}
+
+/* ── 条件单卡片 ── */
+[data-theme="midnight"] .order-card {
+  background: #1E1E1E;
+  border-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .order-code {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .order-body {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .order-meta {
+  color: #6B7280;
+}
+
+/* ── 筛选栏 ── */
+[data-theme="midnight"] .filter-bar > span {
+  color: #9CA3AF;
+}
+
+/* ── EPS 预测 ── */
+[data-theme="midnight"] .eps-forecast-card {
+  background: #1E1E1E;
+}
+
+/* ── 七层数据 ── */
+[data-theme="midnight"] .layer-card {
+  background: #1E1E1E;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .layer-card .layer-title {
+  color: #FFFFFF;
+  border-bottom-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .layer-row .label {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .layer-row .value {
+  color: #FFFFFF;
+}
+
+/* ── 状态Badge ── */
+[data-theme="midnight"] .status-danger {
+  background: rgba(239, 68, 68, 0.10);
+  color: #EF4444;
+}
+
+[data-theme="midnight"] .status-warning {
+  background: rgba(245, 158, 11, 0.10);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .status-info {
+  background: rgba(245, 158, 11, 0.08);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .status-default {
+  background: rgba(255,255,255,0.04);
+  color: #9CA3AF;
+}
+
+/* ── AI分析台 ── */
+[data-theme="midnight"] .ai-left {
+  background: #0A0A0A;
+  border-right-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .ai-right {
+  background: #0A0A0A;
+  border-left-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .ai-container > .queue-panel {
+  background: rgba(245,158,11,0.05);
+  border-bottom-color: rgba(255,255,255,0.06);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .ai-toggle-left,
+[data-theme="midnight"] .ai-toggle-right {
+  background: #1E1E1E;
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .ai-toggle-left:hover,
+[data-theme="midnight"] .ai-toggle-right:hover {
+  background: #2A2A2A;
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .ai-section {
+  background: #1E1E1E;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .section-header h3 {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .update-time {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .analysis-progress {
+  background: transparent;
+}
+
+[data-theme="midnight"] .stage-indicator {
+  background: #2A2A2A;
+}
+
+[data-theme="midnight"] .stage-name {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .stage-dot.running {
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .stage-dot.completed {
+  color: #A3E635;
+}
+
+/* ── 分析结果 ── */
+[data-theme="midnight"] .result-section {
+  background: #1E1E1E;
+}
+
+[data-theme="midnight"] .result-section h4 {
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .advice-item {
+  background: #2A2A2A;
+}
+
+[data-theme="midnight"] .advice-label {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .advice-value {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .advice-reasoning {
+  color: #9CA3AF;
+}
+
+/* ── 风控Tab ── */
+[data-theme="midnight"] .risk-tab {
+  border-color: rgba(255,255,255,0.08);
+  background: #1E1E1E;
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .risk-tab:hover {
+  border-color: rgba(245,158,11,0.30);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .risk-tab.active {
+  background: rgba(245,158,11,0.10);
+  color: #F59E0B;
+  border-color: rgba(245,158,11,0.30);
+}
+
+[data-theme="midnight"] .risk-content {
+  background: #1E1E1E;
+  color: #9CA3AF;
+}
+
+/* ── 异动日志 ── */
+[data-theme="midnight"] .anomaly-item {
+  background: #2A2A2A;
+}
+
+[data-theme="midnight"] .anomaly-empty {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .anomaly-stock {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .anomaly-change {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .anomaly-message {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .anomaly-advice {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .anomaly-time {
+  color: #6B7280;
+}
+
+/* ── 历史报告 ── */
+[data-theme="midnight"] .report-item {
+  background: #2A2A2A;
+}
+
+[data-theme="midnight"] .report-item:hover {
+  background: #333333;
+}
+
+[data-theme="midnight"] .report-code {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .report-time {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .report-item-meta {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .report-expander {
+  background: #1E1E1E;
+  border-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .report-expander summary {
+  background: #2A2A2A;
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .report-expander summary:hover {
+  background: #333333;
+}
+
+[data-theme="midnight"] .report-content {
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .report-content h3,
+[data-theme="midnight"] .report-content h4,
+[data-theme="midnight"] .report-content h5 {
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .report-content strong {
+  color: #FFFFFF;
+}
+
+[data-theme="midnight"] .report-content code {
+  background: rgba(245,158,11,0.08);
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .report-content hr {
+  border-top-color: rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .report-chars {
+  color: #6B7280;
+}
+
+/* ── 信号Banner ── */
+[data-theme="midnight"] .signal-banner {
+  border: 1px solid rgba(255,255,255,0.06);
+  background: #1E1E1E;
+}
+
+/* ── 持仓页 ── */
+[data-theme="midnight"] .portfolio-container {
+  color: #FFFFFF;
+}
+
+/* ── 设置页 ── */
+[data-theme="midnight"] .settings-container {
+  color: #FFFFFF;
+}
+
+/* ── 空状态 ── */
+[data-theme="midnight"] .empty-state {
+  color: #6B7280;
+}
+
+/* ── 滚动条 ── */
+[data-theme="midnight"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-theme="midnight"] ::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.10);
+  border-radius: 3px;
+}
+
+[data-theme="midnight"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.18);
+}
+
+/* ── 通知Badge ── */
+[data-theme="midnight"] .notify-badge {
+  background: #A3E635;
+  color: #121212;
+  box-shadow: none;
+}
+
+[data-theme="midnight"] .notify-badge span {
+  background: #121212;
+  color: #A3E635;
+}
+
+/* ── 账户切换器 ── */
+[data-theme="midnight"] #accountSwitcher {
+  background: #2A2A2A;
+  color: #FFFFFF;
+  border-color: rgba(255,255,255,0.08);
+}
+
+/* ── 移动端底部Tab ── */
+[data-theme="midnight"] .mobile-tab-bar {
+  background: #0A0A0A;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+[data-theme="midnight"] .mobile-tab-item {
+  color: #6B7280;
+}
+
+[data-theme="midnight"] .mobile-tab-item.active {
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .mobile-tab-item:hover {
+  color: #F59E0B;
+}
+
+/* ── 换肤按钮 ── */
+[data-theme="midnight"] .theme-switcher {
+  background: #2A2A2A;
+  border-color: rgba(255,255,255,0.08);
+  color: #9CA3AF;
+}
+
+[data-theme="midnight"] .theme-switcher:hover {
+  background: #333333;
+  border-color: rgba(245,158,11,0.25);
+  color: #F59E0B;
+}

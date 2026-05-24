@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- stock detail is embedded in index.html; redirect to / with code param -->
+<script>window.location.href = '/?code={{ code }}';</script>
+{% endblock %}

@@ -1,0 +1,788 @@
+{% extends "base.html" %}
+
+{% block title %}设置 — 炒股小牛马{% endblock %}
+
+{% block head_extras %}
+<style>
+  .settings-container {
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .settings-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border-light);
+    padding-bottom: 0;
+  }
+
+  .settings-tab {
+    padding: 10px 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+
+  .settings-tab:hover {
+    color: var(--text-primary);
+  }
+
+  .settings-tab.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+  }
+
+  .settings-section {
+    display: none;
+  }
+
+  .settings-section.active {
+    display: block;
+  }
+
+  .setting-group {
+    margin-bottom: 28px;
+  }
+
+  .setting-group-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.04);
+  }
+
+  .setting-row:last-child {
+    border-bottom: none;
+  }
+
+  .setting-label {
+    font-size: 0.88rem;
+    color: var(--text-primary);
+  }
+
+  .setting-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .setting-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .setting-input {
+    background: var(--surface-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    width: 120px;
+    text-align: right;
+    font-family: var(--font-mono);
+  }
+
+  .setting-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
+  .setting-select {
+    background: var(--surface-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+
+  .setting-unit {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    min-width: 40px;
+  }
+
+  /* Toggle开关 */
+  .toggle {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    cursor: pointer;
+  }
+
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+  }
+
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--border-light);
+    border-radius: 24px;
+    transition: 0.3s;
+  }
+
+  .toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    left: 3px;
+    top: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: 0.3s;
+  }
+
+  .toggle input:checked + .toggle-slider {
+    background: var(--color-accent);
+  }
+
+  .toggle input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+  }
+
+  /* 密码输入框 */
+  .password-group {
+    display: flex;
+    gap: 8px;
+  }
+
+  .password-group .setting-input {
+    width: 200px;
+    font-family: var(--font-mono);
+    letter-spacing: 2px;
+  }
+
+  .btn-icon {
+    padding: 6px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    background: var(--surface-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+  }
+
+  .btn-icon:hover {
+    background: var(--border-light);
+  }
+
+  /* 测试连接 */
+  .btn-test {
+    padding: 6px 16px;
+    border: 1px solid var(--color-accent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-accent);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+  }
+
+  .btn-test:hover {
+    background: rgba(91, 155, 213, 0.1);
+  }
+
+  .test-result {
+    font-size: 0.8rem;
+    margin-left: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+
+  .test-result.ok {
+    color: var(--color-down);
+    background: rgba(82, 183, 136, 0.1);
+  }
+
+  .test-result.error {
+    color: var(--color-up);
+    background: rgba(224, 122, 95, 0.1);
+  }
+
+  /* 底部按钮栏 */
+  .settings-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 32px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-light);
+  }
+
+  .btn-save {
+    padding: 10px 28px;
+    border: none;
+    border-radius: 8px;
+    background: var(--color-accent);
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .btn-save:hover { opacity: 0.9; }
+
+  .btn-secondary {
+    padding: 10px 20px;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-secondary:hover {
+    background: var(--surface-secondary);
+  }
+
+  .btn-danger {
+    padding: 10px 20px;
+    border: 1px solid var(--color-up);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-up);
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .btn-danger:hover {
+    background: rgba(224, 122, 95, 0.1);
+  }
+
+  /* 通知弹窗 */
+  .toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    z-index: 9999;
+    animation: slideIn 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  }
+
+  .toast.success {
+    background: var(--color-down);
+    color: white;
+  }
+
+  .toast.error {
+    background: var(--color-up);
+    color: white;
+  }
+
+  @keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  /* 导入导出 */
+  .data-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .data-actions .btn-secondary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .file-input {
+    display: none;
+  }
+
+  /* 确认弹窗 */
+  .confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9998;
+  }
+
+  .confirm-overlay.show {
+    display: flex;
+  }
+
+  .confirm-box {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 24px;
+    width: 400px;
+    text-align: center;
+  }
+
+  .confirm-box h3 {
+    margin: 0 0 12px;
+    color: var(--text-primary);
+  }
+
+  .confirm-box p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 20px;
+  }
+
+  .confirm-box .actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-container">
+  <h2>⚙️ 设置</h2>
+
+  <!-- Tab栏 -->
+  <div class="settings-tabs">
+    <button class="settings-tab active" onclick="switchSettingsTab(this, 'market')">📊 行情监控</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'ai')">🤖 AI引擎</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'notify')">🔔 通知</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'fee')">💰 费率</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'data')">💾 数据</button>
+  </div>
+
+  <!-- 行情监控 -->
+  <div class="settings-section active" id="section-market">
+    <div class="setting-group">
+      <div class="setting-group-title">行情刷新</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">自动刷新间隔</div>
+          <div class="setting-hint">自选股页面的行情数据刷新频率</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-refresh_interval">
+            <option value="10">10秒</option>
+            <option value="15">15秒</option>
+            <option value="30" selected>30秒</option>
+            <option value="60">60秒</option>
+            <option value="120">2分钟</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">异动阈值</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">涨跌幅异动阈值</div>
+          <div class="setting-hint">单日涨跌幅超过此值触发异动提醒</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-change_threshold" step="0.5" min="1" max="20">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">放量异动倍数</div>
+          <div class="setting-hint">成交量超过近5日均量的倍数</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-volume_threshold" step="0.5" min="1" max="20">
+          <span class="setting-unit">倍</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">北向资金异动阈值</div>
+          <div class="setting-hint">分钟净流入/流出超过此值</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-northbound_threshold" step="1" min="1" max="100">
+          <span class="setting-unit">亿/分钟</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI引擎 -->
+  <div class="settings-section" id="section-ai">
+    <div class="setting-group">
+      <div class="setting-group-title">AI分析引擎（TradingAgents-astock）</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">模型模式</div>
+          <div class="setting-hint">控制分析质量与成本的平衡</div>
+        </div>
+        <div class="setting-control">
+          <div class="model-mode-group" id="modelModeGroup">
+            <button class="model-mode-btn" data-mode="economy" onclick="setModelMode('economy')">
+              <span class="mode-icon">💰</span>
+              <span class="mode-name">经济</span>
+              <span class="mode-desc">全链路Flash</span>
+            </button>
+            <button class="model-mode-btn active" data-mode="balanced" onclick="setModelMode('balanced')">
+              <span class="mode-icon">⚖️</span>
+              <span class="mode-name">均衡</span>
+              <span class="mode-desc">Flash分析+Pro裁决</span>
+            </button>
+            <button class="model-mode-btn" data-mode="flagship" onclick="setModelMode('flagship')">
+              <span class="mode-icon">🚀</span>
+              <span class="mode-name">旗舰</span>
+              <span class="mode-desc">全链路Pro</span>
+            </button>
+          </div>
+          <input type="hidden" id="set-model_mode" value="balanced">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">LLM供应商</div>
+          <div class="setting-hint">选择AI推理引擎</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-llm_provider" onchange="updateModelOptions()">
+            <option value="deepseek">DeepSeek</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="qwen">通义千问</option>
+            <option value="glm">智谱GLM</option>
+            <option value="xai">xAI (Grok)</option>
+            <option value="minimax">MiniMax</option>
+            <option value="ollama">Ollama (本地)</option>
+            <option value="google">Google Gemini</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">深度思考模型</div>
+          <div class="setting-hint">用于分析推理（慢但深入）</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-deep_think_model"></select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">快速思考模型</div>
+          <div class="setting-hint">用于数据处理（快但简单）</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-quick_think_model"></select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">API密钥</div>
+          <div class="setting-hint">留空则使用环境变量 DEEPSEEK_API_KEY</div>
+        </div>
+        <div class="setting-control">
+          <div class="password-group">
+            <input type="password" class="setting-input" id="set-api_key" placeholder="sk-...">
+            <button class="btn-icon" onclick="toggleApiKeyVisibility()">👁</button>
+          </div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">自定义API端点</div>
+          <div class="setting-hint">留空使用官方API，支持代理/私有部署</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-custom_endpoint" placeholder="https://api.deepseek.com" style="width: 220px;">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">输出语言</div>
+          <div class="setting-hint">AI分析报告的输出语言</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-output_language">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">辩论轮数</div>
+          <div class="setting-hint">多轮辩论=更深入分析，但更慢更贵</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-debate_rounds">
+            <option value="1">1轮</option>
+            <option value="2">2轮</option>
+            <option value="3">3轮</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">风险讨论轮数</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-risk_rounds">
+            <option value="1">1轮</option>
+            <option value="2">2轮</option>
+            <option value="3">3轮</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">启用Crash恢复</div>
+          <div class="setting-hint">LangGraph checkpoint，崩溃可从最后节点恢复</div>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="set-checkpoint_enabled">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div></div>
+        <div class="setting-control">
+          <button class="btn-test" onclick="testApiConnection()">🔌 测试连接</button>
+          <span class="test-result" id="testResult"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">🔍 旁观者核对</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">启用旁观者核对</div>
+          <div class="setting-hint">用不同模型独立验证分析报告，避免同源幻觉</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="set-verification_enabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">核对模型</div>
+          <div class="setting-hint">推荐与分析模型不同的模型</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-verification_model">
+            <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
+            <option value="deepseek-chat">DeepSeek Chat</option>
+            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+            <option value="custom">自定义模型</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">核对API端点</div>
+          <div class="setting-hint">留空使用MiMo默认端点</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-verification_endpoint" placeholder="https://token-plan-cn.xiaomimimo.com/v1" style="width: 220px;">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">核对API密钥</div>
+          <div class="setting-hint">留空使用Hermes配置</div>
+        </div>
+        <div class="setting-control">
+          <div style="display:flex;align-items:center;gap:6px">
+            <input type="password" class="setting-input" id="set-verification_api_key" placeholder="sk-...">
+            <button type="button" class="btn btn-sm pwd-toggle" id="btnToggleApiKey" onclick="toggleApiKey(this)" title="显示/隐藏">👁</button>
+          </div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div></div>
+        <div class="setting-control">
+          <button class="btn-test" onclick="testVerificationConnection()">🔌 测试连接</button>
+          <span class="test-result" id="testVerificationResult"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">AI调度计划</div>
+      <div class="setting-row">
+        <div class="setting-label">📈 早盘开盘报告 (09:30)</div>
+        <label class="toggle"><input type="checkbox" id="set-schedule_open_report"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">📊 上午收盘报告 (11:30)</div>
+        <label class="toggle"><input type="checkbox" id="set-schedule_am_close"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">📉 下午开盘报告 (13:00)</div>
+        <label class="toggle"><input type="checkbox" id="set-schedule_pm_open"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">🔔 下午收盘报告 (15:00)</div>
+        <label class="toggle"><input type="checkbox" id="set-schedule_close_report"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">⚡ 异动实时分析</div>
+        <label class="toggle"><input type="checkbox" id="set-schedule_anomaly_realtime"><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通知 -->
+  <div class="settings-section" id="section-notify">
+    <div class="setting-group">
+      <div class="setting-group-title">浏览器通知</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">启用浏览器通知</div>
+          <div class="setting-hint">需要浏览器授权通知权限</div>
+        </div>
+        <div class="setting-control">
+          <button class="btn-test" id="btnNotifyPerm" onclick="requestNotifyPermission()">🔔 请求权限</button>
+          <label class="toggle">
+            <input type="checkbox" id="set-browser_notify_enabled" onchange="onNotifyToggle(this)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">策略状态变化通知</div>
+        <label class="toggle"><input type="checkbox" id="set-notify_strategy_change"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">条件单触发通知</div>
+        <label class="toggle"><input type="checkbox" id="set-notify_order_trigger"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">异动通知</div>
+        <label class="toggle"><input type="checkbox" id="set-notify_anomaly"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">AI分析完成通知</div>
+        <label class="toggle"><input type="checkbox" id="set-notify_analysis_done"><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+  </div>
+
+  <!-- 费率 -->
+  <div class="settings-section" id="section-fee">
+    <div class="setting-group">
+      <div class="setting-group-title">交易费率</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">佣金费率</div>
+          <div class="setting-hint">万3 = 0.03%</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-commission_rate" step="0.0001" min="0">
+          <span class="setting-unit">（小数）</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">单笔最低佣金</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-commission_min" step="1" min="0">
+          <span class="setting-unit">元</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">印花税（卖出）</div>
+          <div class="setting-hint">0.5‰ = 0.05%</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-stamp_tax_rate" step="0.0001" min="0">
+          <span class="setting-unit">（小数）</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">过户费</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-transfer_fee_rate" step="0.00001" min="0">
+          <span class="setting-unit">（小数）</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 数据管理 -->
+  <div class="settings-section" id="section-data">
+    <div class="setting-group">
+      <div class="setting-group-title">账户管理</div>
+      <div id="accountList" style="margin-bottom:8px;"></div>
+      <button class="btn-secondary" onclick="addAccount()" style="font-size:0.85rem;">+ 添加账户</button>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">导入/导出</div>
+      <div class="data-actions">
+        <button class="btn-secondary" onclick="exportData()">📦 导出全部数据</button>
+        <button class="btn-secondary" onclick="document.getElementById('importFile').click()">📥 导入数据</button>
+        <input type="file" id="importFile" class="file-input" accept=".json" onchange="importData(this)">
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">危险操作</div>
+      <div class="data-actions">
+        <button class="btn-danger" onclick="confirmClearAll()">🗑 清空所有数据</button>
+        <button class="btn-secondary" onclick="resetSettings()">↩️ 重置设置为默认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部保存栏 -->
+  <div class="settings-actions">
+    <button class="btn-save" onclick="saveSettings()">💾 保存设置</button>
+    <button class="btn-secondary" onclick="loadSettings()">🔄 重新加载</button>
+  </div>
+</div>
+
+<!-- 确认弹窗 -->
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-box">
+    <h3 id="confirmTitle">确认操作</h3>
+    <p id="confirmMessage">确定要执行此操作吗？</p>
+    <div class="actions">
+      <button class="btn-secondary" onclick="closeConfirm()">取消</button>
+      <button class="btn-danger" id="confirmAction">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/settings.js"></script>
+{% endblock %}
