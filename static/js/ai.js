@@ -3,11 +3,19 @@
  * 左栏:自选股卡片(单选/批量选) | 中栏:指数+控制+卡通/进度/报告 | 右栏:异动+历史
  */
 
+// 7档信号中文标签
+const SIG_LABEL = {
+    STRONG_BUY:'强烈买入', BUY:'买入', OVERWEIGHT:'增持',
+    HOLD:'持有', UNDERWEIGHT:'减持', SELL:'卖出', STRONG_SELL:'强烈卖出'
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
     await Promise.all([loadAIStockCards(), loadReports(), loadIndices()]);
     initIdleStages();
     pollQueueStatus();
     setInterval(pollQueueStatus, 10000);
+    pollAnomalies();
+    setInterval(pollAnomalies, 30000);
     restoreActiveTask();
     handleResponsiveLayout();
     window.addEventListener('resize', handleResponsiveLayout);
@@ -250,10 +258,13 @@ function showProgressPanel(code, taskId, depthCfg) {
     const ap = allP.filter(id => { if(id==='debate') return hd; if(id==='risk') return hr; return true; });
     document.getElementById('pipelineStages').innerHTML = `<div class="avatar-pipeline">${allP.map(id => { const ac = ap.includes(id); return `<div class="avatar-card ${ac?'pending':'skipped'}" data-color="${si[id].c}" id="stage-${id}"><div class="avatar-emoji">${si[id].a}</div><div class="avatar-name">${si[id].n}${ac?'':' ⏭'}</div></div>`; }).join('')}</div>`;
     window._activeStageTotal = aa.length + ap.length;
-    document.getElementById('progressTitle').textContent = `🔍 ${depthCfg?.label||'标准'} 分析: ${code}`;
+    const nameEl = document.querySelector(`.ai-stock-card[data-code="${code}"] .sc-name`);
+    const stockName = nameEl ? nameEl.textContent.replace(code, '').trim() : '';
+    document.getElementById('progressTitle').textContent = `🔍 ${depthCfg?.label||'标准'} 分析: ${stockName ? stockName + ' ' : ''}${code}`;
     document.getElementById('progressBar').style.width = '0%';
     document.getElementById('progressText').textContent = `0/${window._activeStageTotal} \u9636\u6bb5`;
     document.getElementById('cancelContainer').style.display = 'block';
+    document.getElementById('resumeContainer').style.display = 'none';
     document.getElementById('queuePosition').textContent = '';
     const te = document.getElementById('tokenStats'); if(te) te.textContent = '';
 }
@@ -277,7 +288,7 @@ function startSSE(taskId) {
         }
         else if (d.type==='queued') { document.getElementById('queuePosition').textContent=`\u6392\u961f\u4e2d(\u7b2c${d.position||0}\u4f4d)`; }
         else if (d.type==='completed') { activeAnalysisCode=null; showReport(d.result, d.elapsed); es.close(); }
-        else if (d.type==='failed') { activeAnalysisCode=null; showBottomPanel('progress'); initIdleStages(); alert('\u5206\u6790\u5931\u8d25: '+(d.error||'')); es.close(); }
+        else if (d.type==='failed') { activeAnalysisCode=null; showResumeButton(taskId, d.error||'分析失败'); es.close(); }
     };
     es.onerror = () => { es.close(); pollTaskStatus(taskId); };
 }
@@ -286,7 +297,7 @@ async function pollTaskStatus(taskId) {
     try {
         const s = await apiGet(`/api/ai/analyze/${taskId}/status`);
         if (s.status==='completed') { const r=await apiGet(`/api/ai/analyze/${taskId}/result`); showReport(r.result, r.elapsed); }
-        else if (s.status==='failed') { showBottomPanel('progress'); initIdleStages(); alert('\u5931\u8d25'); }
+        else if (s.status==='failed') { showResumeButton(taskId, s.error||'分析失败'); }
         else setTimeout(()=>pollTaskStatus(taskId), 2000);
     } catch(e) {}
 }
@@ -297,22 +308,87 @@ async function cancelAnalysis() {
     try { const r = await apiPost(`/api/ai/analyze/${currentTaskId}/cancel`); if(r.status==='ok') { document.getElementById('cancelContainer').style.display='none'; if(currentSSE){currentSSE.close();currentSSE=null;} setTimeout(()=>{showBottomPanel('progress'); initIdleStages();},1000); } } catch(e) {}
 }
 
+function showResumeButton(taskId, errorMsg) {
+    currentTaskId = taskId;
+    document.getElementById('cancelContainer').style.display = 'none';
+    document.getElementById('resumeContainer').style.display = 'block';
+    document.getElementById('resumeError').textContent = '⚠️ ' + errorMsg;
+}
+
+async function resumeAnalysis() {
+    if (!currentTaskId) return;
+    const btn = document.querySelector('#resumeContainer .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 续跑中...'; }
+    document.getElementById('resumeContainer').style.display = 'none';
+    try {
+        const r = await apiPost(`/api/ai/analyze/${currentTaskId}/resume`);
+        if (r.task_id) {
+            currentTaskId = r.task_id;
+            initIdleStages();
+            startSSE(r.task_id);
+        } else {
+            alert(r.message || '续跑失败');
+            document.getElementById('resumeContainer').style.display = 'block';
+            if (btn) { btn.disabled = false; btn.textContent = '🔄 继续分析'; }
+        }
+    } catch(e) {
+        alert('续跑请求失败: ' + e.message);
+        document.getElementById('resumeContainer').style.display = 'block';
+        if (btn) { btn.disabled = false; btn.textContent = '🔄 继续分析'; }
+    }
+}
+
 // === 报告详情 ===
+// === 报告顶部大盘指数 ===
+function loadReportIndex() {
+    const bar = document.getElementById('reportIndexBar');
+    if (!bar) return;
+    apiGet('/api/index').then(data => {
+        if (!data || typeof data !== 'object') { bar.style.display='none'; return; }
+        const keys = ['sh','sz','cyb'];
+        let html = '';
+        for (const k of keys) {
+            const d = data[k]; if (!d || !d.price) continue;
+            const chg = d.change_pct || 0;
+            const cls = chg > 0 ? 'price-up' : chg < 0 ? 'price-down' : '';
+            const sign = chg > 0 ? '+' : '';
+            html += `<div class="index-item">
+                <span class="index-name">${d.name||k}</span>
+                <span class="index-price">${d.price.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}</span>
+                <span class="index-change ${cls}">${sign}${chg.toFixed(2)}%</span>
+            </div>`;
+        }
+        if (html) { bar.innerHTML = html; bar.style.display = 'flex'; }
+        else { bar.style.display = 'none'; }
+    }).catch(() => { bar.style.display = 'none'; });
+}
+
 function showReport(result, elapsed) {
     if (!result) return;
     showBottomPanel('report');
+    loadReportIndex();
     window._currentResult = result;
     const sig = (result.signal||'HOLD').toUpperCase();
-    const labels = {BUY:'\u4e70\u5165',SELL:'\u5356\u51fa',HOLD:'\u6301\u6709'};
-    const colors = {BUY:'#E07A5F',SELL:'#52B788',HOLD:'#F4A261'};
-    document.getElementById('reportStockName').textContent = result.code||'';
+    const colors = {BUY:'#E07A5F',SELL:'#52B788',HOLD:'#F4A261',STRONG_BUY:'#C0392B',STRONG_SELL:'#1B7A3D',OVERWEIGHT:'#E8927C',UNDERWEIGHT:'#7BC47F'};
+    document.getElementById('reportStockName').textContent = (result.name ? result.name + ' ' : '') + (result.code||'') + (result.depth ? ' · ' + ({quick:'快速',standard:'标准',deep:'深度'}[result.depth]||result.depth) : '') + (result.model_mode ? ' · ' + ({balanced:'均衡',deepseek:'DeepSeek',openai:'OpenAI',custom:'自定义'}[result.model_mode]||result.model_mode) : '');
     const se = document.getElementById('reportSignal');
-    se.textContent = `${labels[sig]||sig} ${sig}`; se.style.background = colors[sig]||'#888'; se.style.color='#fff';
+    se.textContent = `${SIG_LABEL[sig]||sig} ${sig}`; se.style.background = colors[sig]||'#888'; se.style.color='#fff';
     // 事实账本准确率徽章
     const fce = document.getElementById('reportFactBadge');
     if (fce) {
-        if (result._fact_check && (result._fact_check.verified + result._fact_check.mismatched) > 0) {
-            const acc = result._fact_check.accuracy || 0;
+        const fc = result._fact_check;
+        // 新结构: per_stage (七层数据核对)
+        if (fc && fc.stages && Object.keys(fc.stages).length > 0) {
+            const acc = fc.overall_accuracy || 0;
+            const accColor = acc >= 80 ? '#52B788' : acc >= 50 ? '#F4A261' : '#E07A5F';
+            const stageCount = Object.keys(fc.stages).length;
+            fce.textContent = `事实核对 ${acc}% · ${stageCount}阶段`;
+            fce.style.background = accColor;
+            fce.style.color = '#fff';
+            fce.style.display = 'inline-block';
+        // 旧结构: flat claims
+        } else if (fc && (fc.verified + fc.mismatched) > 0) {
+            const acc = fc.accuracy || 0;
             const accColor = acc >= 80 ? '#52B788' : acc >= 50 ? '#F4A261' : '#E07A5F';
             fce.textContent = `准确率 ${acc}%`;
             fce.style.background = accColor;
@@ -336,26 +412,263 @@ function closeReport() {
 function viewReport(id) {
     apiGet(`/api/ai/reports/${id}`).then(report => {
         let p = report.result || {};
-        const r = { _reportId:id, code:report.code, signal:report.signal||p.signal||'HOLD', confidence:report.confidence||p.confidence, risk_score:report.risk_score||p.risk_score, target_price:p.target_price||null, reasoning:p.reasoning||report.final_decision||'', stages:{ market:report.market_report, social:report.sentiment_report, news:report.news_report, fundamentals:report.fundamentals_report, policy:report.policy_report, hot_money:report.hot_money_report, lockup:report.lockup_report, debate:report.investment_debate, risk:report.risk_debate, trader:report.trader_plan, pm:report.final_decision }, risk_debate:parseRiskDebate(p.risk_debate, report), _fact_check: report._fact_check, _bystander_verify: report._bystander_verify };
+        const r = { _reportId:id, code:report.code, name:report.name||p.name||'', depth:report.depth||'', model_mode:report.model_mode||'', signal:report.signal||p.signal||'HOLD', confidence:report.confidence||p.confidence, risk_score:report.risk_score||p.risk_score, target_price:p.target_price||null, reasoning:p.reasoning||report.final_decision||'', stages:{ market:report.market_report, social:report.sentiment_report, news:report.news_report, fundamentals:report.fundamentals_report, policy:report.policy_report, hot_money:report.hot_money_report, lockup:report.lockup_report, debate:report.investment_debate, risk:report.risk_debate, trader:report.trader_plan, pm:report.final_decision }, risk_debate:parseRiskDebate(report.risk_debate, report), _fact_check: report._fact_check, _bystander_verify: report._bystander_verify };
         showReport(r, report.duration_seconds);
     }).catch(e => console.error(e));
 }
 
 // === 报告Tab ===
+// 从markdown文本提取关键摘要点
+function extractHighlights(text, max) {
+    max = max || 3;
+    if (!text) return [];
+    const lines = text.split('\n');
+    const bullets = [];
+    for (const line of lines) {
+        const t = line.trim();
+        // 匹配markdown列表项或加粗结论
+        if (t.match(/^[-*•]\s+/) && t.length > 10) {
+            bullets.push(t.replace(/^[-*•]\s+/, ''));
+        } else if (t.match(/^\d+[.)]\s+/) && t.length > 10) {
+            bullets.push(t.replace(/^\d+[.)]\s+/, ''));
+        }
+        if (bullets.length >= max) break;
+    }
+    // 如果没找到列表项，取前3句有意义的句子
+    if (!bullets.length) {
+        const sentences = text.replace(/[#*_]/g, '').split(/[。！？\n]/).filter(s => s.trim().length > 15);
+        for (const s of sentences.slice(0, max)) {
+            bullets.push(s.trim());
+        }
+    }
+    return bullets.slice(0, max);
+}
+
+// 提取第一段有意义的文本作为一句话摘要
+function extractFirstLine(text) {
+    if (!text) return '';
+    const clean = text.replace(/^[\s\S]*?(?:---\n|#)/m, '').replace(/[#*_]/g, '');
+    const lines = clean.split('\n').filter(l => l.trim().length > 10);
+    return (lines[0] || '').trim().substring(0, 80);
+}
+
+// 渲染可折叠阶段卡片
+// 内联markdown渲染（不生成块级标签）
+function renderInlineMd(s) {
+    if (!s) return '';
+    if (typeof marked !== 'undefined') {
+        return marked.parseInline(s);
+    }
+    return escHtml(s);
+}
+
+function renderStageCard(icon, title, text, open) {
+    if (!text || text === '暂无') return '';
+    const highlights = extractHighlights(text, 3);
+    const summary = highlights.length ? highlights[0].substring(0, 60) + (highlights[0].length > 60 ? '...' : '') : extractFirstLine(text);
+    const highlightHtml = highlights.map(h => `<div class="stage-highlight-item"><div class="stage-highlight-dot"></div><div>${renderInlineMd(h)}</div></div>`).join('');
+    return `<div class="stage-collapsible ${open?'open':''}" onclick="this.classList.toggle('open')">
+        <div class="stage-collapsible-header">
+            <span class="stage-collapsible-icon">${icon}</span>
+            <span class="stage-collapsible-title">${title}</span>
+            <span class="stage-collapsible-summary">${renderInlineMd(summary)}</span>
+            <span class="stage-collapsible-toggle">▶</span>
+        </div>
+        <div class="stage-collapsible-body">
+            <div class="stage-highlights">${highlightHtml}</div>
+            <div class="report-full-text">${formatReport(text)}</div>
+        </div>
+    </div>`;
+}
+
+// HTML转义
+function escHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// 渲染Dashboard卡片
+function renderDashboard(r, container) {
+    const sig = (r.signal || 'HOLD').toUpperCase();
+    const sigLabel = SIG_LABEL[sig] || sig;
+    const sigClass = {BUY:'signal-buy',SELL:'signal-sell',HOLD:'signal-hold',STRONG_BUY:'signal-strong-buy',STRONG_SELL:'signal-strong-sell',OVERWEIGHT:'signal-overweight',UNDERWEIGHT:'signal-underweight'}[sig] || '';
+    const sigColor = {BUY:'#E07A5F',SELL:'#52B788',HOLD:'#F4A261',STRONG_BUY:'#C0392B',STRONG_SELL:'#1B7A3D',OVERWEIGHT:'#E8927C',UNDERWEIGHT:'#7BC47F'}[sig] || '#999';
+    const tp = r.target_price;
+    const conf = r.confidence || r.risk_score;
+    const riskVal = r.risk_score || r.confidence;
+
+    // 从PM决策提取一句话结论
+    const pmText = r.reasoning || r.stages?.pm || '';
+    const verdict = extractFirstLine(pmText);
+
+    let html = `<div class="report-dashboard">`;
+    // 信号卡片
+    html += `<div class="dash-card ${sigClass}">
+        <div class="dash-card-label">信号</div>
+        <div class="dash-card-value" style="color:${sigColor}">${sigLabel}</div>
+        <div class="dash-card-sub">${sig}</div>
+    </div>`;
+    // 目标价卡片
+    if (tp) {
+        html += `<div class="dash-card">
+            <div class="dash-card-label">目标价</div>
+            <div class="dash-card-value">¥${Number(tp).toFixed(2)}</div>
+        </div>`;
+    }
+    // 置信度卡片
+    if (conf != null) {
+        const confPct = Math.min(100, Math.max(0, Number(conf)));
+        const confColor = confPct >= 70 ? '#52B788' : confPct >= 40 ? '#F4A261' : '#E07A5F';
+        html += `<div class="dash-card">
+            <div class="dash-card-label">置信度</div>
+            <div class="dash-card-value" style="color:${confColor}">${confPct}%</div>
+            <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${confPct}%;background:${confColor}"></div></div>
+        </div>`;
+    }
+    // 风险评分卡片
+    if (riskVal != null && riskVal !== conf) {
+        const rv = Math.min(100, Math.max(0, Number(riskVal)));
+        const rColor = rv <= 30 ? '#52B788' : rv <= 60 ? '#F4A261' : '#E07A5F';
+        html += `<div class="dash-card">
+            <div class="dash-card-label">风险评分</div>
+            <div class="dash-card-value" style="color:${rColor}">${rv}</div>
+            <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${rv}%;background:${rColor}"></div></div>
+        </div>`;
+    }
+    // 一句话结论
+    if (verdict) {
+        html += `<div class="dash-verdict">
+            <div class="dash-verdict-label">📌 PM决策摘要</div>
+            <div>${escHtml(verdict)}</div>
+        </div>`;
+    }
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+// 渲染基本面指标网格
+function renderMetricsGrid(text) {
+    if (!text) return '';
+    // 提取常见财务指标
+    const patterns = [
+        {re: /PE[：:\s]*(\d+[\d.]*)/i, label: 'PE'},
+        {re: /市盈率[：:\s]*(\d+[\d.]*)/, label: '市盈率'},
+        {re: /ROE[：:\s]*([+-]?\d+[\d.]*)%?/i, label: 'ROE'},
+        {re: /毛利率[：:\s]*([+-]?\d+[\d.]*)%?/, label: '毛利率'},
+        {re: /净利率[：:\s]*([+-]?\d+[\d.]*)%?/, label: '净利率'},
+        {re: /营收[：:\s]*([+-]?\d+[\d.]*[亿万]?)/, label: '营收'},
+        {re: /净利润[：:\s]*([+-]?\d+[\d.]*[亿万]?)/, label: '净利润'},
+        {re: /总市值[：:\s]*([+-]?\d+[\d.]*[亿万]?)/, label: '总市值'},
+        {re: /流通市值[：:\s]*([+-]?\d+[\d.]*[亿万]?)/, label: '流通市值'},
+        {re: /换手率[：:\s]*([+-]?\d+[\d.]*)%?/, label: '换手率'},
+        {re: /成交量[：:\s]*([+-]?\d+[\d.]*[万手]?)/, label: '成交量'},
+        {re: /MA\d+[：:\s]*(\d+[\d.]*)/, label: '均线'},
+        {re: /MACD[：:\s]*([+-]?[\d.]+)/i, label: 'MACD'},
+        {re: /RSI[：:\s]*(\d+[\d.]*)/i, label: 'RSI'},
+        {re: /KDJ[：:\s]*([^\n]{3,15})/i, label: 'KDJ'},
+    ];
+    const found = [];
+    for (const p of patterns) {
+        const m = text.match(p.re);
+        if (m) found.push({label: p.label, value: m[1]});
+    }
+    if (!found.length) return '';
+    return `<div class="metric-grid">${found.map(m => `<div class="metric-cell"><div class="metric-cell-label">${m.label}</div><div class="metric-cell-value">${m.value}</div></div>`).join('')}</div>`;
+}
+
 function switchReportTab(btn, target) {
     document.querySelectorAll('.report-nav .nav-item').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     const c = document.getElementById('reportContent');
     const r = window._currentResult; if(!r||!c) return;
     const s = r.stages||{};
-    const ai = {market:'\ud83d\udcc8 \u6280\u672f',social:'\ud83d\udcac \u60c5\u7eea',news:'\ud83d\udcf0 \u65b0\u95fb',fundamentals:'\ud83d\udccb \u57fa\u672c\u9762',policy:'\ud83c\udfdb\ufe0f \u653f\u7b56',hot_money:'\ud83d\udd25 \u8d44',lockup:'\ud83d\udd12 \u89e3\u7981'};
-    if (ai[target]) { c.innerHTML=`<div class="report-section-title">${ai[target]}</div><div class="report-summary">${formatReport(s[target]||'\u6682\u65e0')}</div>`; return; }
-    if (target==='debate') { const dt=s.debate||'\u6682\u65e0'; c.innerHTML=`<div class="report-section-title">\u2694\ufe0f \u591a\u7a7a\u8fa9\u8bba</div><div class="debate-dual"><div class="debate-side bull"><h5>\ud83d\udc02 \u591a\u5934</h5><div>${formatReport(extractSide(dt,'bull'))}</div></div><div class="debate-divider">\u26a1</div><div class="debate-side bear"><h5>\ud83d\udc3b \u7a7a\u5934</h5><div>${formatReport(extractSide(dt,'bear'))}</div></div></div>`; return; }
-    if (target==='risk') { const rd=r.risk_debate||{}; c.innerHTML=`<div class="report-section-title">\ud83d\udee1\ufe0f \u98ce\u63a7</div><div class="debate-dual"><div class="debate-side" style="background:#E07A5F08;border:1px solid #E07A5F33"><h5>\ud83d\udd34 \u6fc0\u8fdb</h5><div>${formatReport(rd.aggressive||'\u6682\u65e0')}</div></div><div class="debate-side" style="background:#5B9BD508;border:1px solid #5B9BD533"><h5>\ud83d\udd35 \u4fdd\u5b88</h5><div>${formatReport(rd.conservative||'\u6682\u65e0')}</div></div><div class="debate-side" style="background:#52B78808;border:1px solid #52B78833"><h5>\ud83d\udfe2 \u4e2d\u6027</h5><div>${formatReport(rd.neutral||'\u6682\u65e0')}</div></div></div>${rd.decision?`<div style="margin-top:12px;padding:12px;background:rgba(244,162,97,0.08);border:1px solid rgba(244,162,97,0.2);border-radius:8px"><h5 style="margin:0 0 8px">\u2696\ufe0f \u88c1\u51b3</h5><div>${formatReport(rd.decision)}</div></div>`:''}`; return; }
-    if (target==='pm') { c.innerHTML=`<div class="report-section-title">\ud83d\udc54 \u51b3\u7b56</div><div class="report-summary">${formatReport(r.reasoning||s.pm||'\u6682\u65e0')}</div>`; return; }
+
+    // 总览 tab — Dashboard + 所有阶段折叠卡片
+    if (target === 'overview') {
+        let html = '';
+        renderDashboard(r, c);
+        html = c.innerHTML;
+        // 七层分析师折叠卡片
+        const ai = [
+            {k:'market',i:'📊',n:'技术分析'},{k:'social',i:'💬',n:'情绪面'},
+            {k:'news',i:'📰',n:'新闻'},{k:'fundamentals',i:'📋',n:'基本面'},
+            {k:'policy',i:'🏛️',n:'政策'},{k:'hot_money',i:'🔥',n:'资金流'},
+            {k:'lockup',i:'🔒',n:'解禁'}
+        ];
+        for (const a of ai) {
+            const txt = s[a.k];
+            if (txt && txt !== '暂无') {
+                html += renderStageCard(a.i, a.n, txt, false);
+            }
+        }
+        // 基本面指标网格
+        if (s.fundamentals) {
+            html += renderMetricsGrid(s.fundamentals);
+        }
+        c.innerHTML = html;
+        return;
+    }
+
+    // 七层分析师 tab — 带指标网格的折叠卡片
+    const aiMap = {market:'📊 技术',social:'💬 情绪',news:'📰 新闻',fundamentals:'📋 基本面',policy:'🏛️ 政策',hot_money:'🔥 资金',lockup:'🔒 解禁'};
+    if (aiMap[target]) {
+        const txt = s[target] || '暂无';
+        let html = renderStageCard(aiMap[target].split(' ')[0], aiMap[target].split(' ')[1], txt, true);
+        // 基本面tab额外显示指标网格
+        if (target === 'fundamentals' && txt !== '暂无') {
+            html += renderMetricsGrid(txt);
+        }
+        c.innerHTML = html || `<div style="text-align:center;padding:40px;color:var(--text-muted)">暂无</div>`;
+        return;
+    }
+
+    // 辩论 tab — 双栏卡片
+    if (target==='debate') {
+        const dt=s.debate||'暂无';
+        const bullText=extractSide(dt,'bull'), bearText=extractSide(dt,'bear');
+        c.innerHTML=`<div class="report-section-title">⚔️ 多空辩论</div>
+            <div class="debate-dual">
+                <div class="debate-side bull">
+                    <h5>🐂 多头</h5>
+                    <div>${formatReport(bullText)}</div>
+                </div>
+                <div class="debate-divider">⚡</div>
+                <div class="debate-side bear">
+                    <h5>🐻 空头</h5>
+                    <div>${formatReport(bearText)}</div>
+                </div>
+            </div>`;
+        return;
+    }
+
+    // 风控 tab — 三栏卡片
+    if (target==='risk') {
+        const rd=r.risk_debate||{};
+        const agg=rd.aggressive||rd.current_aggressive_response||'暂无';
+        const con=rd.conservative||rd.current_conservative_response||'暂无';
+        const neu=rd.neutral||rd.current_neutral_response||'暂无';
+        const dec=rd.decision||rd.judge_decision||'';
+        c.innerHTML=`<div class="report-section-title">🛡️ 风控</div>
+            <div class="risk-tri">
+                <div class="risk-card aggressive"><h5>🔴 激进</h5><div>${formatReport(agg)}</div></div>
+                <div class="risk-card conservative"><h5>🔵 保守</h5><div>${formatReport(con)}</div></div>
+                <div class="risk-card neutral"><h5>🟢 中性</h5><div>${formatReport(neu)}</div></div>
+            </div>
+            ${dec?`<div class="risk-verdict"><h5>⚖️ 裁决</h5><div>${formatReport(dec)}</div></div>`:''}`;
+        return;
+    }
+
+    // 决策 tab
+    if (target==='pm') {
+        const pmText = r.reasoning||s.pm||'暂无';
+        c.innerHTML=`<div class="report-section-title">👔 决策</div>${renderStageCard('👔','PM决策',pmText,true)}`;
+        return;
+    }
+
+    // 事实账本 tab
     if (target==='factcheck') {
         if (r._fact_check) {
-            renderFactCheckInline(r._fact_check, c);
+            renderFactCheckInline(r._fact_check, c, r._reportId);
         } else if (r._reportId) {
             loadFactCheck(r._reportId, c);
         } else {
@@ -363,14 +676,25 @@ function switchReportTab(btn, target) {
         }
         return;
     }
+
+    // 复核 tab
     if (target==='verify') {
         if (r._bystander_verify) {
-            renderVerificationInline(r._bystander_verify, c);
+            renderVerificationInline(r._bystander_verify, c, r._reportId);
         } else if (r._reportId) {
-            loadVerification(r._reportId, c);
+            c.innerHTML=`<div style="text-align:center;padding:40px;color:var(--text-muted)">
+                <div style="margin-bottom:12px">暂无复核数据</div>
+                <button class="btn btn-primary btn-sm" onclick="rerunVerification(${r._reportId},this.closest('.report-tab-content')||document.getElementById('reportContent'))">🔄 开始复核</button>
+            </div>`;
         } else {
             c.innerHTML='⚠️ 请从历史报告中选择';
         }
+        return;
+    }
+
+    // 信号绩效 tab
+    if (target==='performance') {
+        loadPerformanceTab(c);
         return;
     }
 }
@@ -390,30 +714,222 @@ function showFullReport() {
     c.innerHTML=sec.filter(x=>s[x.k]).map(x=>`<div style="margin-bottom:16px"><div class="report-section-title">${x.i} ${x.n}</div><div class="report-summary">${formatReport(s[x.k])}</div></div>`).join('')+`<div style="margin-bottom:16px"><div class="report-section-title">\u2694\ufe0f \u8fa9\u8bba</div><div class="report-summary">${formatReport(s.debate||'\u6682\u65e0')}</div></div><div style="margin-bottom:16px"><div class="report-section-title">\ud83d\udc54 \u51b3\u7b56</div><div class="report-summary">${formatReport(s.pm||r.reasoning||'\u6682\u65e0')}</div></div>`;
 }
 
-function renderFactCheckInline(fc, c) {
-    const ac = (fc.accuracy||0) >= 80 ? '#52B788' : (fc.accuracy||0) >= 50 ? '#F4A261' : '#E07A5F';
-    c.innerHTML = `<div class="report-section-title">事实账本</div>
-        <div style="display:flex;gap:16px;margin-bottom:12px;font-size:0.9rem">
-            <span>准确率: <b style="color:${ac}">${fc.accuracy}%</b></span>
-            <span style="color:#52B788">✅ ${fc.verified}</span>
-            <span style="color:#E07A5F">❌ ${fc.mismatched}</span>
-            <span style="color:var(--text-muted)">⚠️ ${fc.unverifiable}</span>
+function renderFactCheckInline(fc, c, rid) {
+    // 新结构: stages
+    if (fc && fc.stages && Object.keys(fc.stages).length > 0) {
+        const acc = fc.overall_accuracy || 0;
+        const accColor = acc >= 80 ? '#52B788' : acc >= 50 ? '#F4A261' : '#E07A5F';
+        const stageCount = Object.keys(fc.stages).length;
+
+        // 重新核对按钮（始终显示）
+        let html = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <div class="report-section-title" style="margin:0">📊 事实账本</div>
+            <button class="btn btn-sm" style="font-size:0.75rem;opacity:0.7" onclick="recheckFactCheck(${rid},this.closest('.report-tab-content')||document.getElementById('reportContent'))">🔄 重新核对</button>
         </div>
-        <table style="width:100%;font-size:0.82rem;border-collapse:collapse"><thead><tr style="border-bottom:1px solid var(--border-color)">
-            <th style="text-align:left;padding:6px 8px">数据显示</th><th style="text-align:left;padding:6px 8px">报告中的值</th><th style="text-align:left;padding:6px 8px">实际值</th><th style="text-align:center;padding:6px 8px">状态</th>
-        </tr></thead><tbody>${(fc.claims||[]).map(c => `<tr style="border-bottom:1px solid var(--border-color)">
-            <td style="padding:6px 8px">${c.keyword}</td><td style="padding:6px 8px">${c.claimed_value||'—'}</td><td style="padding:6px 8px">${c.actual_value??'—'}</td>
-            <td style="padding:6px 8px;text-align:center">${c.status==='verified'?'✅':c.status==='mismatch'?'<span style="color:#E07A5F">❌ AI幻觉</span>':'⚠️'}</td>
-        </tr>`).join('')}</tbody></table>`;
+            <div style="display:flex;gap:16px;margin-bottom:16px;font-size:0.85rem;flex-wrap:wrap">
+                <span>总一致率：<b style="color:${accColor}">${acc}%</b></span>
+                <span>核对阶段：${stageCount}</span>
+                <span style="color:#E07A5F">幻觉：${fc.total_hallucinations||0}</span>
+            </div>`;
+
+        const stageOrder = ['market','social','news','fundamentals','policy','hot_money','lockup'];
+        const stageNames = {market:'📊 技术分析',social:'💬 情绪面',news:'📰 新闻',fundamentals:'📋 基本面',policy:'🏛️ 政策',hot_money:'🔥 资金流',lockup:'🔒 解禁'};
+        for (const sid of stageOrder) {
+            const st = fc.stages[sid];
+            if (!st) {
+                // 没有数据快照的阶段，显示为灰色
+                html += `<div style="margin-bottom:8px;padding:10px 14px;border:1px dashed var(--border-color);border-radius:8px;font-size:0.85rem;color:var(--text-muted);display:flex;align-items:center;gap:8px">
+                    <span style="font-weight:600">${stageNames[sid]||sid}</span>
+                    <span style="font-size:0.75rem">— 该阶段未捕获数据快照，无法核对</span>
+                </div>`;
+                continue;
+            }
+            const stAcc = st.accuracy || 0;
+            const stColor = stAcc >= 80 ? '#52B788' : stAcc >= 50 ? '#F4A261' : '#E07A5F';
+            // checked_claims 是全量明细，hallucinations 是差异项；优先用 checked_claims
+            const claims = (st.checked_claims && st.checked_claims.length > 0) ? st.checked_claims : (st.hallucinations || []);
+            const hallus = (st.hallucinations || []).filter(h => h.status === 'mismatch');
+
+            html += `<details style="margin-bottom:8px;border:1px solid var(--border-color);border-radius:8px;overflow:hidden" ${stAcc<80?'open':''}>
+                <summary style="padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:0.85rem;background:var(--bg-secondary)">
+                    <span style="font-weight:600">${st.stage_name||sid}</span>
+                    <span style="color:${stColor};font-weight:600">${stAcc}%</span>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">${st.matched||0}✅ ${st.mismatched||0}❌ ${st.no_source||0}⚠️</span>
+                    ${hallus.length>0?`<span style="color:#E07A5F;font-size:0.8rem">${hallus.length}个幻觉</span>`:''}
+                </summary>
+                <div style="padding:10px 14px">`;
+
+            if (claims.length > 0) {
+                const matchedCount = st.matched || 0;
+                const mismatchedCount = st.mismatched || 0;
+                const noSourceCount = st.no_source || 0;
+                html += `<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">
+                    共 ${st.total_claims||claims.length} 条声明：${matchedCount>0?`<b style="color:#52B788">${matchedCount}条一致</b>`:''}
+                    ${mismatchedCount>0?` · <b style="color:#E07A5F">${mismatchedCount}条幻觉</b>`:''}
+                    ${noSourceCount>0?` · <b style="color:#F4A261">${noSourceCount}条无源数据</b>`:''}
+                    ${matchedCount>0?' · 一致项不逐条列出':''}
+                </div>
+                <table style="width:100%;font-size:0.8rem;border-collapse:collapse">
+                    <thead><tr style="border-bottom:1px solid var(--border-color)">
+                        <th style="text-align:left;padding:4px 6px">数据项</th>
+                        <th style="text-align:left;padding:4px 6px">报告引用</th>
+                        <th style="text-align:left;padding:4px 6px">实际数据</th>
+                        <th style="text-align:center;padding:4px 6px">状态</th>
+                    </tr></thead><tbody>`;
+                for (const x of claims) {
+                    const icon = x.status==='verified'?'✅':x.status==='mismatch'?'<span style="color:#E07A5F">❌</span>':'⚠️';
+                    const actualVal = x.actual_value != null ? x.actual_value : (x.snapshot_value != null ? x.snapshot_value : '—');
+                    html += `<tr style="border-bottom:1px solid var(--border-color)">
+                        <td style="padding:4px 6px">${x.keyword||''}</td>
+                        <td style="padding:4px 6px">${x.claimed_value||''}</td>
+                        <td style="padding:4px 6px">${actualVal}</td>
+                        <td style="padding:4px 6px;text-align:center">${icon}</td>
+                    </tr>`;
+                }
+                html += '</tbody></table>';
+            } else {
+                html += '<div style="font-size:0.8rem;color:var(--text-muted)">无核对记录</div>';
+            }
+            html += '</div></details>';
+        }
+        c.innerHTML = html;
+
+    // 旧结构: flat claims (兼容)
+    } else if (fc && (fc.verified || fc.mismatched)) {
+        const ac = (fc.accuracy||0) >= 80 ? '#52B788' : (fc.accuracy||0) >= 50 ? '#F4A261' : '#E07A5F';
+        c.innerHTML = `<div class="report-section-title">📊 事实账本</div>
+            <div style="display:flex;gap:16px;margin-bottom:12px;font-size:0.9rem">
+                <span>准确率: <b style="color:${ac}">${fc.accuracy}%</b></span>
+                <span style="color:#52B788">✅ ${fc.verified}</span>
+                <span style="color:#E07A5F">❌ ${fc.mismatched}</span>
+                <span style="color:var(--text-muted)">⚠️ ${fc.unverifiable}</span>
+            </div>
+            <table style="width:100%;font-size:0.82rem;border-collapse:collapse"><thead><tr style="border-bottom:1px solid var(--border-color)">
+                <th style="text-align:left;padding:6px 8px">数据显示</th><th style="text-align:left;padding:6px 8px">报告中的值</th><th style="text-align:left;padding:6px 8px">实际值</th><th style="text-align:center;padding:6px 8px">状态</th>
+            </tr></thead><tbody>${(fc.claims||[]).map(c => `<tr style="border-bottom:1px solid var(--border-color)">
+                <td style="padding:6px 8px">${c.keyword}</td><td style="padding:6px 8px">${c.claimed_value||'—'}</td><td style="padding:6px 8px">${c.actual_value??'—'}</td>
+                <td style="padding:6px 8px;text-align:center">${c.status==='verified'?'✅':c.status==='mismatch'?'<span style="color:#E07A5F">❌ AI幻觉</span>':'⚠️'}</td>
+            </tr>`).join('')}</tbody></table>`;
+    } else {
+        c.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-muted)">暂无事实账本数据</div>
+            ${rid?`<div style="text-align:center;padding:0 20px 20px"><button class="btn btn-primary btn-sm" onclick="recheckFactCheck(${rid},this.closest('.report-tab-content')||document.getElementById('reportContent'))">🔄 重新核对</button></div>`:''}`;
+    }
+}
+
+async function recheckFactCheck(rid, c) {
+    c.innerHTML='<div style="text-align:center;padding:20px">⏳ 正在重新核对（约30秒）...</div>';
+    try {
+        const d = await apiPost(`/api/ai/reports/${rid}/recheck`);
+        if (d.error) { c.innerHTML='⚠️ '+d.error; return; }
+        // 核对完成，重新渲染
+        if (d.stages && Object.keys(d.stages).length > 0) {
+            renderFactCheckInline(d, c, rid);
+        } else {
+            c.innerHTML='<div style="text-align:center;padding:20px;color:var(--text-muted)">核对完成，无可用数据</div>';
+        }
+    } catch(e) { c.innerHTML='⚠️ 核对失败: '+e.message; }
 }
 
 async function loadFactCheck(rid, c) {
-    c.innerHTML='<div style="text-align:center;padding:20px">\u23f3 \u6838\u5bf9\u4e2d...</div>';
-    try { const d=await apiGet(`/api/ai/reports/${rid}/fact-check`); if(d.error){c.innerHTML='\u26a0\ufe0f '+d.error;return;} const ac=d.accuracy>=80?'#52B788':d.accuracy>=60?'#F4A261':'#E07A5F'; c.innerHTML=`<div class="report-section-title">\ud83d\udcca \u4e8b\u5b9e\u8d26\u672c</div><div style="display:flex;gap:16px;margin-bottom:16px;font-size:0.85rem"><span>\u4e00\u81f4\u7387\uff1a<b style="color:${ac}">${d.accuracy}%</b></span><span>\u2705 ${d.verified}</span><span style="color:#E07A5F">\u274c ${d.mismatched}</span><span style="color:#F4A261">\u26a0\ufe0f ${d.unverifiable}</span></div><table style="width:100%;font-size:0.82rem;border-collapse:collapse"><thead><tr style="border-bottom:1px solid var(--border-color)"><th style="text-align:left;padding:6px 8px">\u6570\u636e\u9879</th><th style="text-align:left;padding:6px 8px">\u5f15\u7528</th><th style="text-align:left;padding:6px 8px">\u5b9e\u9645</th><th style="text-align:center;padding:6px 8px">\u72b6\u6001</th></tr></thead><tbody>${d.claims.map(x=>`<tr style="border-bottom:1px solid var(--border-color)"><td style="padding:6px 8px">${x.keyword}</td><td style="padding:6px 8px">${x.claimed_value}</td><td style="padding:6px 8px">${x.actual_value??'\u2014'}</td><td style="padding:6px 8px;text-align:center">${x.status==='verified'?'\u2705':x.status==='mismatch'?'<span style="color:#E07A5F">\u274c</span>':'\u26a0\ufe0f'}</td></tr>`).join('')}</tbody></table>`; } catch(e){c.innerHTML='\u26a0\ufe0f '+e.message;}
+    c.innerHTML='<div style="text-align:center;padding:20px">⏳ 核对中...</div>';
+    try {
+        const d = await apiGet(`/api/ai/reports/${rid}/fact-check`);
+        if(d.error){c.innerHTML='⚠️ '+d.error;return;}
+
+        // 新结构: stages
+        if (d.stages && Object.keys(d.stages).length > 0) {
+            const acc = d.overall_accuracy || 0;
+            const accColor = acc >= 80 ? '#52B788' : acc >= 50 ? '#F4A261' : '#E07A5F';
+            const stageCount = Object.keys(d.stages).length;
+
+            // 重新核对按钮（始终显示）
+            let html = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+                <div class="report-section-title" style="margin:0">📊 事实账本</div>
+                <button class="btn btn-sm" style="font-size:0.75rem;opacity:0.7" onclick="recheckFactCheck(${rid},this.closest('.report-tab-content')||document.getElementById('reportContent'))">🔄 重新核对</button>
+            </div>
+                <div style="display:flex;gap:16px;margin-bottom:16px;font-size:0.85rem;flex-wrap:wrap">
+                    <span>总一致率：<b style="color:${accColor}">${acc}%</b></span>
+                    <span>核对阶段：${stageCount}</span>
+                    <span style="color:#E07A5F">幻觉：${d.total_hallucinations||0}</span>
+                    <span>总声明：${d.total_claims||0}</span>
+                </div>`;
+
+            const stageOrder = ['market','social','news','fundamentals','policy','hot_money','lockup'];
+            const stageNames = {market:'📊 技术分析',social:'💬 情绪面',news:'📰 新闻',fundamentals:'📋 基本面',policy:'🏛️ 政策',hot_money:'🔥 资金流',lockup:'🔒 解禁'};
+            for (const sid of stageOrder) {
+                const st = d.stages[sid];
+                if (!st) {
+                    html += `<div style="margin-bottom:8px;padding:10px 14px;border:1px dashed var(--border-color);border-radius:8px;font-size:0.85rem;color:var(--text-muted);display:flex;align-items:center;gap:8px">
+                        <span style="font-weight:600">${stageNames[sid]||sid}</span>
+                        <span style="font-size:0.75rem">— 该阶段未捕获数据快照，无法核对</span>
+                    </div>`;
+                    continue;
+                }
+                const stAcc = st.accuracy || 0;
+                const stColor = stAcc >= 80 ? '#52B788' : stAcc >= 50 ? '#F4A261' : '#E07A5F';
+                const claims = (st.checked_claims && st.checked_claims.length > 0) ? st.checked_claims : (st.hallucinations || []);
+                const hallus = (st.hallucinations || []).filter(h => h.status === 'mismatch');
+
+                html += `<details style="margin-bottom:8px;border:1px solid var(--border-color);border-radius:8px;overflow:hidden" ${stAcc<80?'open':''}>
+                    <summary style="padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:0.85rem;background:var(--bg-secondary)">
+                        <span style="font-weight:600">${st.stage_name||sid}</span>
+                        <span style="color:${stColor};font-weight:600">${stAcc}%</span>
+                        <span style="font-size:0.75rem;color:var(--text-muted)">${st.matched||0}✅ ${st.mismatched||0}❌ ${st.no_source||0}⚠️</span>
+                        ${hallus.length>0?`<span style="color:#E07A5F;font-size:0.8rem">${hallus.length}个幻觉</span>`:''}
+                    </summary>
+                    <div style="padding:10px 14px">`;
+
+                if (claims.length > 0) {
+                    const matchedCount = st.matched || 0;
+                    const mismatchedCount = st.mismatched || 0;
+                    const noSourceCount = st.no_source || 0;
+                    html += `<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">
+                        共 ${st.total_claims||claims.length} 条声明：${matchedCount>0?`<b style="color:#52B788">${matchedCount}条一致</b>`:''}
+                        ${mismatchedCount>0?` · <b style="color:#E07A5F">${mismatchedCount}条幻觉</b>`:''}
+                        ${noSourceCount>0?` · <b style="color:#F4A261">${noSourceCount}条无源数据</b>`:''}
+                        ${matchedCount>0?' · 一致项不逐条列出':''}
+                    </div>
+                    <table style="width:100%;font-size:0.8rem;border-collapse:collapse">
+                        <thead><tr style="border-bottom:1px solid var(--border-color)">
+                            <th style="text-align:left;padding:4px 6px">数据项</th>
+                            <th style="text-align:left;padding:4px 6px">报告引用</th>
+                            <th style="text-align:left;padding:4px 6px">实际数据</th>
+                            <th style="text-align:center;padding:4px 6px">状态</th>
+                        </tr></thead><tbody>`;
+                    for (const x of claims) {
+                        const icon = x.status==='verified'?'✅':x.status==='mismatch'?'<span style="color:#E07A5F">❌</span>':'⚠️';
+                        const actualVal = x.actual_value != null ? x.actual_value : (x.snapshot_value != null ? x.snapshot_value : '—');
+                        html += `<tr style="border-bottom:1px solid var(--border-color)">
+                            <td style="padding:4px 6px">${x.keyword||''}</td>
+                            <td style="padding:4px 6px">${x.claimed_value||''}</td>
+                            <td style="padding:4px 6px">${actualVal}</td>
+                            <td style="padding:4px 6px;text-align:center">${icon}</td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                } else {
+                    html += '<div style="font-size:0.8rem;color:var(--text-muted)">无核对记录</div>';
+                }
+                html += '</div></details>';
+            }
+            c.innerHTML = html;
+
+        // 旧结构: flat claims (兼容旧报告)
+        } else if (d.claims && d.claims.length > 0) {
+            const ac=d.accuracy>=80?'#52B788':d.accuracy>=60?'#F4A261':'#E07A5F';
+            c.innerHTML=`<div class="report-section-title">📊 事实账本</div><div style="display:flex;gap:16px;margin-bottom:16px;font-size:0.85rem"><span>一致率：<b style="color:${ac}">${d.accuracy}%</b></span><span>✅ ${d.verified}</span><span style="color:#E07A5F">❌ ${d.mismatched}</span><span style="color:#F4A261">⚠️ ${d.unverifiable}</span></div><table style="width:100%;font-size:0.82rem;border-collapse:collapse"><thead><tr style="border-bottom:1px solid var(--border-color)"><th style="text-align:left;padding:6px 8px">数据项</th><th style="text-align:left;padding:6px 8px">引用</th><th style="text-align:left;padding:6px 8px">实际</th><th style="text-align:center;padding:6px 8px">状态</th></tr></thead><tbody>${d.claims.map(x=>`<tr style="border-bottom:1px solid var(--border-color)"><td style="padding:6px 8px">${x.keyword}</td><td style="padding:6px 8px">${x.claimed_value}</td><td style="padding:6px 8px">${x.actual_value??'—'}</td><td style="padding:6px 8px;text-align:center">${x.status==='verified'?'✅':x.status==='mismatch'?'<span style="color:#E07A5F">❌</span>':'⚠️'}</td></tr>`).join('')}</tbody></table>`;
+        // 空 stages — 显示重新核对按钮
+        } else {
+            c.innerHTML=`<div style="text-align:center;padding:20px;color:var(--text-muted)">暂无事实账本数据</div><div style="text-align:center;padding:0 20px 20px"><button class="btn btn-primary btn-sm" onclick="recheckFactCheck(${rid},this.parentElement.parentElement)">🔄 重新核对</button></div>`;
+        }
+    } catch(e){c.innerHTML='⚠️ '+e.message;}
 }
-function renderVerificationInline(bv, c) {
+function renderVerificationInline(bv, c, rid) {
     const sc = (bv.overall_score||0) >= 80 ? '#52B788' : (bv.overall_score||0) >= 50 ? '#F4A261' : '#E07A5F';
-    c.innerHTML = `<div class="report-section-title">报告复核</div>
+    c.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="report-section-title" style="margin:0">🔬 报告复核</div>
+        <button class="btn btn-sm" style="font-size:0.75rem;opacity:0.7" onclick="rerunVerification(${rid},this.closest('.report-tab-content')||document.getElementById('reportContent'))">🔄 重新复核</button>
+    </div>
         <div style="margin-bottom:16px;padding:12px;background:rgba(91,155,213,0.06);border-radius:8px">
             <div style="font-size:1.2rem;font-weight:600;color:${sc}">可信度：${bv.overall_score||'—'}/100</div>
             <div style="font-size:0.85rem;margin-top:4px">${bv.summary||''}</div>
@@ -422,51 +938,78 @@ function renderVerificationInline(bv, c) {
             ${bv.hallucinations.map(h => `<div style="padding:8px 12px;margin-bottom:6px;border-left:3px solid ${h.severity==='high'?'#E07A5F':'#F4A261'}">
                 <div style="font-size:0.85rem;font-weight:500">${h.claim||''}</div>
                 <div style="font-size:0.8rem;color:var(--text-secondary)">${h.issue||''}</div>
-            </div>`).join('')}` : '<div style="color:#52B788;font-size:0.85rem">✅ 未发现明显幻觉</div>'}
-        <div style="margin-top:12px;font-size:0.75rem;color:var(--text-muted)">（报告生成时自动复核）</div>`;
+            </div>`).join('')}` : '<div style="color:#52B788;font-size:0.85rem">✅ 未发现明显幻觉</div>'}`;
 }
 
-async function loadVerification(rid, c) {
-    c.innerHTML='<div style="text-align:center;padding:20px">\u23f3 \u65c1\u89c2\u8005\u6838\u5bf9...</div>';
-    try { const d=await apiPost(`/api/ai/reports/${rid}/bystander-verify`); if(d.error){c.innerHTML='\u26a0\ufe0f '+d.error;return;} const r=d.result||{}; const sc=(r.overall_score||0)>=80?'#52B788':(r.overall_score||0)>=60?'#F4A261':'#E07A5F'; c.innerHTML=`<div class="report-section-title">\ud83d\udd0d \u590d\u5408\u9a8c\u8bc1 \u00b7 ${d.verify_model}</div><div style="margin-bottom:16px;padding:12px;background:rgba(91,155,213,0.06);border-radius:8px"><div style="font-size:1.2rem;font-weight:600;color:${sc}">\u53ef\u4fe1\u5ea6\uff1a${r.overall_score||'\u2014'}/100</div><div style="font-size:0.85rem;margin-top:4px">${r.summary||''}</div></div>${(r.hallucinations||[]).length?r.hallucinations.map(h=>`<div style="padding:8px 12px;margin-bottom:6px;border-left:3px solid ${h.severity==='high'?'#E07A5F':'#F4A261'}"><div style="font-size:0.85rem;font-weight:500">${h.claim||''}</div><div style="font-size:0.8rem;color:var(--text-secondary)">${h.issue||''}</div></div>`).join(''):'<div style="color:#52B788;font-size:0.85rem">\u2705 \u672a\u53d1\u73b0\u5e7b\u89c9</div>'}`; } catch(e){c.innerHTML='\u26a0\ufe0f '+e.message;}
+async function rerunVerification(rid, c) {
+    c.innerHTML='<div style="text-align:center;padding:20px">⏳ 旁观者复核中...</div>';
+    try {
+        const d=await apiPost(`/api/ai/reports/${rid}/bystander-verify`);
+        if(d.error){c.innerHTML='⚠️ '+d.error;return;}
+        renderVerificationInline(d.result||{}, c, rid);
+    } catch(e){c.innerHTML='⚠️ '+e.message;}
 }
 
 function parseRiskDebate(rd, report) {
-    if (rd && typeof rd === 'object') { if(['aggressive','conservative','neutral','decision'].some(k=>rd[k]&&rd[k].trim())) return rd; }
+    // API已返回parsed dict，直接映射
+    if (rd && typeof rd === 'object') {
+        const agg = rd.aggressive || rd.current_aggressive_response || '';
+        const con = rd.conservative || rd.current_conservative_response || '';
+        const neu = rd.neutral || rd.current_neutral_response || '';
+        const dec = rd.decision || rd.judge_decision || '';
+        if (agg || con || neu || dec) return {aggressive:agg, conservative:con, neutral:neu, decision:dec};
+    }
+    // fallback: report层的risk_debate（可能是string）
     let raw = report.risk_debate;
-    if (typeof raw === 'string' && raw.trim()) { try { const p=JSON.parse(raw); if(typeof p==='object') return {aggressive:p.aggressive_history||p.aggressive||'',conservative:p.conservative_history||p.conservative||'',neutral:p.neutral_history||p.neutral||'',decision:p.judge_decision||p.decision||''}; } catch(e){} }
-    return {decision:report.final_decision||'\u6682\u65e0'};
+    if (typeof raw === 'string' && raw.trim()) { try { const p=JSON.parse(raw); if(typeof p==='object') return {aggressive:p.current_aggressive_response||p.aggressive_history||'',conservative:p.current_conservative_response||p.conservative_history||'',neutral:p.current_neutral_response||p.neutral_history||'',decision:p.judge_decision||p.decision||''}; } catch(e){} }
+    return {decision:report.final_decision||'暂无'};
 }
 
 // === 格式化 ===
 function formatReport(text) {
-    if (!text) return '<span class="text-muted">\u6682\u65e0\u6570\u636e</span>';
+    if (!text) return '<span class="text-muted">暂无数据</span>';
     if (typeof text === 'object') text = text.judge_decision||text.decision||text.content||text.report||JSON.stringify(text,null,2);
     text = String(text).replace(/\\\\n/g,'\n');
     try { const p=JSON.parse(text); if(typeof p==='object') text=p.judge_decision||p.decision||p.content||p.report||JSON.stringify(p,null,2); text=text.replace(/\\\\n/g,'\n'); } catch(e){}
-    return text.replace(/^### (.*$)/gm,'<h5>$1</h5>').replace(/^## (.*$)/gm,'<h4>$1</h4>').replace(/^# (.*$)/gm,'<h3>$1</h3>').replace(/^---+$/gm,'<hr>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\*(.*?)\*/g,'<em>$1</em>').replace(/`(.*?)`/g,'<code>$1</code>').replace(/^- (.*$)/gm,'\u2022 $1').replace(/\n/g,'<br>');
+    if (typeof marked !== 'undefined') {
+        marked.setOptions({ breaks: true, gfm: true });
+        return marked.parse(text);
+    }
+    return text.replace(/^### (.*$)/gm,'<h5>$1</h5>').replace(/^## (.*$)/gm,'<h4>$1</h4>').replace(/^# (.*$)/gm,'<h3>$1</h3>').replace(/^---+$/gm,'<hr>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\*(.*?)\*/g,'<em>$1</em>').replace(/`(.*?)`/g,'<code>$1</code>').replace(/^- (.*$)/gm,'• $1').replace(/\n/g,'<br>');
 }
 function formatElapsed(s) { if(!s) return '\u2014'; return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`; }
 function formatTime(ts) { if(!ts) return '\u2014'; const d=new Date(ts); return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${d.getMinutes().toString().padStart(2,'0')}`; }
 
 // === 历史报告 ===
 async function loadReports(code='') {
-    try { const d=await apiGet(code?`/api/ai/reports?code=${code}`:'/api/ai/reports'); if(!code&&d.reports) reportCodes=new Set(d.reports.map(r=>r.code)); const l=document.getElementById('reportsList'); if(!d.reports?.length){l.innerHTML='<div class="empty-row">\u6682\u65e0</div>';return;} l.innerHTML=d.reports.map(r=>`<div class="report-item"><div class="report-item-header" onclick="viewReport(${r.id})"><span class="report-signal signal-${(r.signal||'hold').toLowerCase()}">${r.signal||'\u2014'}</span><span class="report-code">${r.code}</span><span class="report-time">${formatTime(r.created_at)}</span></div><div class="report-item-meta" onclick="viewReport(${r.id})"><span>\u7f6e\u4fe1: ${r.confidence?(r.confidence*100).toFixed(0)+'%':'\u2014'}</span><span>\u8017\u65f6: ${formatElapsed(r.duration_seconds)}</span></div><div class="report-item-actions"><a href="/api/ai/report/${r.id}/pdf" class="btn btn-sm" onclick="event.stopPropagation()">\ud83d\udcc4</a></div></div>`).join(''); } catch(e){}
+    try { const d=await apiGet(code?`/api/ai/reports?code=${code}`:'/api/ai/reports'); if(!code&&d.reports) reportCodes=new Set(d.reports.map(r=>r.code)); const l=document.getElementById('reportsList'); if(!d.reports?.length){l.innerHTML='<div class="empty-row">暂无</div>';return;} const depthLabel={quick:'快速',standard:'标准',deep:'深度'}; const modeLabel={balanced:'均衡',deepseek:'DeepSeek',openai:'OpenAI',custom:'自定义'}; l.innerHTML=d.reports.map(r=>`<div class="report-item"><div class="report-item-header" onclick="viewReport(${r.id})"><span class="report-signal signal-${(r.signal||'hold').toLowerCase().replace(/_/g,'-')}">${SIG_LABEL[(r.signal||'HOLD').toUpperCase()]||r.signal||'—'}</span><span class="report-code">${r.name?r.name+' '+r.code:r.code}</span><span class="report-time">${formatTime(r.created_at)}</span></div><div class="report-item-meta" onclick="viewReport(${r.id})"><span>${depthLabel[r.depth]||r.depth||'标准'} · ${modeLabel[r.model_mode]||r.model_mode||'均衡'}</span><span>置信: ${r.confidence?(r.confidence*100).toFixed(0)+'%':'—'}</span><span>耗时: ${formatElapsed(r.duration_seconds)}</span></div><div class="report-item-actions"><a href="/api/ai/report/${r.id}/pdf" class="btn btn-sm" onclick="event.stopPropagation()">📄</a></div></div>`).join(''); } catch(e){}
 }
 function searchReports(e) { if(e.key==='Enter') loadReports(e.target.value.trim()); }
 
 // === 异动 ===
 async function triggerL1() {
-    try { const d=await apiPost('/api/ai/trigger'); if(d.anomalies?.length) renderAnomalies(d.anomalies); else document.getElementById('anomalyLog').innerHTML=`<div class="anomaly-empty">\u65e0\u5f02\u52a8\uff08${d.checked}\u53ea\uff09</div>`; } catch(e){}
+    try { const d=await apiPost('/api/ai/trigger'); if(d.anomalies?.length) renderAnomalies(d.anomalies); else document.getElementById('anomalyLog').innerHTML=`<div class="anomaly-empty">无异动（${d.checked}只）</div>`; } catch(e){}
+}
+async function pollAnomalies() {
+    try {
+        const d = await apiGet('/api/ai/anomalies');
+        if (d.anomalies?.length) renderAnomalies(d.anomalies);
+    } catch(e) {}
 }
 function renderAnomalies(a) {
-    document.getElementById('anomalyLog').innerHTML=a.map(x=>`<div class="anomaly-item"><div class="anomaly-header"><span class="anomaly-level">${x.level}</span><span class="anomaly-time">${x.time}</span><span class="anomaly-stock">${x.name} ${x.code}</span><span class="anomaly-change ${x.change_pct>=0?'price-up':'price-down'}">${x.change_pct>=0?'+':''}${x.change_pct.toFixed(2)}%</span></div><div class="anomaly-message">${x.message}</div></div>`).join('');
+    document.getElementById('anomalyLog').innerHTML=a.map(x=>{
+        const levelIcon = x.level==='critical'?'🔴':x.level==='warning'?'🟡':'ℹ️';
+        const name = x.name || x.code;
+        const changeHtml = x.change_pct ? `<span class="anomaly-change ${x.change_pct>=0?'price-up':'price-down'}">${x.change_pct>=0?'+':''}${(x.change_pct||0).toFixed(2)}%</span>` : '';
+        const timeStr = x.time ? new Date(x.time).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+        return `<div class="anomaly-item"><div class="anomaly-header"><span class="anomaly-level">${levelIcon} ${x.anomaly_type||x.level||''}</span><span class="anomaly-time">${timeStr}</span><span class="anomaly-stock">${name} ${x.code}</span>${changeHtml}</div><div class="anomaly-message">${x.message||''}</div></div>`;
+    }).join('');
 }
 
 // === gbrain + 条件单 ===
 async function saveToGbrain() {
     const r=window._currentResult; if(!r) return alert('\u6ca1\u6709\u7ed3\u679c');
-    const slug=`deep-analysis/${r.code||'x'}-${new Date().toISOString().slice(0,10)}`; const title=`${r.code} \u6df1\u5ea6\u5206\u6790`;
+    const slug=`deep-analysis/${r.code||'x'}-${new Date().toISOString().slice(0,10)}`; const title=`${r.name||''} ${r.code||''} 深度分析`;
     try { const resp=await fetch('/api/ai/gbrain/save',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`slug=${encodeURIComponent(slug)}&title=${encodeURIComponent(title)}&content=${encodeURIComponent(r.reasoning||'')}`}); const d=await resp.json(); alert(d.status==='ok'?'\u5df2\u5b58\u5165: '+slug:'\u5931\u8d25'); } catch(e){alert('\u5931\u8d25: '+e.message);}
 }
 async function generateCondOrder() {
@@ -487,4 +1030,129 @@ async function pollQueueStatus() {
 }
 async function restoreActiveTask() {
     try { const d=await apiGet('/api/ai/active-task'); if(d.task_id){currentTaskId=d.task_id;activeAnalysisCode=d.code; const dc=d.depth?{analysts:d.selected_analysts||DEPTH_CONFIG[d.depth]?.analysts||DEPTH_CONFIG.standard.analysts,debate_rounds:d.debate_rounds??1,risk_rounds:d.risk_rounds??1,label:DEPTH_CONFIG[d.depth]?.label||'\u6807\u51c6'}:DEPTH_CONFIG.standard; showProgressPanel(d.code,d.task_id,dc); if(d.stages){for(const[s,st] of Object.entries(d.stages)){const el=document.getElementById(`stage-${s}`);if(el&&st==='completed')el.className='avatar-card completed';}} startSSE(d.task_id); } } catch(e){}
+}
+
+// === 信号绩效 ===
+let _perfData = null;
+let _perfFilter = 'open';
+
+async function loadPerformanceTab(c) {
+    c.innerHTML = '<div class="perf-empty">加载中...</div>';
+    try {
+        const [stats, tracking] = await Promise.all([
+            apiGet('/api/signal/stats'),
+            apiGet('/api/signal/tracking')
+        ]);
+        _perfData = { stats, tracking };
+        renderPerformanceTab(c);
+    } catch (e) {
+        c.innerHTML = '<div class="perf-empty">暂无信号跟踪数据，AI分析报告生成后将自动记录</div>';
+    }
+}
+
+function renderPerformanceTab(c) {
+    if (!_perfData) return;
+    const s = _perfData.stats;
+    const all = _perfData.tracking || [];
+
+    // 统计卡片
+    const winRateClass = s.win_rate >= 0.6 ? 'perf-win-rate-good' : (s.win_rate < 0.5 ? 'perf-win-rate-bad' : '');
+    let html = `<div class="perf-stats">
+        <div class="perf-stat-card"><div class="stat-label">总跟踪</div><div class="stat-value">${s.total}</div></div>
+        <div class="perf-stat-card"><div class="stat-label">持仓中</div><div class="stat-value">${s.open}</div></div>
+        <div class="perf-stat-card"><div class="stat-label">胜率</div><div class="stat-value ${winRateClass}">${(s.win_rate*100).toFixed(1)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">平均收益</div><div class="stat-value ${s.avg_pnl_pct>=0?'price-up':'price-down'}">${s.avg_pnl_pct>=0?'+':''}${s.avg_pnl_pct.toFixed(2)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">超额收益</div><div class="stat-value ${s.avg_excess_return>=0?'price-up':'price-down'}">${s.avg_excess_return>=0?'+':''}${s.avg_excess_return.toFixed(2)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">平均持有</div><div class="stat-value">${Math.round(s.avg_hold_days)}天</div></div>
+    </div>`;
+
+    // 信号柱状图
+    html += '<div class="perf-section"><div class="perf-section-title">每档信号绩效</div>';
+    const bySignal = s.by_signal || {};
+    const maxAbs = Math.max(1, ...Object.values(bySignal).map(v => Math.abs(v.avg_pnl || 0)));
+    for (const sig of ['STRONG_BUY','BUY','OVERWEIGHT','HOLD','UNDERWEIGHT','SELL','STRONG_SELL']) {
+        const d = bySignal[sig] || {count:0, win_rate:0, avg_pnl:0};
+        const pct = (Math.abs(d.avg_pnl) / maxAbs) * 50;
+        const isUp = d.avg_pnl >= 0;
+        const barClass = isUp ? 'bar-up' : 'bar-down';
+        const valClass = isUp ? 'price-up' : 'price-down';
+        const label = SIG_LABEL[sig] || sig;
+        html += `<div class="signal-bar-row">
+            <span class="signal-bar-label">${label}</span>
+            <div class="signal-bar-track">
+                <div class="signal-bar-center"></div>
+                <div class="signal-bar-fill ${barClass}" style="width:${pct}%"></div>
+            </div>
+            <span class="signal-bar-value ${valClass}">${d.avg_pnl>=0?'+':''}${d.avg_pnl.toFixed(1)}% (${d.count}笔)</span>
+        </div>`;
+    }
+    html += '</div>';
+
+    // 月度收益（简化：纯文本，不足3月显示占位）
+    const monthly = s.monthly_returns || [];
+    if (monthly.length >= 2) {
+        html += '<div class="perf-section"><div class="perf-section-title">月度收益</div>';
+        for (const m of monthly) {
+            const cls = m.return_pct >= 0 ? 'price-up' : 'price-down';
+            html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.85rem;">
+                <span>${m.month}</span><span class="${cls}">${m.return_pct>=0?'+':''}${m.return_pct.toFixed(1)}% (${m.count}笔)</span></div>`;
+        }
+        html += '</div>';
+    }
+
+    // 筛选按钮
+    const openCount = all.filter(r => r.status === 'open').length;
+    const closedCount = all.filter(r => r.status === 'closed').length;
+    html += `<div class="perf-filter-btns">
+        <button class="perf-filter-btn ${_perfFilter==='all'?'active':''}" onclick="_perfFilter='all';renderPerformanceTab(document.getElementById('reportContent'))">全部(${all.length})</button>
+        <button class="perf-filter-btn ${_perfFilter==='open'?'active':''}" onclick="_perfFilter='open';renderPerformanceTab(document.getElementById('reportContent'))">持仓中(${openCount})</button>
+        <button class="perf-filter-btn ${_perfFilter==='closed'?'active':''}" onclick="_perfFilter='closed';renderPerformanceTab(document.getElementById('reportContent'))">已平仓(${closedCount})</button>
+    </div>`;
+
+    // 跟踪列表
+    const filtered = _perfFilter === 'all' ? all : all.filter(r => r.status === _perfFilter);
+    if (filtered.length === 0) {
+        html += '<div class="perf-empty">暂无数据</div>';
+    } else {
+        for (const r of filtered) {
+            const pnl = r.pnl_pct || ((r.current_price - r.entry_price) / r.entry_price * 100);
+            const pnlCls = pnl >= 0 ? 'price-up' : 'price-down';
+            const icon = pnl >= 0 ? '🟢' : '🔴';
+            const sigLabel = SIG_LABEL[r.signal] || r.signal;
+            const sigClass = `signal-${r.signal.toLowerCase().replace(/_/g,'-')}`;
+            const holdDays = r.hold_days || Math.floor((Date.now() - new Date(r.signal_date).getTime()) / 86400000);
+            const currentPrice = r.current_price || r.entry_price;
+
+            html += `<div class="perf-tracking-card">
+                <div class="perf-tracking-info">
+                    <div class="perf-tracking-name">${icon} ${r.name} ${r.code}
+                        <span class="perf-tracking-signal ${sigClass}">${sigLabel}</span>
+                    </div>
+                    <div class="perf-tracking-detail">
+                        入场 ¥${r.entry_price.toFixed(2)} → 现价 ¥${currentPrice.toFixed(2)}
+                        ${r.target_price ? ` | 目标 ¥${r.target_price.toFixed(2)}` : ''}
+                        | ${holdDays}天
+                        ${r.exit_reason ? ` | ${r.exit_reason === 'signal_change' ? '信号反转' : r.exit_reason === 'stop_loss' ? '止损' : r.exit_reason === 'target_hit' ? '目标到达' : r.exit_reason === 'max_hold' ? '最大持有' : r.exit_reason}` : ''}
+                    </div>
+                </div>
+                <div class="perf-tracking-pnl ${pnlCls}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</div>
+                ${r.status === 'open' ? `<button class="perf-btn-close" onclick="closeTracking(${r.id}, ${currentPrice})">平仓</button>` : ''}
+            </div>`;
+        }
+    }
+
+    c.innerHTML = html;
+}
+
+async function closeTracking(id, currentPrice) {
+    if (!confirm('确认平仓？')) return;
+    try {
+        await apiPost(`/api/signal/tracking/${id}/close`, { exit_price: currentPrice });
+        showToast('已平仓', 'success');
+        // 刷新
+        const c = document.getElementById('reportContent');
+        loadPerformanceTab(c);
+    } catch (e) {
+        showToast('平仓失败: ' + e.message, 'error');
+    }
 }

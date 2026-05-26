@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import socket
 from typing import Optional
 
 import aiohttp
@@ -39,12 +40,14 @@ _TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 
 async def get_session() -> aiohttp.ClientSession:
-    """获取或创建全局 aiohttp session（惰性初始化）。"""
+    """获取或创建全局 aiohttp session（惰性初始化，强制IPv4避免macOS IPv6问题）。"""
     global _session
     if _session is None or _session.closed:
+        connector = aiohttp.TCPConnector(family=socket.AF_INET)
         _session = aiohttp.ClientSession(
             timeout=_TIMEOUT,
             headers=HEADERS,
+            connector=connector,
         )
     return _session
 

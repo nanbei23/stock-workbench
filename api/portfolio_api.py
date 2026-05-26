@@ -988,3 +988,133 @@ async def get_pnl_day_detail(date: str):
     except Exception as e:
         logger.error("get_pnl_day_detail error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ══════════════════════════════════════════════════════════════
+# Trading Plans (合并 条件单 + 待持仓)
+# ══════════════════════════════════════════════════════════════
+
+class TradingPlanRequest(BaseModel):
+    code: str
+    name: str = ""
+    direction: str = "buy"           # buy / sell
+    plan_type: str = "watch"         # watch / near_target / conditional
+    target_price: Optional[float] = None
+    condition_type: str = "price_lte"  # price_lte / price_gte / change_pct_gte / change_pct_lte
+    plan_shares: int = 100
+    plan_total_cost: Optional[float] = None
+    reason: str = ""
+    status: str = "pending"
+    expires_at: Optional[str] = None
+
+
+@router.get("/trading-plans")
+async def get_trading_plans(status: Optional[str] = None, account_id: Optional[str] = Query(None)):
+    """获取交易计划列表"""
+    try:
+        db = await get_db()
+        try:
+            conditions = []
+            params = []
+            if status:
+                conditions.append("status = ?")
+                params.append(status)
+            if account_id:
+                conditions.append("account_id = ?")
+                params.append(account_id)
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+            cursor = await db.execute(f"SELECT * FROM trading_plans{where} ORDER BY created_at DESC", params)
+            rows = await cursor.fetchall()
+            plans = [dict(r) for r in rows]
+        finally:
+            await db.close()
+
+        # enrich with realtime price
+        if plans:
+            codes = list(set(p["code"] for p in plans))
+            quotes = await get_batch_quotes(codes)
+            for p in plans:
+                q = quotes.get(p["code"], {})
+                p["current_price"] = q.get("price", 0)
+                p["change_pct"] = q.get("change_pct", 0)
+                if p["current_price"] and p.get("target_price"):
+                    p["distance_pct"] = round(
+                        (p["current_price"] - p["target_price"]) / p["target_price"] * 100, 2
+                    )
+                else:
+                    p["distance_pct"] = None
+
+        return {"count": len(plans), "plans": plans}
+    except Exception as e:
+        logger.error("get_trading_plans error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trading-plans")
+async def create_trading_plan(req: TradingPlanRequest):
+    """创建交易计划"""
+    try:
+        db = await get_db()
+        try:
+            plan_total_cost = req.plan_total_cost
+            if plan_total_cost is None and req.target_price and req.plan_shares:
+                plan_total_cost = round(req.target_price * req.plan_shares, 2)
+            await db.execute(
+                "INSERT INTO trading_plans (code, name, direction, plan_type, target_price, condition_type, plan_shares, plan_total_cost, reason, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (req.code, req.name, req.direction, req.plan_type, req.target_price, req.condition_type, req.plan_shares, plan_total_cost, req.reason, req.status, req.expires_at)
+            )
+            await db.commit()
+            cursor = await db.execute("SELECT last_insert_rowid()")
+            row = await cursor.fetchone()
+            return {"status": "ok", "id": row[0]}
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.error("create_trading_plan error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/trading-plans/{pid}")
+async def update_trading_plan(pid: int, req: TradingPlanRequest):
+    """更新交易计划"""
+    try:
+        db = await get_db()
+        try:
+            plan_total_cost = req.plan_total_cost
+            if plan_total_cost is None and req.target_price and req.plan_shares:
+                plan_total_cost = round(req.target_price * req.plan_shares, 2)
+            cursor = await db.execute(
+                "UPDATE trading_plans SET code=?, name=?, direction=?, plan_type=?, target_price=?, condition_type=?, plan_shares=?, plan_total_cost=?, reason=?, status=?, expires_at=? WHERE id=?",
+                (req.code, req.name, req.direction, req.plan_type, req.target_price, req.condition_type, req.plan_shares, plan_total_cost, req.reason, req.status, req.expires_at, pid)
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="未找到交易计划")
+            return {"status": "ok", "id": pid}
+        finally:
+            await db.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("update_trading_plan error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/trading-plans/{pid}")
+async def delete_trading_plan(pid: int):
+    """删除交易计划"""
+    try:
+        db = await get_db()
+        try:
+            cursor = await db.execute("DELETE FROM trading_plans WHERE id=?", (pid,))
+            await db.commit()
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="未找到交易计划")
+            return {"status": "ok", "id": pid}
+        finally:
+            await db.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("delete_trading_plan error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))

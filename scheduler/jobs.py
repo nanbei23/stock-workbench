@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from scheduler.conditional_order_checker import check_conditional_orders
 from scheduler.anomaly_checker import check_anomalies
 from scheduler.report_runner import run_scheduled_report
+from scheduler.signal_tracker import update_prices
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,73 @@ async def conditional_order_job():
 
 
 async def anomaly_job():
-    """异动检测任务（带交易时间过滤）"""
+    """异动检测任务（带交易时间过滤 + 开关检查）"""
     if not _is_trading_hours():
         return
+    # 检查异动监控开关
+    try:
+        from api.settings_api import _conn, DEFAULTS
+        db = _conn()
+        row = db.execute("SELECT value FROM settings WHERE key='anomaly_monitor_enabled'").fetchone()
+        db.close()
+        enabled = (row[0] if row else DEFAULTS.get("anomaly_monitor_enabled", "true"))
+        if enabled != "true":
+            return
+    except Exception:
+        pass
     await check_anomalies()
+
+
+async def clear_anomaly_logs_job():
+    """每天23:59清除当天的异动日志"""
+    try:
+        import sqlite3
+        from config import DB_PATH
+        db = sqlite3.connect(str(DB_PATH))
+        today = datetime.now().strftime("%Y-%m-%d")
+        cursor = db.execute("DELETE FROM anomaly_logs WHERE date(created_at) = ?", (today,))
+        count = cursor.rowcount
+        db.commit()
+        db.close()
+        logger.info("🗑️ 已清除当天异动日志 %d 条", count)
+    except Exception as e:
+        logger.error("清除异动日志失败: %s", e)
+
+
+async def signal_tracking_job():
+    """每日15:30更新信号跟踪价格"""
+    try:
+        from data.helpers import tencent_quote_batch
+        from scheduler.signal_tracker import _get_db
+
+        db = _get_db()
+        rows = db.execute("SELECT DISTINCT code FROM signal_tracking WHERE status='open'").fetchall()
+        db.close()
+
+        if not rows:
+            logger.info("无持仓中信号，跳过更新")
+            return
+
+        codes = [r["code"] for r in rows]
+        logger.info("📊 更新信号跟踪价格: %s", codes)
+
+        # 批量获取行情
+        price_map = {}
+        for code in codes:
+            try:
+                quotes = await tencent_quote_batch([code])
+                if quotes and code in quotes:
+                    price_map[code] = quotes[code].get("price", 0)
+            except Exception as e:
+                logger.warning("获取 %s 行情失败: %s", code, e)
+
+        if price_map:
+            result = update_prices(price_map)
+            logger.info("✅ 信号跟踪更新完成: %s", result)
+        else:
+            logger.warning("未获取到任何行情数据")
+    except Exception as e:
+        logger.error("❌ 信号跟踪定时任务失败: %s", e)
 
 
 async def report_job(report_type: str):
@@ -123,6 +187,24 @@ def setup_scheduler():
         args=["review"],
         id="report_review",
         name="策略复盘",
+        replace_existing=True,
+    )
+
+    # ── 每天23:59清除当天异动日志 ──
+    scheduler.add_job(
+        clear_anomaly_logs_job,
+        trigger=CronTrigger(hour=23, minute=59),
+        id="clear_anomaly_logs",
+        name="清除当天异动",
+        replace_existing=True,
+    )
+
+    # ── 信号跟踪价格更新：每日15:30（收盘后30分钟） ──
+    scheduler.add_job(
+        signal_tracking_job,
+        trigger=CronTrigger(hour=15, minute=30, day_of_week='mon-fri'),
+        id="signal_tracking_update",
+        name="信号跟踪价格更新",
         replace_existing=True,
     )
 

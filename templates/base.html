@@ -10,10 +10,13 @@
     <link rel="stylesheet" href="/static/css/cyberpunk.css">
     <!-- 午夜主题 -->
     <link rel="stylesheet" href="/static/css/midnight.css">
+    <link rel="stylesheet" href="/static/css/sunny.css">
     <!-- Orbitron字体（赛博朋克主题用） -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <script src="/static/js/app.js"></script>
+    <!-- marked.js — markdown渲染 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     {% block head_extras %}{% endblock %}
     <style>
         /* ── 换肤按钮 ── */
@@ -55,15 +58,20 @@
                 <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}">📊 自选股</a>
                 <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}">💼 持仓</a>
                 <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}">🤖 AI分析台</a>
+                <a href="/performance" class="tab-btn {% if request.url.path == '/performance' %}active{% endif %}">📈 信号绩效</a>
                 <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}">⚙️ 设置</a>
             </nav>
-            <select id="accountSwitcher" style="margin-left:auto;padding:2px 8px;border-radius:4px;font-size:0.75rem;background:var(--color-surface);color:var(--color-text);border:1px solid var(--color-border);">
+            <select id="accountSwitcher" style="margin-left:auto;padding:4px 14px;border-radius:20px;font-size:0.75rem;font-weight:600;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);cursor:pointer;transition:all 0.2s;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22 fill=%22%23888%22><polygon points=%220,0 10,0 5,6%22/></svg>');background-repeat:no-repeat;background-position:right 8px center;padding-right:24px;">
               <option value="default">默认账户</option>
             </select>
-            <div class="notify-badge" id="notifyBadge" title="通知" style="display:none;">🔔 <span id="notifyCount">0</span></div>
+            <div class="bell-wrapper" id="bellWrapper">
+              <div class="notify-badge" id="bellBtn" onclick="toggleBellPanel()" title="异动监控">
+                🔔 <span id="bellBadge">0</span>
+              </div>
+            </div>
             <button class="theme-switcher" id="themeSwitcher" title="切换主题">
                 <span class="theme-icon" id="themeIcon">🎨</span>
-                <span class="theme-name" id="themeName">经典</span>
+                <span class="theme-name" id="themeName">赛博</span>
             </button>
         </header>
         <main class="main-content">
@@ -84,6 +92,10 @@
                 <span class="tab-icon">🤖</span>
                 <span>AI分析台</span>
             </a>
+            <a href="/performance" class="mobile-tab-item {% if request.url.path == '/performance' %}active{% endif %}">
+                <span class="tab-icon">📈</span>
+                <span>信号绩效</span>
+            </a>
             <a href="/settings" class="mobile-tab-item {% if request.url.path == '/settings' %}active{% endif %}">
                 <span class="tab-icon">⚙️</span>
                 <span>设置</span>
@@ -95,13 +107,15 @@
     <script>
     (function() {
         const THEMES = [
-            { id: 'classic',   name: '经典',   icon: '🎨' },
             { id: 'cyberpunk', name: '赛博',   icon: '🌆' },
             { id: 'midnight',  name: '午夜',   icon: '🌙' },
+            { id: 'sunny',     name: '阳光',   icon: '☀️' },
         ];
 
         function getTheme() {
-            return localStorage.getItem('theme') || 'classic';
+            const saved = localStorage.getItem('theme');
+            if (saved === 'classic') { localStorage.removeItem('theme'); return 'cyberpunk'; }
+            return saved || 'cyberpunk';
         }
 
         function setTheme(id) {
@@ -110,11 +124,7 @@
         }
 
         function applyTheme(id) {
-            if (id === 'classic') {
-                document.body.removeAttribute('data-theme');
-            } else {
-                document.body.setAttribute('data-theme', id);
-            }
+            document.body.setAttribute('data-theme', id);
             // 更新按钮
             const t = THEMES.find(t => t.id === id) || THEMES[0];
             const iconEl = document.getElementById('themeIcon');
@@ -141,51 +151,148 @@
     })();
     </script>
 
-    <!-- 全局通知轮询 -->
+    <!-- 全局异动浮窗 -->
+    <div class="anomaly-modal-overlay" id="anomalyModal" style="display:none;" onclick="if(event.target===this)closeAnomalyModal()">
+      <div class="anomaly-modal">
+        <div class="anomaly-modal-header">
+          <h3>🔔 异动监控</h3>
+          <div class="anomaly-modal-actions">
+            <button class="btn btn-sm btn-primary" onclick="triggerAllAnomalies()">全部检测</button>
+            <button class="btn btn-sm btn-ghost" onclick="closeAnomalyModal()">✕</button>
+          </div>
+        </div>
+        <div id="anomalyModalList" class="anomaly-modal-list">
+          <div class="bell-empty">暂无异动</div>
+        </div>
+      </div>
+    </div>
+
     <script>
     (function() {
-        let lastNotifyCount = 0;
-        let notifiedTags = new Set();
-        let notifyEnabled = false;
+        // ── 浮窗开关 ──
+        window.toggleBellPanel = function() {
+            const modal = document.getElementById('anomalyModal');
+            if (!modal) return;
+            if (modal.style.display === 'none') {
+                modal.style.display = 'flex';
+                loadAnomalyModal();
+            } else {
+                modal.style.display = 'none';
+            }
+        };
+        window.closeAnomalyModal = function() {
+            const modal = document.getElementById('anomalyModal');
+            if (modal) modal.style.display = 'none';
+        };
 
+        // ── 加载异动数据 ──
+        async function loadAnomalyModal() {
+            const list = document.getElementById('anomalyModalList');
+            if (!list) return;
+            list.innerHTML = '<div class="bell-empty">加载中...</div>';
+            try {
+                const resp = await fetch('/api/ai/anomalies?limit=100');
+                const data = await resp.json();
+                const anomalies = data.anomalies || [];
+                if (!anomalies.length) {
+                    list.innerHTML = '<div class="bell-empty">暂无异动 ✅</div>';
+                    return;
+                }
+                const typeLabel = {
+                    'volume_spike': '成交量异动',
+                    'price_surge': '价格急涨',
+                    'price_drop': '价格急跌',
+                    'large_buy': '大单买入',
+                    'large_sell': '大单卖出',
+                    'limit_up': '涨停',
+                    'limit_down': '跌停',
+                    'turnover_spike': '换手率异动',
+                    'gap_up': '跳空高开',
+                    'gap_down': '跳空低开'
+                };
+                // 按股票分组
+                const grouped = {};
+                anomalies.forEach(a => {
+                    const key = a.code || 'unknown';
+                    if (!grouped[key]) grouped[key] = { name: a.name || a.code, code: a.code, items: [] };
+                    grouped[key].items.push(a);
+                });
+                let html = '';
+                Object.values(grouped).forEach(g => {
+                    html += `<div class="anomaly-group">
+                      <div class="anomaly-group-title" style="cursor:pointer;" onclick="closeAnomalyModal();window.location.href='/?code=${g.code}'">${g.name} <span style="color:var(--text-muted);font-size:0.75rem;">${g.code}</span> <span class="anomaly-group-count">${g.items.length}</span></div>`;
+                    g.items.forEach(a => {
+                        const levelIcon = a.level === 'critical' ? '🔴' : a.level === 'warning' ? '🟡' : '🔵';
+                        const changeHtml = a.change_pct ? `<span class="${a.change_pct >= 0 ? 'up' : 'down'}" style="font-family:var(--font-mono);font-weight:600;">${a.change_pct >= 0 ? '+' : ''}${(a.change_pct||0).toFixed(2)}%</span>` : '';
+                        const timeStr = a.time ? (a.time.length > 5 ? a.time.slice(11, 19) || a.time : a.time) : '';
+                        const tLabel = typeLabel[a.anomaly_type] || a.anomaly_type || '';
+                        html += `<div class="anomaly-modal-item" style="cursor:pointer;" onclick="closeAnomalyModal();window.location.href='/?code=${g.code}'">
+                          <div class="anomaly-modal-item-row">
+                            <span>${levelIcon} ${tLabel}</span>
+                            <span class="anomaly-modal-item-time">${timeStr}</span>
+                          </div>
+                          <div class="anomaly-modal-item-msg">${a.message || ''} ${changeHtml}</div>
+                          ${a.l1_advice ? `<div class="anomaly-modal-item-advice">💡 ${a.l1_advice}</div>` : ''}
+                        </div>`;
+                    });
+                    html += '</div>';
+                });
+                list.innerHTML = html;
+            } catch(e) {
+                list.innerHTML = '<div class="bell-empty">加载失败</div>';
+            }
+        }
+
+        // ── 全部检测 ──
+        window.triggerAllAnomalies = async function() {
+            const list = document.getElementById('anomalyModalList');
+            if (list) list.innerHTML = '<div class="bell-empty">检测中...</div>';
+            try {
+                await fetch('/api/ai/trigger', { method: 'POST' });
+                await loadAnomalyModal();
+            } catch(err) {
+                if (list) list.innerHTML = '<div class="bell-empty">检测失败</div>';
+            }
+        };
+
+        // ── 浏览器通知 ──
+        let notifyEnabled = false;
+        let notifiedTags = new Set();
         if ('Notification' in window && Notification.permission === 'granted') {
             notifyEnabled = localStorage.getItem('browser_notify_enabled') === 'true';
         }
 
-        async function pollNotifications() {
+        async function pollAnomalies() {
             try {
-                const resp = await fetch('/api/notifications');
+                const resp = await fetch('/api/ai/anomalies?limit=100');
                 if (!resp.ok) return;
                 const data = await resp.json();
-
-                const badge = document.getElementById('notifyBadge');
-                const countEl = document.getElementById('notifyCount');
-                if (data.count > 0) {
+                const anomalies = data.anomalies || [];
+                const badge = document.getElementById('bellBadge');
+                if (anomalies.length > 0) {
+                    badge.textContent = anomalies.length;
                     badge.style.display = 'flex';
-                    countEl.textContent = data.count;
+                    if (notifyEnabled) {
+                        for (const a of anomalies) {
+                            const tag = 'anomaly-' + a.code + '-' + (a.anomaly_type || '');
+                            if (!notifiedTags.has(tag)) {
+                                notifiedTags.add(tag);
+                                new Notification('⚠️ ' + (a.name || a.code) + ' 异动', {
+                                    body: a.anomaly_type + ' ' + (a.message || ''),
+                                    tag: tag,
+                                });
+                            }
+                        }
+                    }
                 } else {
                     badge.style.display = 'none';
                     notifiedTags.clear();
                 }
-
-                if (notifyEnabled && data.notifications.length > 0) {
-                    for (const n of data.notifications) {
-                        const tag = 'notify-' + n.type + '-' + (n.data && n.data.code || n.data && n.data.id || '');
-                        if (!notifiedTags.has(tag)) {
-                            notifiedTags.add(tag);
-                            new Notification('🐂 ' + n.title, {
-                                body: n.body,
-                                tag: tag,
-                            });
-                        }
-                    }
-                }
-                lastNotifyCount = data.count;
-            } catch (e) {}
+            } catch(e) {}
         }
 
-        setInterval(pollNotifications, 30000);
-        setTimeout(pollNotifications, 2000);
+        setInterval(pollAnomalies, 30000);
+        setTimeout(pollAnomalies, 3000);
 
         window.addEventListener('storage', function(e) {
             if (e.key === 'browser_notify_enabled') {

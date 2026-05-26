@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}信号绩效 — 炒股小牛马{% endblock %}
+
+{% block content %}
+<div class="perf-page">
+    <div class="perf-header">
+        <h2>📈 信号绩效</h2>
+        <p class="perf-subtitle">AI信号前向验证 — 真实信号、真实价格、真实持有期</p>
+    </div>
+
+    <div id="perfContent">
+        <div class="perf-empty">加载中...</div>
+    </div>
+</div>
+
+<style>
+.perf-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+.perf-header {
+    margin-bottom: 24px;
+}
+.perf-header h2 {
+    margin: 0 0 4px 0;
+    font-size: 1.5rem;
+    color: var(--text-primary);
+}
+.perf-subtitle {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+</style>
+
+<script>
+// 信号标签映射（复用ai.js中的SIG_LABEL）
+const SIG_LABEL = {
+    'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
+    'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出'
+};
+
+let _perfData = null;
+let _perfFilter = 'open';
+
+async function apiGet(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+}
+
+async function apiPost(url, data = {}) {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+}
+
+async function loadPerformance() {
+    const c = document.getElementById('perfContent');
+    c.innerHTML = '<div class="perf-empty">加载中...</div>';
+    try {
+        const [stats, tracking] = await Promise.all([
+            apiGet('/api/signal/stats'),
+            apiGet('/api/signal/tracking')
+        ]);
+        _perfData = { stats, tracking };
+        renderPerformance(c);
+    } catch (e) {
+        c.innerHTML = '<div class="perf-empty">暂无信号跟踪数据，AI分析报告生成后将自动记录</div>';
+    }
+}
+
+function renderPerformance(c) {
+    if (!_perfData) return;
+    const s = _perfData.stats;
+    const all = _perfData.tracking || [];
+
+    // 统计卡片
+    const winRateClass = s.win_rate >= 0.6 ? 'perf-win-rate-good' : (s.win_rate < 0.5 ? 'perf-win-rate-bad' : '');
+    let html = `<div class="perf-stats">
+        <div class="perf-stat-card"><div class="stat-label">总跟踪</div><div class="stat-value">${s.total}</div></div>
+        <div class="perf-stat-card"><div class="stat-label">持仓中</div><div class="stat-value">${s.open}</div></div>
+        <div class="perf-stat-card"><div class="stat-label">胜率</div><div class="stat-value ${winRateClass}">${(s.win_rate*100).toFixed(1)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">平均收益</div><div class="stat-value ${s.avg_pnl_pct>=0?'price-up':'price-down'}">${s.avg_pnl_pct>=0?'+':''}${s.avg_pnl_pct.toFixed(2)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">超额收益</div><div class="stat-value ${s.avg_excess_return>=0?'price-up':'price-down'}">${s.avg_excess_return>=0?'+':''}${s.avg_excess_return.toFixed(2)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">平均持有</div><div class="stat-value">${Math.round(s.avg_hold_days)}天</div></div>
+    </div>`;
+
+    // 信号柱状图
+    html += '<div class="perf-section"><div class="perf-section-title">每档信号绩效</div>';
+    const bySignal = s.by_signal || {};
+    const maxAbs = Math.max(1, ...Object.values(bySignal).map(v => Math.abs(v.avg_pnl || 0)));
+    for (const sig of ['STRONG_BUY','BUY','OVERWEIGHT','HOLD','UNDERWEIGHT','SELL','STRONG_SELL']) {
+        const d = bySignal[sig] || {count:0, win_rate:0, avg_pnl:0};
+        const pct = (Math.abs(d.avg_pnl) / maxAbs) * 50;
+        const isUp = d.avg_pnl >= 0;
+        const barClass = isUp ? 'bar-up' : 'bar-down';
+        const valClass = isUp ? 'price-up' : 'price-down';
+        const label = SIG_LABEL[sig] || sig;
+        html += `<div class="signal-bar-row">
+            <span class="signal-bar-label">${label}</span>
+            <div class="signal-bar-track">
+                <div class="signal-bar-center"></div>
+                <div class="signal-bar-fill ${barClass}" style="width:${pct}%"></div>
+            </div>
+            <span class="signal-bar-value ${valClass}">${d.avg_pnl>=0?'+':''}${d.avg_pnl.toFixed(1)}% (${d.count}笔)</span>
+        </div>`;
+    }
+    html += '</div>';
+
+    // 月度收益
+    const monthly = s.monthly_returns || [];
+    if (monthly.length >= 2) {
+        html += '<div class="perf-section"><div class="perf-section-title">月度收益</div>';
+        for (const m of monthly) {
+            const cls = m.return_pct >= 0 ? 'price-up' : 'price-down';
+            html += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.85rem;">
+                <span>${m.month}</span><span class="${cls}">${m.return_pct>=0?'+':''}${m.return_pct.toFixed(1)}% (${m.count}笔)</span></div>`;
+        }
+        html += '</div>';
+    }
+
+    // 筛选按钮
+    const openCount = all.filter(r => r.status === 'open').length;
+    const closedCount = all.filter(r => r.status === 'closed').length;
+    html += `<div class="perf-filter-btns">
+        <button class="perf-filter-btn ${_perfFilter==='all'?'active':''}" onclick="_perfFilter='all';renderPerformance(document.getElementById('perfContent'))">全部(${all.length})</button>
+        <button class="perf-filter-btn ${_perfFilter==='open'?'active':''}" onclick="_perfFilter='open';renderPerformance(document.getElementById('perfContent'))">持仓中(${openCount})</button>
+        <button class="perf-filter-btn ${_perfFilter==='closed'?'active':''}" onclick="_perfFilter='closed';renderPerformance(document.getElementById('perfContent'))">已平仓(${closedCount})</button>
+    </div>`;
+
+    // 跟踪列表
+    const filtered = _perfFilter === 'all' ? all : all.filter(r => r.status === _perfFilter);
+    if (filtered.length === 0) {
+        html += '<div class="perf-empty">暂无数据</div>';
+    } else {
+        for (const r of filtered) {
+            const pnl = r.pnl_pct || ((r.current_price - r.entry_price) / r.entry_price * 100);
+            const pnlCls = pnl >= 0 ? 'price-up' : 'price-down';
+            const icon = pnl >= 0 ? '🟢' : '🔴';
+            const sigLabel = SIG_LABEL[r.signal] || r.signal;
+            const sigClass = `signal-${r.signal.toLowerCase().replace(/_/g,'-')}`;
+            const holdDays = r.hold_days || Math.floor((Date.now() - new Date(r.signal_date).getTime()) / 86400000);
+            const currentPrice = r.current_price || r.entry_price;
+
+            html += `<div class="perf-tracking-card">
+                <div class="perf-tracking-info">
+                    <div class="perf-tracking-name">${icon} ${r.name} ${r.code}
+                        <span class="perf-tracking-signal ${sigClass}">${sigLabel}</span>
+                    </div>
+                    <div class="perf-tracking-detail">
+                        入场 ¥${r.entry_price.toFixed(2)} → 现价 ¥${currentPrice.toFixed(2)}
+                        ${r.target_price ? ` | 目标 ¥${r.target_price.toFixed(2)}` : ''}
+                        | ${holdDays}天
+                        ${r.exit_reason ? ` | ${r.exit_reason === 'signal_change' ? '信号反转' : r.exit_reason === 'stop_loss' ? '止损' : r.exit_reason === 'target_hit' ? '目标到达' : r.exit_reason === 'max_hold' ? '最大持有' : r.exit_reason}` : ''}
+                    </div>
+                </div>
+                <div class="perf-tracking-pnl ${pnlCls}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</div>
+                ${r.status === 'open' ? `<button class="perf-btn-close" onclick="closeTracking(${r.id}, ${currentPrice})">平仓</button>` : ''}
+            </div>`;
+        }
+    }
+
+    c.innerHTML = html;
+}
+
+async function closeTracking(id, currentPrice) {
+    if (!confirm('确认平仓？')) return;
+    try {
+        await apiPost(`/api/signal/tracking/${id}/close`, { exit_price: currentPrice });
+        loadPerformance();
+    } catch (e) {
+        alert('平仓失败: ' + e.message);
+    }
+}
+
+// 页面加载时自动执行
+document.addEventListener('DOMContentLoaded', loadPerformance);
+</script>
+{% endblock %}

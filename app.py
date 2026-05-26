@@ -68,6 +68,7 @@ from api.settings_api import router as settings_router
 from api.layer_api import router as layer_router
 from api.strategy_api import router as strategy_router
 from api.pdf_export import router as pdf_router
+from api.signal_api import router as signal_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -77,6 +78,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(layer_router, prefix="/api")
 app.include_router(strategy_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
+app.include_router(signal_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")
@@ -110,6 +112,12 @@ async def websocket_quotes(ws: WebSocket):
         logger.info("WebSocket client disconnected")
     except Exception as e:
         logger.warning("WebSocket error: %s", e)
+
+
+@app.get("/performance", response_class=HTMLResponse)
+async def performance_page(request: Request):
+    """信号绩效独立页面"""
+    return templates.TemplateResponse(request=request, name="performance.html")
 
 
 if __name__ == "__main__":

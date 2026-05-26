@@ -38,10 +38,12 @@ _init_settings_table()
 # ── 默认设置 ──
 DEFAULTS = {
     # 行情监控
+    "auto_refresh_enabled": "false",
     "refresh_interval": "30",
     "change_threshold": "5",
     "volume_threshold": "3",
     "northbound_threshold": "5",
+    "anomaly_monitor_enabled": "true",
     # AI引擎
     "llm_provider": "deepseek",
     "deep_think_model": "deepseek-reasoner",
@@ -70,6 +72,8 @@ DEFAULTS = {
     "commission_min": "5",
     "stamp_tax_rate": "0.0005",
     "transfer_fee_rate": "0.00001",
+    # 持仓止损
+    "stop_loss_pct": "8",
 }
 
 
@@ -457,6 +461,48 @@ async def set_model_mode(data: SettingUpdate):
     conn.commit()
     conn.close()
     return {"status": "ok", "key": "model_mode", "value": data.value}
+
+
+# ── 获取远程模型列表（兼容 OpenAI /v1/models 协议）──
+
+class FetchModelsReq(BaseModel):
+    endpoint: str
+    api_key: str = ""
+
+@router.post("/settings/fetch-models")
+async def fetch_models(req: FetchModelsReq):
+    """从自定义API端点获取模型列表（兼容 OpenAI /v1/models 协议）"""
+    endpoint = req.endpoint.rstrip("/")
+    # 自动拼接 /v1/models（处理端点已含 /v1 的情况）
+    base = endpoint.rstrip("/")
+    if base.endswith("/v1"):
+        url = f"{base}/models"
+    elif base.endswith("/models"):
+        url = base
+    else:
+        url = f"{base}/v1/models"
+    headers = {}
+    if req.api_key:
+        headers["Authorization"] = f"Bearer {req.api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        # 解析 OpenAI 格式 {"data": [{"id": "model-name", ...}, ...]}
+        models = []
+        if isinstance(data, dict) and "data" in data:
+            models = [m["id"] for m in data["data"] if isinstance(m, dict) and "id" in m]
+        elif isinstance(data, list):
+            models = [m if isinstance(m, str) else m.get("id", "") for m in data]
+            models = [m for m in models if m]
+        return {"status": "ok", "models": sorted(models)}
+    except httpx.ConnectError:
+        raise HTTPException(400, detail="无法连接到API端点，请检查地址是否正确")
+    except httpx.TimeoutException:
+        raise HTTPException(408, detail="连接超时")
+    except Exception as e:
+        raise HTTPException(500, detail=f"获取模型失败: {str(e)}")
 
 
 # ═══════════════════════════════════════════════

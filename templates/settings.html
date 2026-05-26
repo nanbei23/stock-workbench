@@ -381,8 +381,18 @@
       <div class="setting-group-title">行情刷新</div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">自动刷新间隔</div>
-          <div class="setting-hint">自选股页面的行情数据刷新频率</div>
+          <div class="setting-label">自动刷新行情</div>
+          <div class="setting-hint">自选股页面加载后自动开始定时刷新行情</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="set-auto_refresh_enabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">刷新间隔</div>
+          <div class="setting-hint">自动刷新的时间间隔</div>
         </div>
         <div class="setting-control">
           <select class="setting-select" id="set-refresh_interval">
@@ -393,6 +403,20 @@
             <option value="120">2分钟</option>
           </select>
         </div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">异动监控</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">自动异动监控</div>
+          <div class="setting-hint">在工作日的看盘时间自动监控自选股异动</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="set-anomaly_monitor_enabled">
+          <span class="toggle-slider"></span>
+        </label>
       </div>
     </div>
 
@@ -513,10 +537,12 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">自定义API端点</div>
-          <div class="setting-hint">留空使用官方API，支持代理/私有部署</div>
+          <div class="setting-hint">留空使用官方API，支持代理/私有部署（如 OneAPI / LiteLLM / OpenRouter）</div>
         </div>
-        <div class="setting-control">
+        <div class="setting-control" style="display:flex;gap:8px;align-items:center;">
           <input type="text" class="setting-input" id="set-custom_endpoint" placeholder="https://api.deepseek.com" style="width: 220px;">
+          <button class="btn-secondary" onclick="fetchRemoteModels()" id="fetchModelsBtn">🔍 获取模型</button>
+          <span id="fetchModelsResult" class="test-result" style="font-size:12px;"></span>
         </div>
       </div>
       <div class="setting-row">
@@ -594,19 +620,21 @@
           <div class="setting-label">核对模型</div>
           <div class="setting-hint">推荐与分析模型不同的模型</div>
         </div>
-        <div class="setting-control">
-          <select class="setting-select" id="set-verification_model">
+        <div class="setting-control" style="display:flex;gap:8px;align-items:center;">
+          <select class="setting-select" id="set-verification_model" style="flex:1;" onchange="updateVerEndpointPlaceholder()">
             <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
             <option value="deepseek-chat">DeepSeek Chat</option>
             <option value="deepseek-reasoner">DeepSeek Reasoner</option>
             <option value="custom">自定义模型</option>
           </select>
+          <button class="btn-secondary" onclick="fetchVerificationModels()" id="fetchVerModelsBtn">🔍 获取模型</button>
+          <span id="fetchVerModelsResult" class="test-result" style="font-size:12px;"></span>
         </div>
       </div>
       <div class="setting-row">
         <div>
           <div class="setting-label">核对API端点</div>
-          <div class="setting-hint">留空使用MiMo默认端点</div>
+          <div class="setting-hint">留空使用MiMo默认端点（如 OneAPI / LiteLLM / OpenRouter）</div>
         </div>
         <div class="setting-control">
           <input type="text" class="setting-input" id="set-verification_endpoint" placeholder="https://token-plan-cn.xiaomimimo.com/v1" style="width: 220px;">
@@ -620,7 +648,7 @@
         <div class="setting-control">
           <div style="display:flex;align-items:center;gap:6px">
             <input type="password" class="setting-input" id="set-verification_api_key" placeholder="sk-...">
-            <button type="button" class="btn btn-sm pwd-toggle" id="btnToggleApiKey" onclick="toggleApiKey(this)" title="显示/隐藏">👁</button>
+            <button type="button" class="pwd-toggle" id="btnToggleApiKey" onclick="toggleApiKey(this)" title="显示/隐藏">👁</button>
           </div>
         </div>
       </div>

@@ -118,7 +118,12 @@ CREATE TABLE IF NOT EXISTS analysis_reports (
     trader_plan TEXT,
     raw_state TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    duration_seconds REAL
+    duration_seconds REAL,
+    market_snapshot TEXT,
+    fact_check TEXT,
+    bystander_verify TEXT,
+    depth TEXT DEFAULT 'standard',
+    model_mode TEXT DEFAULT 'balanced'
 );
 
 CREATE TABLE IF NOT EXISTS anomaly_logs (
@@ -171,6 +176,24 @@ CREATE TABLE IF NOT EXISTS pending_positions (
     account_id TEXT DEFAULT 'default'
 );
 
+CREATE TABLE IF NOT EXISTS trading_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    name TEXT,
+    direction TEXT NOT NULL DEFAULT 'buy',  -- buy / sell
+    plan_type TEXT NOT NULL DEFAULT 'watch', -- watch / near_target / conditional
+    target_price REAL,
+    condition_type TEXT DEFAULT 'price_lte', -- price_lte / price_gte / change_pct_gte / change_pct_lte
+    plan_shares INTEGER DEFAULT 100,
+    plan_total_cost REAL,
+    status TEXT DEFAULT 'pending',           -- pending / triggered / filled / cancelled
+    reason TEXT,
+    triggered_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    account_id TEXT DEFAULT 'default'
+);
+
 CREATE TABLE IF NOT EXISTS buy_points (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
@@ -192,6 +215,46 @@ CREATE TABLE IF NOT EXISTS news_cache (
     published_at TEXT,
     cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS analysis_progress (
+    task_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    stage_id TEXT NOT NULL,
+    report_text TEXT,
+    completed_at TEXT,
+    PRIMARY KEY (task_id, stage_id)
+);
+
+CREATE TABLE IF NOT EXISTS signal_tracking (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    signal TEXT NOT NULL,
+    signal_date TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    target_price REAL,
+    stop_loss_price REAL,
+    current_price REAL,
+    highest_price REAL,
+    lowest_price REAL,
+    exit_price REAL,
+    exit_date TEXT,
+    exit_reason TEXT,
+    pnl_pct REAL,
+    hold_days INTEGER,
+    benchmark_return REAL,
+    excess_return REAL,
+    status TEXT DEFAULT 'open',
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_tracking_status ON signal_tracking(status);
+CREATE INDEX IF NOT EXISTS idx_tracking_code ON signal_tracking(code);
+CREATE INDEX IF NOT EXISTS idx_tracking_signal ON signal_tracking(signal);
+CREATE INDEX IF NOT EXISTS idx_tracking_date ON signal_tracking(signal_date);
 """
 
 async def init_db():

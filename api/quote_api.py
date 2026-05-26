@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, HTTPException
 from data.quote import get_realtime_quote, get_batch_quotes
 from data.kline import get_kline
 from data.helpers import tencent_quote_batch, get_session, _safe_float
+from data.market import get_market_sentiment
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["行情"])
@@ -136,4 +137,15 @@ async def get_indices():
         return result
     except Exception as e:
         logger.error("get_indices error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/market/sentiment")
+async def get_market_sentiment_api():
+    """市场情绪（涨跌家数 + 北向资金）"""
+    try:
+        result = await get_market_sentiment()
+        return result
+    except Exception as e:
+        logger.error("get_market_sentiment error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

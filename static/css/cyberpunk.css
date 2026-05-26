@@ -453,9 +453,6 @@
   color: var(--text-muted);
 }
 
-[data-theme="cyberpunk"] .pnl-value {
-  color: var(--text-primary);
-}
 
 /* ── 盈亏日历 ── */
 [data-theme="cyberpunk"] .calendar-header button {
@@ -525,6 +522,33 @@
 
 [data-theme="cyberpunk"] .btn-danger:hover {
   box-shadow: 0 4px 16px rgba(255, 77, 106, 0.30);
+}
+
+[data-theme="cyberpunk"] .btn-secondary {
+  border-color: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+}
+[data-theme="cyberpunk"] .btn-secondary:hover {
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .btn-save {
+  background: linear-gradient(135deg, #4EA8DE, #3B90C4);
+}
+[data-theme="cyberpunk"] .btn-save:hover { box-shadow: 0 2px 12px rgba(78,168,222,0.30); }
+
+[data-theme="cyberpunk"] .btn-test {
+  border-color: rgba(255,255,255,0.08);
+}
+[data-theme="cyberpunk"] .btn-test:hover {
+  border-color: rgba(78,168,222,0.30);
+  color: #4EA8DE;
+}
+
+[data-theme="cyberpunk"] .pwd-toggle:hover,
+[data-theme="cyberpunk"] .btn-icon:hover {
+  background: rgba(255,255,255,0.05);
 }
 
 /* ── 表单控件 ── */

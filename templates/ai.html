@@ -32,7 +32,7 @@
     <main class="ai-center" id="aiCenter">
         <!-- 响应式切换按钮 -->
         <button class="ai-toggle-left" id="toggleLeftBtn" onclick="toggleLeftPanel()" title="显示自选股">☰</button>
-        <button class="ai-toggle-right" id="toggleRightBtn" onclick="toggleRightPanel()" title="报告与异动">📋</button>
+        <button class="ai-toggle-right" id="toggleRightBtn" onclick="toggleRightPanel()" title="历史报告">📋</button>
 
         <!-- ─── 顶部固定区：指数 + 控制 ─── -->
         <div class="ai-center-top" id="aiCenterTop">
@@ -93,10 +93,15 @@
                     <button id="btnCancelAnalysis" class="btn btn-sm" style="color: #E07A5F; border: 1px solid #E07A5F;" onclick="cancelAnalysis()">✕ 取消分析</button>
                     <span id="queuePosition" class="text-muted" style="margin-left: 10px; font-size: 0.85em;"></span>
                 </div>
+                <div id="resumeContainer" style="margin-top: 8px; display:none;">
+                    <span id="resumeError" style="color: #E07A5F; font-size: 0.85em; margin-right: 10px;"></span>
+                    <button class="btn btn-sm btn-primary" onclick="resumeAnalysis()">🔄 继续分析</button>
+                </div>
             </div>
 
             <!-- 报告详情态（点击报告后替换进度） -->
             <div class="center-report" id="centerReport" style="display:none">
+                <div id="reportIndexBar" class="report-index-bar" style="display:none"></div>
                 <div class="report-header">
                     <div class="report-header-left">
                         <span id="reportStockName" class="report-stock-name"></span>
@@ -114,8 +119,12 @@
                 <div class="report-workspace">
                     <div class="report-nav" id="reportNav">
                         <div class="nav-group">
+                            <div class="nav-group-title">总览</div>
+                            <button class="nav-item active" data-target="overview" onclick="switchReportTab(this, 'overview')">📋 总览</button>
+                        </div>
+                        <div class="nav-group">
                             <div class="nav-group-title">分析师</div>
-                            <button class="nav-item active" data-target="market" onclick="switchReportTab(this, 'market')">📊 技术</button>
+                            <button class="nav-item" data-target="market" onclick="switchReportTab(this, 'market')">📊 技术</button>
                             <button class="nav-item" data-target="social" onclick="switchReportTab(this, 'social')">💬 情绪</button>
                             <button class="nav-item" data-target="news" onclick="switchReportTab(this, 'news')">📰 新闻</button>
                             <button class="nav-item" data-target="fundamentals" onclick="switchReportTab(this, 'fundamentals')">📋 基本面</button>
@@ -135,6 +144,10 @@
                             <button class="nav-item" data-target="verify" onclick="switchReportTab(this, 'verify')">报告复核</button>
                         </div>
                         <div class="nav-group">
+                            <div class="nav-group-title">绩效</div>
+                            <button class="nav-item" data-target="performance" onclick="switchReportTab(this, 'performance')">📈 信号绩效</button>
+                        </div>
+                        <div class="nav-group">
                             <button class="nav-item nav-item-full" onclick="showFullReport()">📥 完整报告</button>
                         </div>
                     </div>
@@ -149,19 +162,6 @@
         <div class="ai-right-header">
             <h3>辅助面板</h3>
             <button class="btn btn-sm ai-panel-close" onclick="toggleRightPanel()" title="收起右栏">✕</button>
-        </div>
-
-        <!-- 异动日志 -->
-        <div class="ai-section ai-right-section">
-            <div class="section-header">
-                <h3>🔔 异动监控</h3>
-                <div class="section-actions">
-                    <button class="btn btn-sm" onclick="triggerL1()">手动检测</button>
-                </div>
-            </div>
-            <div id="anomalyLog" class="anomaly-log">
-                <div class="anomaly-empty">暂无异动</div>
-            </div>
         </div>
 
         <!-- 历史报告 -->

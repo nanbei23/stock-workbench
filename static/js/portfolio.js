@@ -3,22 +3,79 @@
  * 功能：资产概览、持仓列表、交易记录、盈亏日历
  */
 
+// ── Toast 通知系统 ─────────────────────────────────────────
+function showToast(msg, type='info', duration=3000) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.style.cssText = 'position:fixed;top:16px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:8px;';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  const colors = {success:'#52B788',error:'#E07A5F',info:'#4A90D9',warn:'#E9C46A'};
+  toast.style.cssText = `padding:10px 16px;border-radius:8px;color:#fff;font-size:0.85rem;background:${colors[type]||colors.info};box-shadow:0 4px 12px rgba(0,0,0,0.3);opacity:0;transform:translateX(40px);transition:all 0.3s ease;max-width:320px;`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  requestAnimationFrame(()=>{toast.style.opacity='1';toast.style.transform='translateX(0)';});
+  setTimeout(()=>{
+    toast.style.opacity='0';
+    toast.style.transform='translateX(40px)';
+    setTimeout(()=>toast.remove(),300);
+  }, duration);
+}
+
 // ── 全局状态 ──────────────────────────────────────────────
 let calendarYear = new Date().getFullYear();
 let calendarMonth = new Date().getMonth() + 1;
 let _selectedStockCode = null;
+const _tabLoaded = {};
+let _stopLossPct = 8; // 默认值，将从API加载
 
 // ── 初始化 ────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  // 首次加载所有数据（holdings是默认tab，直接加载）
   await Promise.all([
     loadOverview(),
     loadPortfolio(),
-    loadHoldingsTable(),
-    loadTrades(),
-    loadOrders(),
-    loadCalendar(),
-    loadPendingPositions()
+    loadHoldingsTable()
   ]);
+  // 标记 holdings tab 已加载
+  _tabLoaded['holdings'] = true;
+
+  // 从API加载止损百分比设置
+  try {
+    const settings = await apiGet('/api/settings');
+    if (settings.stop_loss_pct) {
+      _stopLossPct = parseInt(settings.stop_loss_pct);
+      await loadHoldingsTable(); // 用正确的止损值重新渲染
+    }
+  } catch (e) {
+    console.error('加载止损设置失败:', e);
+  }
+
+  // 设置止损百分比下拉框初始值
+  const stopLossSelect = document.getElementById('stopLossSelect');
+  if (stopLossSelect) {
+    stopLossSelect.value = _stopLossPct;
+  }
+
+  // 盘中自动刷新
+  function isMarketOpen() {
+    const now = new Date();
+    const day = now.getDay();
+    if (day === 0 || day === 6) return false;
+    const h = now.getHours(), m = now.getMinutes();
+    const t = h * 60 + m;
+    return (t >= 570 && t <= 690) || (t >= 780 && t <= 900); // 9:30-11:30, 13:00-15:00
+  }
+  setInterval(() => {
+    if (isMarketOpen()) {
+      loadOverview();
+      loadPortfolio();
+      loadHoldingsTable();
+    }
+  }, 30000);
 });
 
 // ── API 工具函数 ──────────────────────────────────────────
@@ -71,12 +128,23 @@ function priceClass(n) {
   return 'flat';
 }
 
-// ── Tab 切换 ──────────────────────────────────────────────
+// ── Tab 切换（懒加载） ──────────────────────────────────
 function switchPTab(name) {
   document.querySelectorAll('[id^="ptab-"]').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.detail-tab').forEach(el => el.classList.remove('active'));
-  document.getElementById('ptab-' + name).style.display = 'block';
-  event.target.classList.add('active');
+  const tab = document.getElementById('ptab-' + name);
+  if (tab) tab.style.display = 'block';
+  // Find and activate the correct button
+  document.querySelectorAll('.detail-tab').forEach(btn => {
+    if (btn.dataset.tab === name) btn.classList.add('active');
+  });
+  // Lazy load: only load data on first switch
+  if (!_tabLoaded[name]) {
+    _tabLoaded[name] = true;
+    if (name === 'trades') loadTrades();
+    else if (name === 'plan') loadTradingPlans();
+    else if (name === 'calendar') loadCalendar();
+  }
 }
 
 // ── 资产概览 ──────────────────────────────────────────────
@@ -90,6 +158,20 @@ async function loadOverview() {
     const pnlEl = document.getElementById('totalPnl');
     pnlEl.textContent = formatMoney(data.unrealized_pnl) + ' (' + formatPct(data.unrealized_pnl_pct) + ')';
     pnlEl.className = 'pnl-value ' + priceClass(data.unrealized_pnl);
+
+    // 当日盈亏
+    const dailyPnlEl = document.getElementById('dailyPnl');
+    if (dailyPnlEl) {
+      dailyPnlEl.textContent = formatMoney(data.daily_pnl) + ' (' + formatPct(data.daily_pnl_pct) + ')';
+      dailyPnlEl.className = 'pnl-value ' + priceClass(data.daily_pnl);
+    }
+
+    // 资金使用率
+    const cashRatioEl = document.getElementById('cashRatio');
+    if (cashRatioEl && data.total_assets > 0) {
+      const ratio = ((data.total_assets - data.cash) / data.total_assets * 100).toFixed(1);
+      cashRatioEl.textContent = ratio + '%';
+    }
 
     // 显示费用统计（如果元素存在）
     const commEl = document.getElementById('totalCommission');
@@ -151,21 +233,45 @@ async function loadPortfolio() {
   }
 }
 
+// ── 止损百分比设置 ──────────────────────────────────────
+function updateStopLoss() {
+  const select = document.getElementById('stopLossSelect');
+  if (select) {
+    _stopLossPct = parseInt(select.value);
+    // 保存到数据库
+    apiPost('/api/settings/bulk', { settings: { stop_loss_pct: _stopLossPct.toString() } });
+    loadHoldingsTable(); // 重新渲染持仓表
+  }
+}
+
 // ── 持仓明细表格 ──────────────────────────────────────────
 async function loadHoldingsTable() {
   try {
-    const data = await apiGet('/api/portfolio');
-    const positions = data.positions || [];
+    const [portfolioData, overview] = await Promise.all([
+      apiGet('/api/portfolio'),
+      apiGet('/api/portfolio/overview')
+    ]);
+    const positions = portfolioData.positions || [];
+    const totalAssets = overview.total_assets || 1;
     const tbody = document.getElementById('holdingsBody');
     
     if (positions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><p>暂无持仓</p></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><p>暂无持仓</p></td></tr>';
       return;
     }
     
     tbody.innerHTML = positions.map(p => {
       const cls = priceClass(p.unrealized_pnl);
       const marketValue = p.price * p.total_shares;
+      const weight = (marketValue / totalAssets * 100).toFixed(1);
+      const dailyPnl = p.daily_pnl != null ? p.daily_pnl : (p.price - (p.prev_close || p.avg_cost)) * p.total_shares;
+      const dailyCls = priceClass(dailyPnl);
+      
+      // 止损距离计算（可配置百分比）
+      const stopLossPrice = p.avg_cost * (1 - _stopLossPct / 100);
+      const stopLossDist = p.price > 0 ? ((p.price - stopLossPrice) / p.price * 100).toFixed(1) : '--';
+      const stopLossCls = stopLossDist === '--' ? 'flat' : (parseFloat(stopLossDist) > 5 ? 'up' : (parseFloat(stopLossDist) > 2 ? 'flat' : 'down'));
+      
       return `
         <tr style="cursor:pointer;" onclick="showPositionDetail('${p.code}')">
           <td><strong>${p.name}</strong><br><small class="text-muted">${p.code}</small></td>
@@ -173,8 +279,11 @@ async function loadHoldingsTable() {
           <td>${p.avg_cost.toFixed(2)}</td>
           <td class="${priceClass(p.change_pct)}">${p.price ? p.price.toFixed(2) : '--'}</td>
           <td>${formatMoney(marketValue)}</td>
+          <td>${weight}%</td>
+          <td class="${dailyCls}">${formatMoney(dailyPnl)}</td>
           <td class="${cls}">${formatMoney(p.unrealized_pnl)}</td>
           <td class="${cls}">${formatPct(p.unrealized_pnl_pct)}</td>
+          <td class="${stopLossCls}">${stopLossDist}%</td>
         </tr>
       `;
     }).join('');
@@ -183,170 +292,121 @@ async function loadHoldingsTable() {
   }
 }
 
-// ── 待持仓（Pending Positions） ─────────────────────────
-async function loadPendingPositions() {
+// ── 交易计划（合并 待持仓 + 条件单） ─────────────────────
+async function loadTradingPlans() {
   try {
-    const data = await apiGet('/api/pending-positions');
-    const pending = data.positions || [];
+    const data = await apiGet('/api/trading-plans');
+    const plans = data.plans || [];
 
-    const countEl = document.getElementById('pendingCount');
-    const bodyEl  = document.getElementById('pendingBody');
+    const countEl = document.getElementById('planCount');
+    const listEl = document.getElementById('planList');
+    if (countEl) countEl.textContent = plans.length;
 
-    if (countEl) countEl.textContent = pending.length;
-
-    if (pending.length === 0) {
-      bodyEl.innerHTML = '<div class="pending-empty">暂无待持仓股票 <button class="btn btn-sm btn-ghost" onclick="showAddPending()" style="margin-left:8px;">+ 添加</button></div>';
+    if (plans.length === 0) {
+      listEl.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>暂无交易计划</p><button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-top:8px;">+ 新建计划</button></div>';
       return;
     }
 
-    const rows = pending.map(s => {
-      const stateText = s.strategy_state === 'near_buy' ? '接近买点' : '观察中';
-      const stateClass = s.strategy_state === 'near_buy' ? 'near_buy' : 'watch';
-      const targetPrice = s.target_buy_price;
-      const currentPrice = s.current_price || 0;
-      const planCost = s.plan_total_cost ? formatMoney(s.plan_total_cost) : '--';
+    listEl.innerHTML = plans.map(p => {
+      const dirText = p.direction === 'buy' ? '买入' : '卖出';
+      const dirClass = p.direction === 'buy' ? 'up' : 'down';
+      const typeMap = {watch:'观察', near_target:'接近买点', conditional:'条件触发'};
+      const typeText = typeMap[p.plan_type] || p.plan_type;
+      const statusMap = {pending:'待触发', triggered:'已触发', filled:'已建仓', cancelled:'已取消'};
+      const statusText = statusMap[p.status] || p.status;
+      const statusClass = p.status === 'pending' ? 'up' : p.status === 'filled' ? 'down' : '';
 
-      // 距离目标价的距离
-      let distanceText = '--';
-      let distanceClass = '';
-      if (s.distance_pct != null) {
-        const dist = s.distance_pct;
-        distanceText = (dist >= 0 ? '+' : '') + dist.toFixed(2) + '%';
-        distanceClass = dist <= 0 ? 'up' : 'down';
-      }
+      const distance = p.distance_pct != null ? (p.distance_pct >= 0 ? '+' : '') + p.distance_pct.toFixed(2) + '%' : '--';
+      const planCost = p.plan_total_cost ? formatMoney(p.plan_total_cost) : '--';
 
       return `
-        <tr data-pid="${s.id}">
-          <td class="stock-name-cell">${s.name || '--'}</td>
-          <td class="stock-code-cell">${s.code}</td>
-          <td><span class="state-badge ${stateClass}">${stateText}</span></td>
-          <td>${targetPrice ? targetPrice.toFixed(2) : '--'}</td>
-          <td class="${priceClass(s.change_pct)}">${currentPrice ? currentPrice.toFixed(2) : '--'}</td>
-          <td class="distance-cell ${distanceClass}">${distanceText}</td>
-          <td>${s.plan_shares || '--'}</td>
-          <td>${planCost}</td>
-          <td>
-            ${s.target_buy_price ? '<button class="btn btn-sm btn-primary" style="font-size:0.7rem;padding:2px 6px;" onclick="convertPendingToOrder(\'' + s.code + '\',\'' + (s.name || '') + '\',' + s.target_buy_price + ',' + (s.plan_shares || 100) + ')">转条件单</button> ' : ''}
-            <button class="btn btn-sm btn-ghost" onclick="deletePendingPos(${s.id})">🗑</button>
-          </td>
-        </tr>
+        <div class="order-card" style="margin-bottom:8px;">
+          <div class="order-header" style="display:flex;align-items:center;gap:8px;">
+            <span class="order-status ${statusClass}" style="font-size:0.75rem;padding:2px 6px;border-radius:4px;">${statusText}</span>
+            <span class="${dirClass}" style="font-size:0.75rem;font-weight:600;">${dirText}</span>
+            <span class="order-stock" style="font-weight:600;">${p.name || p.code}</span>
+            <span class="order-code" style="color:var(--text-secondary);font-size:0.8rem;">${p.code}</span>
+            <span style="margin-left:auto;font-size:0.75rem;color:var(--text-secondary);">${typeText}</span>
+          </div>
+          <div class="order-body" style="display:flex;gap:16px;align-items:center;padding:8px 0;font-size:0.85rem;">
+            ${p.target_price ? `<span>目标价: <strong>${p.target_price.toFixed(2)}</strong></span>` : ''}
+            <span>现价: ${p.current_price ? '<strong>' + p.current_price.toFixed(2) + '</strong>' : '--'}</span>
+            ${p.target_price ? `<span>距离: <strong class="${p.distance_pct != null && p.distance_pct <= 0 ? 'up' : 'down'}">${distance}</strong></span>` : ''}
+            <span>计划: ${p.plan_shares || '--'}股</span>
+            <span>金额: ${planCost}</span>
+            ${p.reason ? `<span style="color:var(--text-secondary);font-style:italic;">${p.reason}</span>` : ''}
+            <span style="margin-left:auto;">
+              <button class="btn btn-sm btn-ghost" onclick="deletePlan(${p.id})" style="font-size:0.75rem;">🗑</button>
+            </span>
+          </div>
+        </div>
       `;
     }).join('');
 
-    bodyEl.innerHTML = `
-      <table class="pending-table">
-        <thead>
-          <tr>
-            <th>股票</th>
-            <th>代码</th>
-            <th>状态</th>
-            <th>目标买入价</th>
-            <th>现价</th>
-            <th>距离</th>
-            <th>计划股数</th>
-            <th>计划金额</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div style="margin-top:8px;">
-        <button class="btn btn-sm btn-primary" onclick="showAddPending()">+ 添加待持仓</button>
-      </div>
-    `;
-
-    // Render comparison table
-    renderPendingComparison(pending);
+    // render comparison table
+    renderPendingComparison(plans.filter(p => p.plan_type !== 'conditional'));
   } catch (e) {
-    console.error('loadPendingPositions error:', e);
+    console.error('loadTradingPlans error:', e);
   }
 }
-function renderPendingComparison(pending) {
-    const body = document.getElementById('pendingCompBody');
-    const container = document.getElementById('pendingComparison');
-    if (!body || !pending.length) { if(container) container.style.display='none'; return; }
-    container.style.display = 'block';
-    body.innerHTML = pending.map(p => {
-        const planPrice = p.target_buy_price || 0;
-        const curPrice = p.current_price || planPrice;
-        const deviation = planPrice ? ((curPrice - planPrice) / planPrice * 100).toFixed(2) : '--';
-        const planCost = p.plan_total_cost || (planPrice * (p.plan_shares || 0));
-        const actualCost = curPrice * (p.plan_shares || 0);
-        const status = p.status === 'filled' ? '✅ 已建仓' : p.status === 'cancelled' ? '❌ 已取消' : '⏳ 待触发';
-        const devColor = deviation > 0 ? 'color:var(--color-up)' : deviation < 0 ? 'color:var(--color-down)' : '';
-        return `<tr>
-            <td>${p.code} ${p.name||''}</td>
-            <td>${formatMoney(planPrice)}</td>
-            <td>${formatMoney(curPrice)}</td>
-            <td style="${devColor}">${deviation}%</td>
-            <td>${formatMoney(planCost)}</td>
-            <td>${formatMoney(actualCost)}</td>
-            <td>${status}</td>
-        </tr>`;
-    }).join('');
+
+// ── 交易计划弹窗 ──────────────────────────────────────
+function showAddPlan() {
+  document.getElementById('planModal').classList.add('show');
+  document.getElementById('planCode').focus();
 }
 
-// ── 添加待持仓弹窗 ──────────────────────────────────────
-function showAddPending() {
-  document.getElementById('pendingModal').classList.add('show');
-  document.getElementById('pendingCode').focus();
+function closePlanModal() {
+  document.getElementById('planModal').classList.remove('show');
+  document.getElementById('planForm').reset();
 }
 
-function closePendingModal() {
-  document.getElementById('pendingModal').classList.remove('show');
-  document.getElementById('pendingForm').reset();
-}
-
-async function submitPending(e) {
+async function submitPlan(e) {
   e.preventDefault();
-  const code = document.getElementById('pendingCode').value.trim();
-  const name = document.getElementById('pendingName').value.trim();
-  const target_buy_price = parseFloat(document.getElementById('pendingPrice').value) || null;
-  const plan_shares = parseInt(document.getElementById('pendingShares').value) || 100;
-  const reason = document.getElementById('pendingReason').value.trim();
+  const code = document.getElementById('planCode').value.trim();
+  const name = document.getElementById('planName').value.trim();
+  const direction = document.getElementById('planDirection').value;
+  const plan_type = document.getElementById('planType').value;
+  const target_price = parseFloat(document.getElementById('planTargetPrice').value) || null;
+  const condition_type = document.getElementById('planCondType').value;
+  const plan_shares = parseInt(document.getElementById('planShares').value) || 100;
+  const reason = document.getElementById('planReason').value.trim();
+  const expiresAtInput = document.getElementById('planExpiresAt');
+  let expires_at = null;
+  if (expiresAtInput && expiresAtInput.value) {
+    expires_at = expiresAtInput.value.replace('T', ' ') + ':00';
+  }
 
   if (!code) {
-    alert('请填写股票代码');
+    showToast('请填写股票代码', 'warn');
     return;
   }
 
   try {
-    await apiPost('/api/pending-positions', {
-      code, name, target_buy_price, plan_shares, reason
+    await apiPost('/api/trading-plans', {
+      code, name, direction, plan_type, target_price, condition_type, plan_shares, reason, expires_at
     });
-    closePendingModal();
-    await loadPendingPositions();
+    closePlanModal();
+    await loadTradingPlans();
+    showToast('交易计划创建成功！', 'success');
   } catch (e) {
-    console.error('submitPending error:', e);
-    alert('添加失败: ' + e.message);
+    console.error('submitPlan error:', e);
+    showToast('创建失败: ' + e.message, 'error');
   }
 }
 
-async function deletePendingPos(pid) {
-  if (!confirm('确认删除此待持仓记录？')) return;
+async function deletePlan(pid) {
+  if (!confirm('确认删除此交易计划？')) return;
   try {
-    await apiDelete(`/api/pending-positions/${pid}`);
-    await loadPendingPositions();
+    await apiDelete(`/api/trading-plans/${pid}`);
+    await loadTradingPlans();
   } catch (e) {
-    console.error('deletePendingPos error:', e);
-    alert('删除失败: ' + e.message);
+    console.error('deletePlan error:', e);
+    showToast('删除失败: ' + e.message, 'error');
   }
 }
 
-// ── 待持仓转条件单 ──────────────────────────────────────
-function convertPendingToOrder(code, name, targetPrice, planShares) {
-  // 填充条件单表单并打开弹窗
-  showAddOrder();
-  document.getElementById('orderCode').value = code;
-  document.getElementById('orderName').value = name;
-  document.getElementById('orderCondType').value = 'price_lte';
-  document.getElementById('orderTargetPrice').value = targetPrice;
-  document.getElementById('orderAction').value = 'buy';
-  document.getElementById('orderShares').value = planShares;
-  document.getElementById('orderNotes').value = '由待持仓自动创建';
-}
-
-// ── 交易记录 ──────────────────────────────────────────────
+// ── 交易弹窗 ──────────────────────────────────────────────
 let _allTrades = []; // cache for undo
 
 async function loadTrades() {
@@ -406,13 +466,13 @@ async function deleteTrade(id) {
     await refreshAll();
   } catch (e) {
     console.error('deleteTrade error:', e);
-    alert('删除失败: ' + e.message);
+    showToast('删除失败: ' + e.message, 'error');
   }
 }
 
 async function undoLastTrade() {
   if (!_allTrades || _allTrades.length === 0) {
-    alert('没有可撤销的交易记录');
+    showToast('没有可撤销的交易记录', 'warn');
     return;
   }
   const last = _allTrades[0]; // trades are sorted by time DESC
@@ -422,13 +482,13 @@ async function undoLastTrade() {
     await refreshAll();
   } catch (e) {
     console.error('undoLastTrade error:', e);
-    alert('撤销失败: ' + e.message);
+    showToast('撤销失败: ' + e.message, 'error');
   }
 }
 
 async function clearStockTrades() {
   if (!_selectedStockCode) {
-    alert('请先选择一只股票');
+    showToast('请先选择一只股票', 'warn');
     return;
   }
   if (!confirm(`确认清空 ${_selectedStockCode} 的所有交易记录？此操作不可恢复！`)) return;
@@ -438,28 +498,28 @@ async function clearStockTrades() {
     await refreshAll();
   } catch (e) {
     console.error('clearStockTrades error:', e);
-    alert('清空失败: ' + e.message);
+    showToast('清空失败: ' + e.message, 'error');
   }
 }
 
 async function saveManualTargetPrice() {
   if (!_selectedStockCode) {
-    alert('请先选择一只股票');
+    showToast('请先选择一只股票', 'warn');
     return;
   }
   const priceInput = document.getElementById('manualTargetPrice');
   const price = parseFloat(priceInput.value);
   if (!price || price <= 0) {
-    alert('请输入有效的目标价格');
+    showToast('请输入有效的目标价格', 'warn');
     return;
   }
   try {
     await apiPut(`/api/watchlist/${_selectedStockCode}`, { target_buy_price: price });
-    alert('目标价已保存');
+    showToast('目标价已保存', 'success');
     priceInput.value = '';
   } catch (e) {
     console.error('saveManualTargetPrice error:', e);
-    alert('保存失败: ' + e.message);
+    showToast('保存失败: ' + e.message, 'error');
   }
 }
 
@@ -495,22 +555,23 @@ async function loadCalendar() {
       pnlMap[day] = d.total_pnl;
     });
     
-    // 计算颜色等级
+    // 计算颜色等级 — 用 CSS 变量跟随主题
     const allPnl = Object.values(pnlMap).filter(v => v !== 0);
     const maxPnl = Math.max(...allPnl.map(Math.abs), 1);
+    const root = getComputedStyle(document.documentElement);
+    const upColor = root.getPropertyValue('--color-up').trim();   // e.g. #E07A5F or #FF4D6A
+    const downColor = root.getPropertyValue('--color-down').trim(); // e.g. #52B788 or #00D4A1
     
     function getPnlColor(pnl) {
       if (pnl === 0 || pnl == null) return '';
       const ratio = Math.min(Math.abs(pnl) / maxPnl, 1);
-      if (pnl > 0) {
-        // 红色系（涨）
-        const alpha = 0.2 + ratio * 0.6;
-        return `rgba(224, 122, 95, ${alpha})`;
-      } else {
-        // 绿色系（跌）
-        const alpha = 0.2 + ratio * 0.6;
-        return `rgba(82, 183, 136, ${alpha})`;
-      }
+      const alpha = 0.15 + ratio * 0.35;
+      const hex = pnl > 0 ? upColor : downColor;
+      // hex → rgba
+      const r = parseInt(hex.slice(1,3), 16);
+      const g = parseInt(hex.slice(3,5), 16);
+      const b = parseInt(hex.slice(5,7), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
     
     let html = '';
@@ -665,120 +726,6 @@ function showPositionDetail(code) {
   loadTradeStats(code);
 }
 
-// ── 条件单 ────────────────────────────────────────────────
-async function loadOrders() {
-  try {
-    const data = await apiGet('/api/orders');
-    const orders = data.orders || [];
-    const container = document.getElementById('ordersList');
-    
-    if (orders.length === 0) {
-      container.innerHTML = '<div class="empty-state"><div class="icon">🔔</div><p>暂无条件单</p></div>';
-      return;
-    }
-    
-    container.innerHTML = orders.map(o => {
-      const statusClass = o.status === 'pending' ? 'up' : o.status === 'triggered' ? 'down' : '';
-      const statusText = o.status === 'pending' ? '活跃' : o.status === 'triggered' ? '已触发' : '已取消';
-      const condText = getConditionText(o.condition_type, o.target_price);
-      const actionText = o.action === 'buy' ? '买入' : '卖出';
-      const distance = o.distance_pct != null ? (o.distance_pct >= 0 ? '+' : '') + o.distance_pct.toFixed(2) + '%' : '--';
-      
-      return `
-        <div class="order-card">
-          <div class="order-header">
-            <span class="order-status ${statusClass}">${statusText}</span>
-            <span class="order-stock">${o.name || o.code}</span>
-            <span class="order-code">${o.code}</span>
-          </div>
-          <div class="order-body">
-            <div class="order-condition">条件: ${condText}</div>
-            <div class="order-action">动作: ${actionText} ${o.shares || '--'}股</div>
-            <div class="order-meta">
-              <span>现价: ${o.current_price ? o.current_price.toFixed(2) : '--'}</span>
-              <span>距触发: ${distance}</span>
-              ${o.expires_at ? '<span>失效: ' + o.expires_at.substring(0, 16) + '</span>' : ''}
-            </div>
-          </div>
-          <div class="order-actions">
-            <button class="btn btn-sm btn-ghost" onclick="cancelOrder(${o.id})">取消</button>
-          </div>
-        </div>
-      `;
-    }).join('');
-  } catch (e) {
-    console.error('loadOrders error:', e);
-  }
-}
-
-function getConditionText(type, price) {
-  switch(type) {
-    case 'price_lte': return `价格 ≤ ${price}`;
-    case 'price_gte': return `价格 ≥ ${price}`;
-    case 'change_pct_gte': return `涨幅 ≥ ${price}%`;
-    case 'change_pct_lte': return `跌幅 ≥ ${price}%`;
-    default: return type;
-  }
-}
-
-function showAddOrder() {
-  document.getElementById('orderModal').classList.add('show');
-  document.getElementById('orderCode').focus();
-}
-
-function closeOrderModal() {
-  document.getElementById('orderModal').classList.remove('show');
-  document.getElementById('orderForm').reset();
-}
-
-async function submitOrder(e) {
-  e.preventDefault();
-  
-  const code = document.getElementById('orderCode').value.trim();
-  const name = document.getElementById('orderName').value.trim();
-  const condition_type = document.getElementById('orderCondType').value;
-  const target_price = parseFloat(document.getElementById('orderTargetPrice').value);
-  const action = document.getElementById('orderAction').value;
-  const shares = parseInt(document.getElementById('orderShares').value) || 0;
-  const notes = document.getElementById('orderNotes').value.trim();
-  const expiresAtInput = document.getElementById('orderExpiresAt');
-  let expires_at = null;
-  if (expiresAtInput && expiresAtInput.value) {
-    // datetime-local gives "YYYY-MM-DDTHH:MM", convert to "YYYY-MM-DD HH:MM:SS"
-    expires_at = expiresAtInput.value.replace('T', ' ') + ':00';
-  }
-  
-  if (!code || !target_price) {
-    alert('请填写完整信息');
-    return;
-  }
-  
-  try {
-    await apiPost('/api/orders', {
-      code, name, condition_type, target_price, action, shares, notes, expires_at
-    });
-    
-    closeOrderModal();
-    await loadOrders();
-    alert('条件单创建成功！');
-  } catch (e) {
-    console.error('submitOrder error:', e);
-    alert('创建失败: ' + e.message);
-  }
-}
-
-async function cancelOrder(id) {
-  if (!confirm('确认取消此条件单？')) return;
-  
-  try {
-    await fetch(`/api/orders/${id}`, { method: 'DELETE' });
-    await loadOrders();
-  } catch (e) {
-    console.error('cancelOrder error:', e);
-    alert('取消失败: ' + e.message);
-  }
-}
-
 // ── 交易弹窗 ──────────────────────────────────────────────
 function showAddTrade() {
   document.getElementById('tradeModal').classList.add('show');
@@ -803,7 +750,7 @@ async function submitTrade(e) {
   const transferFee = parseFloat(document.getElementById('tradeTransferFee').value) || 0;
   
   if (!code || !price || !shares) {
-    alert('请填写完整信息');
+    showToast('请填写完整信息', 'warn');
     return;
   }
   
@@ -823,9 +770,9 @@ async function submitTrade(e) {
       loadHoldingsTable()
     ]);
     
-    alert('交易录入成功！');
+    showToast('交易录入成功！', 'success');
   } catch (e) {
     console.error('submitTrade error:', e);
-    alert('录入失败: ' + e.message);
+    showToast('录入失败: ' + e.message, 'error');
   }
 }

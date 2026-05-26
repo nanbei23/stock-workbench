@@ -81,6 +81,18 @@ async function loadWatchlist() {
       return;
     }
 
+    // 获取AI信号
+    let signals = {};
+    try {
+      const sigData = await API.get('/api/signal/signals/latest');
+      if (sigData && sigData.signals) signals = sigData.signals;
+    } catch (e) {}
+
+    const sigLabel = {
+      'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
+      'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出'
+    };
+
     listEl.innerHTML = '<div class="stock-card-list">' + stocks.map(s => {
       const isActive = currentCode === s.code;
       const cls = priceClass(s.change_pct);
@@ -95,6 +107,22 @@ async function loadWatchlist() {
       const holdPnl = s.unrealized_pnl ? formatPnl(s.unrealized_pnl) : '--';
       const holdPnlCls = s.unrealized_pnl ? priceClass(s.unrealized_pnl) : '';
 
+      // 异动标记
+      let anomalyIcon = '';
+      if (s.change_pct != null) {
+        if (s.change_pct >= 5) anomalyIcon = '🔥';
+        else if (s.change_pct <= -5) anomalyIcon = '❄️';
+      }
+
+      // AI信号
+      const sig = signals[s.code];
+      let sigHtml = '';
+      if (sig) {
+        const label = sigLabel[sig.signal] || sig.signal;
+        const sigCls = sig.signal.includes('BUY') ? 'signal-buy' : sig.signal.includes('SELL') ? 'signal-sell' : 'signal-hold';
+        sigHtml = `<div class="sc-signal ${sigCls}">${label}</div>`;
+      }
+
       return `
         <div class="stock-card ${isActive ? 'active' : ''}"
              onclick="selectStock('${s.code}')"
@@ -103,7 +131,7 @@ async function loadWatchlist() {
             <div class="sc-grip" title="拖拽排序">⋮⋮</div>
             <div class="sc-left">
               <div>
-                <div class="sc-name">${s.name || s.code}</div>
+                <div class="sc-name">${anomalyIcon} ${s.name || s.code}</div>
                 <div class="sc-code">${s.code}</div>
               </div>
               <div class="sc-price ${cls}">${formatPrice(s.price)}<span class="sc-price-unit">元</span></div>
@@ -121,6 +149,7 @@ async function loadWatchlist() {
                 <span class="sc-data-lbl">当日涨幅</span>
                 <span class="sc-data-val ${cls}">${pctSign}${s.change_pct != null ? s.change_pct.toFixed(2) : '--'}%</span>
               </div>
+              ${sigHtml}
             </div>
           </div>
           <div class="stock-card-bar ${barCls}"></div>
@@ -330,6 +359,9 @@ async function loadStockDetail(code) {
   await reloadKline();
 
   load7Layer(code);
+
+  // 默认异动Tab — 自动加载
+  loadStockAnomalies(code);
 }
 
 /* ============================================================
@@ -571,6 +603,40 @@ function setIndex(key, d) {
 }
 
 /* ============================================================
+   7a. loadSentiment — GET /api/market/sentiment，填充市场情绪条
+   ============================================================ */
+async function loadSentiment() {
+  try {
+    const data = await API.get('/api/market/sentiment');
+    if (!data) return;
+
+    const breadth = data.breadth || {};
+    const northbound = data.northbound || {};
+
+    // 涨跌家数
+    const upEl = document.getElementById('sent-up');
+    const downEl = document.getElementById('sent-down');
+    const limitUpEl = document.getElementById('sent-limit-up');
+    const limitDownEl = document.getElementById('sent-limit-down');
+    const northEl = document.getElementById('sent-north');
+
+    if (upEl) upEl.textContent = breadth.up || '--';
+    if (downEl) downEl.textContent = breadth.down || '--';
+    if (limitUpEl) limitUpEl.textContent = breadth.limit_up || '--';
+    if (limitDownEl) limitDownEl.textContent = breadth.limit_down || '--';
+
+    // 北向资金（API已返回亿元单位）
+    if (northEl && northbound.total_net != null) {
+      const val = Number(northbound.total_net).toFixed(2);
+      northEl.textContent = val + '亿';
+      northEl.className = 'sentiment-value ' + (northbound.total_net >= 0 ? 'up' : 'down');
+    }
+  } catch (e) {
+    console.error('loadSentiment error:', e);
+  }
+}
+
+/* ============================================================
    8. refreshQuotes — 刷新列表中所有股票行情（不重绘 DOM）
    ============================================================ */
 async function refreshQuotes() {
@@ -714,20 +780,48 @@ function formatMarketCap(n) {
    ============================================================ */
 document.addEventListener('DOMContentLoaded', async () => {
   loadIndices();
+  loadSentiment();
   initKlineTabs();
   await loadWatchlist();
 
   const params = new URLSearchParams(window.location.search);
   const autoCode = params.get('stock');
-  if (autoCode) selectStock(autoCode);
+  if (autoCode) {
+    selectStock(autoCode);
+  } else {
+    // 自动选中第一支股票
+    const firstCard = document.querySelector('.stock-card');
+    if (firstCard) {
+      const firstCode = firstCard.dataset.code;
+      if (firstCode) selectStock(firstCode);
+    }
+  }
 
-  // 刷新控件绑定
+  // 从设置API同步自动刷新配置
   const toggle = document.getElementById('autoRefreshToggle');
   const intervalSel = document.getElementById('refreshInterval');
+  try {
+    const resp = await API.get('/settings');
+    if (resp) {
+      // 同步刷新间隔
+      if (intervalSel && resp.refresh_interval) {
+        intervalSel.value = resp.refresh_interval;
+      }
+      // 同步自动刷新开关
+      if (toggle && resp.auto_refresh_enabled === 'true') {
+        toggle.checked = true;
+        startAutoRefresh();
+      }
+    }
+  } catch(e) { console.warn('读取刷新设置失败:', e); }
+
+  // 刷新控件绑定
   if (toggle) {
     toggle.addEventListener('change', () => {
       if (toggle.checked) startAutoRefresh();
       else stopAutoRefresh();
+      // 保存设置到后端
+      API.post('/settings/bulk', { settings: { auto_refresh_enabled: toggle.checked ? 'true' : 'false' } }).catch(()=>{});
     });
   }
   if (intervalSel) {
@@ -736,6 +830,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         stopAutoRefresh();
         startAutoRefresh();
       }
+      // 保存设置到后端
+      API.post('/settings/bulk', { settings: { refresh_interval: intervalSel.value } }).catch(()=>{});
     });
   }
 
@@ -1289,4 +1385,141 @@ async function triggerAnalysis() {
   } catch(e) {
     statusEl.textContent = '❌ 启动失败: ' + e.message;
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 异动检测（自选股详情 Tab）
+// ══════════════════════════════════════════════════════════════
+
+async function loadStockAnomalies(code) {
+  const list = document.getElementById('anomalyStockList');
+  const hint = document.getElementById('anomalyHint');
+  if (!list) return;
+  list.innerHTML = '<div class="anomaly-loading">加载中...</div>';
+  try {
+    const data = await API.get(`/api/ai/anomalies?code=${code}&limit=30`);
+    const anomalies = data.anomalies || [];
+    if (!anomalies.length) {
+      list.innerHTML = `<div class="anomaly-empty">
+        <div class="anomaly-empty-icon">📡</div>
+        <div class="anomaly-empty-title">暂无异动记录</div>
+        <div class="anomaly-empty-desc">点击上方按钮检测当前股票异动</div>
+      </div>`;
+      if (hint) hint.textContent = '无异动 · 可点击检测刷新';
+      return;
+    }
+    if (hint) hint.textContent = `${anomalies.length} 条异动`;
+    list.innerHTML = anomalies.map(a => renderAnomalyCard(a)).join('');
+  } catch(e) {
+    list.innerHTML = `<div class="empty-state" style="padding:24px;"><p>加载失败: ${e.message}</p></div>`;
+  }
+}
+
+function renderAnomalyCard(a, isNew) {
+  const level = a.level || 'info';
+  const levelIcon = level === 'critical' ? '🔴' : level === 'warning' ? '🟡' : '🔵';
+  const levelLabel = level === 'critical' ? '严重' : level === 'warning' ? '警告' : '提示';
+  const name = a.name || a.code;
+  const timeStr = a.time ? a.time.replace(/^\d{4}-/, '').replace(/:\d{2}$/, '') : '';
+  const changeHtml = a.change_pct ? `<span class="anomaly-change ${a.change_pct >= 0 ? 'up' : 'down'}">${a.change_pct >= 0 ? '+' : ''}${(a.change_pct||0).toFixed(2)}%</span>` : '';
+  const priceHtml = a.price ? `<span class="anomaly-price">¥${a.price}</span>` : '';
+  const typeLabel = {
+    'volume_spike': '成交量异动',
+    'price_surge': '价格急涨',
+    'price_drop': '价格急跌',
+    'large_buy': '大单买入',
+    'large_sell': '大单卖出',
+    'limit_up': '涨停',
+    'limit_down': '跌停',
+    'turnover_spike': '换手率异动',
+    'gap_up': '跳空高开',
+    'gap_down': '跳空低开'
+  }[a.anomaly_type] || a.anomaly_type || '';
+  return `<div class="anomaly-card level-${level} ${isNew ? 'anomaly-new' : ''}">
+    <div class="anomaly-card-header">
+      <span class="anomaly-level-badge level-${level}">${levelIcon} ${levelLabel} · ${typeLabel}</span>
+      <span class="anomaly-time">${timeStr}</span>
+    </div>
+    <div class="anomaly-card-body">
+      <div class="anomaly-stock-info">
+        <span class="anomaly-stock-name">${name}</span>
+        <span class="anomaly-stock-code">${a.code || ''}</span>
+      </div>
+      <div class="anomaly-price-info">
+        ${priceHtml} ${changeHtml}
+      </div>
+    </div>
+    ${a.message ? `<div class="anomaly-message">${a.message}</div>` : ''}
+    ${a.l1_advice ? `<div class="anomaly-advice">💡 ${a.l1_advice}</div>` : ''}
+  </div>`;
+}
+
+async function triggerStockAnomaly() {
+  if (!currentCode) return showToast('请先选择股票', 'error');
+  const hint = document.getElementById('anomalyHint');
+  if (hint) hint.textContent = '检测中...';
+  try {
+    const data = await API.post(`/api/ai/trigger/${currentCode}`, {});
+    if (data.anomalies?.length) {
+      if (hint) hint.textContent = `发现 ${data.anomalies.length} 条异动`;
+      const list = document.getElementById('anomalyStockList');
+      if (list) {
+        list.innerHTML = data.anomalies.map(a => renderAnomalyCard(a, true)).join('');
+      }
+      showToast(`发现 ${data.anomalies.length} 条异动`, 'warning');
+    } else {
+      if (hint) hint.textContent = `无异动（检测了 ${data.checked} 只）`;
+      showToast('无异动', 'success');
+      loadStockAnomalies(currentCode);
+    }
+  } catch(e) {
+    if (hint) hint.textContent = '检测失败';
+    showToast('检测失败: ' + e.message, 'error');
+  }
+}
+
+/* ============================================================
+   公告加载
+   ============================================================ */
+let _announceData = [];
+
+async function loadAnnounce(code) {
+  const container = document.getElementById('announceList');
+  if (!container) return;
+  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>📰 加载中...</p></div>';
+  try {
+    const resp = await API.get(`/api/announce/${code}?limit=50`);
+    _announceData = resp?.data || [];
+    filterAnnouncements();
+  } catch(e) {
+    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+  }
+}
+
+function filterAnnouncements() {
+  const container = document.getElementById('announceList');
+  if (!container) return;
+  const year = document.getElementById('announce-year')?.value || '';
+  const month = document.getElementById('announce-month')?.value || '';
+  const typeF = document.getElementById('announce-type-filter')?.value || '';
+
+  let filtered = _announceData;
+  if (year) filtered = filtered.filter(a => a.date && a.date.startsWith(year));
+  if (month) filtered = filtered.filter(a => a.date && a.date.substring(5,7) === month);
+  if (typeF) filtered = filtered.filter(a => (a.type || '').includes(typeF));
+
+  if (!filtered.length) {
+    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>无匹配公告</p></div>';
+    return;
+  }
+  container.innerHTML = filtered.map(a => {
+    const url = a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${a.title}</a>` : a.title;
+    const typeBadge = a.type ? `<span class="sent-badge neutral" style="margin-left:6px;">${a.type.trim()}</span>` : '';
+    return `<div class="announce-item">
+      <div class="announce-item-head">
+        <span class="announce-item-title">${url}${typeBadge}</span>
+      </div>
+      <div class="announce-item-meta"><span>${a.date || ''}</span></div>
+    </div>`;
+  }).join('');
 }

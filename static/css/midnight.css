@@ -442,9 +442,6 @@
   color: #6B7280;
 }
 
-[data-theme="midnight"] .pnl-value {
-  color: #FFFFFF;
-}
 
 /* ── 盈亏日历 ── */
 [data-theme="midnight"] .calendar-header button {
@@ -511,6 +508,35 @@
 [data-theme="midnight"] .btn-danger:hover {
   background: #DC2626;
   box-shadow: 0 4px 12px rgba(239,68,68,0.25);
+}
+
+[data-theme="midnight"] .btn-secondary {
+  border-color: rgba(255,255,255,0.10);
+  background: #2A2A2A;
+}
+[data-theme="midnight"] .btn-secondary:hover {
+  border-color: #F59E0B;
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .btn-save {
+  background: #A3E635;
+  color: #121212;
+}
+[data-theme="midnight"] .btn-save:hover { background: #84CC16; }
+
+[data-theme="midnight"] .btn-test {
+  border-color: rgba(255,255,255,0.10);
+  background: transparent;
+}
+[data-theme="midnight"] .btn-test:hover {
+  border-color: #F59E0B;
+  color: #F59E0B;
+}
+
+[data-theme="midnight"] .pwd-toggle:hover,
+[data-theme="midnight"] .btn-icon:hover {
+  background: rgba(255,255,255,0.06);
 }
 
 /* ── 表单控件 ── */

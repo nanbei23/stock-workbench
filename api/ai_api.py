@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import time
 import uuid
 from datetime import datetime, date
@@ -29,6 +30,7 @@ from scheduler.ai_engine import (
 from scheduler.ta_bridge import (
     PIPELINE_STAGES,
     run_trading_agents,
+    run_with_snapshot,
     trigger_l2_for_stock,
 )
 from scheduler.gbrain_client import api_search as gbrain_api_search, api_save as gbrain_api_save
@@ -172,7 +174,7 @@ async def start_analysis(code: str, request: Request):
     _tasks[task_id] = task
 
     async def _wrapper(tid, c, td):
-        await asyncio.to_thread(run_trading_agents, tid, c, td)
+        await run_with_snapshot(tid, c, td)
 
     asyncio.create_task(run_with_limits(task_id, _wrapper, code, trade_date))
 
@@ -189,7 +191,7 @@ async def get_analysis_status(task_id: str):
     completed = sum(1 for s in task.stages.values() if s["status"] == "completed")
     total = len(PIPELINE_STAGES)
 
-    return {
+    result = {
         "task_id": task_id,
         "code": task.code,
         "name": task.name,
@@ -205,6 +207,9 @@ async def get_analysis_status(task_id: str):
             for sid, s in task.stages.items()
         },
     }
+    if task.status == "failed" and task.error:
+        result["error"] = task.error
+    return result
 
 
 @router.get("/ai/analyze/{task_id}/result")
@@ -330,7 +335,7 @@ async def batch_analyze(req: BatchAnalyzeRequest):
         _tasks[task_id] = task
 
         async def _wrapper(tid, c, td):
-            await asyncio.to_thread(run_trading_agents, tid, c, td)
+            await run_with_snapshot(tid, c, td)
 
         asyncio.create_task(run_with_limits(task_id, _wrapper, code, trade_date))
 
@@ -365,6 +370,46 @@ async def cancel_analysis(task_id: str):
         _tasks[task_id].completed_at = datetime.now().isoformat()
 
     return {"status": "ok", "message": "取消请求已发送"}
+
+
+@router.post("/ai/analyze/{task_id}/resume")
+async def resume_analysis(task_id: str):
+    """从断点续跑一个失败的分析任务"""
+    old_task = _tasks.get(task_id)
+    if not old_task:
+        raise HTTPException(404, "任务不存在")
+    if old_task.status != "failed":
+        raise HTTPException(400, f"任务状态为 {old_task.status}，只能续跑失败的任务")
+
+    code = old_task.code
+    # 检查是否已有运行中的任务
+    for t in _tasks.values():
+        if t.code == code and t.status in ("running", "pending"):
+            return {"task_id": t.task_id, "status": "running", "message": "该股票已有分析任务在运行"}
+
+    new_task_id = str(uuid.uuid4())[:8]
+    name = old_task.name or get_stock_name(code)
+    trade_date = date.today().isoformat()
+
+    task = AnalysisTask(
+        task_id=new_task_id,
+        code=code,
+        name=name,
+        status="pending",
+        started_at=datetime.now().isoformat(),
+    )
+    task.depth = getattr(old_task, 'depth', 'standard') or 'standard'
+    task.selected_analysts = getattr(old_task, 'selected_analysts', None)
+    task.debate_rounds = getattr(old_task, 'debate_rounds', None)
+    task.risk_rounds = getattr(old_task, 'risk_rounds', None)
+    _tasks[new_task_id] = task
+
+    async def _wrapper(tid, c, td, resume_tid):
+        await run_with_snapshot(tid, c, td, resume_tid)
+
+    asyncio.create_task(run_with_limits(new_task_id, _wrapper, code, trade_date, task_id))
+
+    return {"task_id": new_task_id, "status": "pending", "message": f"已从断点续跑 {name} 分析任务"}
 
 
 @router.get("/ai/queue/status")
@@ -421,7 +466,7 @@ async def list_reports(
     """历史分析报告列表"""
     db = _get_db()
     try:
-        query = "SELECT id, task_id, code, signal, confidence, risk_score, duration_seconds, created_at FROM analysis_reports WHERE 1=1"
+        query = "SELECT id, task_id, code, signal, confidence, risk_score, duration_seconds, created_at, depth, model_mode FROM analysis_reports WHERE 1=1"
         params = []
 
         if code:
@@ -435,9 +480,31 @@ async def list_reports(
         params.append(limit)
 
         rows = db.execute(query, params).fetchall()
+        # 预加载 watchlist 名称映射
+        name_map = {}
+        try:
+            for w in db.execute("SELECT code, name FROM watchlist").fetchall():
+                name_map[w["code"]] = w["name"]
+        except Exception:
+            pass
+        reports = []
+        for r in rows:
+            d = dict(r)
+            raw = d.get("raw_state")
+            name = ""
+            if raw:
+                try:
+                    rs = json.loads(raw)
+                    name = rs.get("name", "")
+                except Exception:
+                    pass
+            if not name:
+                name = name_map.get(d.get("code", ""), "")
+            d["name"] = name
+            reports.append(d)
         return {
-            "count": len(rows),
-            "reports": [dict(r) for r in rows],
+            "count": len(reports),
+            "reports": reports,
         }
     finally:
         db.close()
@@ -453,8 +520,31 @@ async def get_report(report_id: int):
             raise HTTPException(status_code=404, detail="报告不存在")
 
         report = dict(row)
+        # 补充股票名称
+        if not report.get("name"):
+            raw = report.get("raw_state")
+            if raw:
+                try:
+                    rs = json.loads(raw)
+                    report["name"] = rs.get("name", "")
+                except Exception:
+                    pass
+        if not report.get("name"):
+            try:
+                w = db.execute("SELECT name FROM watchlist WHERE code=?", (report.get("code",""),)).fetchone()
+                if w: report["name"] = w["name"]
+            except Exception:
+                pass
         if report.get("raw_state"):
             report["result"] = json.loads(report["raw_state"])
+        
+        # 解析JSON字段（DB中存为TEXT）
+        for json_key in ["risk_debate", "investment_debate"]:
+            if report.get(json_key):
+                try:
+                    report[json_key] = json.loads(report[json_key])
+                except Exception:
+                    pass
         
         # 使用分析时快照的事实账本 + 自动生成的报告复核（均预存，无时间衰减）
         if report.get("fact_check"):
@@ -478,12 +568,58 @@ async def get_report(report_id: int):
 # ============================================================
 
 @router.get("/ai/anomalies")
-async def get_anomalies(limit: int = Query(default=50, le=200)):
-    """获取异动日志"""
-    return {
-        "count": len(_anomaly_log),
-        "anomalies": _anomaly_log[-limit:],
-    }
+async def get_anomalies(limit: int = Query(default=50, le=200), code: Optional[str] = Query(None)):
+    """获取异动日志，支持 ?code=XXXXXX 按个股筛选"""
+    from config import DB_PATH
+    try:
+        db = sqlite3.connect(str(DB_PATH))
+        db.row_factory = sqlite3.Row
+        today = datetime.now().strftime("%Y-%m-%d")
+        if code:
+            code6 = code[:6]
+            rows = db.execute(
+                """SELECT code, name, anomaly_type, description, severity, created_at
+                   FROM anomaly_logs
+                   WHERE date(created_at) = ? AND code LIKE ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (today, f"%{code6}%", limit)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """SELECT code, name, anomaly_type, description, severity, created_at
+                   FROM anomaly_logs
+                   WHERE date(created_at) = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (today, limit)
+            ).fetchall()
+        db.close()
+        anomalies = [
+            {
+                "code": r["code"],
+                "name": r["name"] or r["code"],
+                "anomaly_type": r["anomaly_type"],
+                "message": r["description"] or "",
+                "level": r["severity"] or "info",
+                "time": r["created_at"],
+                "change_pct": 0,
+                "price": 0,
+            }
+            for r in rows
+        ]
+        # 如果DB没数据，回退到内存列表
+        if not anomalies:
+            mem = _anomaly_log[-limit:]
+            if code:
+                code6 = code[:6]
+                mem = [a for a in mem if a.get("code", "").startswith(code6)]
+            return {"count": len(mem), "anomalies": mem}
+        return {"count": len(anomalies), "anomalies": anomalies}
+    except Exception:
+        mem = _anomaly_log[-limit:]
+        if code:
+            code6 = code[:6]
+            mem = [a for a in mem if a.get("code", "").startswith(code6)]
+        return {"count": len(mem), "anomalies": mem}
 
 
 @router.post("/ai/trigger")
@@ -516,6 +652,38 @@ async def trigger_l1_analysis():
     return {
         "checked": len(stocks),
         "anomalies": anomalies,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+@router.post("/ai/trigger/{code}")
+async def trigger_l1_for_stock(code: str):
+    """手动触发单只股票的L1异动检测"""
+    loop = asyncio.get_event_loop()
+    quote = await loop.run_in_executor(None, get_quote, code)
+    if not quote:
+        raise HTTPException(status_code=404, detail=f"无法获取 {code} 行情")
+
+    stock = {"code": code, "name": quote.get("name", code)}
+    sug = evaluate_suggestion(stock, quote)
+    anomalies = []
+    if sug.get("anomaly"):
+        anomaly = {
+            **sug["anomaly"],
+            "code": sug["code"],
+            "name": sug["name"],
+            "price": sug["price"],
+            "change_pct": sug["change_pct"],
+            "time": datetime.now().strftime("%H:%M"),
+            "l1_advice": sug["advice"],
+        }
+        anomalies.append(anomaly)
+        _anomaly_log.append(anomaly)
+
+    return {
+        "checked": 1,
+        "anomalies": anomalies,
+        "suggestion": sug,
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -575,8 +743,8 @@ import re
 
 @router.get("/ai/reports/{report_id}/fact-check")
 async def fact_check_report(report_id: int):
-    """对报告进行事实核对：提取数值断言 vs 实际数据"""
-    from scheduler.ai_engine import _get_db, get_llm_config
+    """获取事实账本：优先返回七层数据核对结果，否则回退到旧版正则比对"""
+    from scheduler.ai_engine import _get_db
     from data.info import get_stock_info
     
     db = _get_db()
@@ -589,6 +757,18 @@ async def fact_check_report(report_id: int):
     finally:
         db.close()
     
+    # 新结构: 七层数据核对（存储在 fact_check 列）
+    fc_raw = row["fact_check"]
+    if fc_raw:
+        try:
+            import json
+            fc = json.loads(fc_raw) if isinstance(fc_raw, str) else fc_raw
+            if isinstance(fc, dict) and "stages" in fc:
+                return fc
+        except Exception:
+            pass
+    
+    # 旧结构: 回退到正则比对
     code = row["code"]
     report_text = ""
     for col in ["market_report", "sentiment_report", "news_report", "fundamentals_report",
@@ -597,13 +777,10 @@ async def fact_check_report(report_id: int):
         if val:
             report_text += val + "\n"
     
-    # 提取数值断言
     claims = extract_numerical_claims(report_text)
     
-    # 获取实际数据
     actual_data = {}
     try:
-        # 用腾讯行情获取实时价格数据
         from data.helpers import tencent_quote_batch
         quotes = await tencent_quote_batch([code])
         q = quotes.get(code, {})
@@ -615,9 +792,7 @@ async def fact_check_report(report_id: int):
                 "总市值": q.get("total_market_cap"),
                 "成交量": q.get("volume"),
             }
-            # 去掉 None 值
             actual_data = {k: v for k, v in actual_data.items() if v is not None}
-        # 补充PB（get_stock_info如有可用）
         if actual_data and "PB" not in actual_data:
             try:
                 info = await get_stock_info(code)
@@ -628,7 +803,6 @@ async def fact_check_report(report_id: int):
     except Exception:
         pass
     
-    # 比对
     results = []
     for claim in claims:
         matched = False
@@ -667,6 +841,128 @@ async def fact_check_report(report_id: int):
         "accuracy": round(verified / max(total - unverifiable, 1) * 100, 1),
         "claims": results,
     }
+
+
+@router.post("/ai/reports/{report_id}/recheck")
+async def recheck_report(report_id: int):
+    """重新核对事实账本：读取报告 → 调用七层工具获取数据 → 旁观者模型核对"""
+    import asyncio
+    from datetime import timedelta
+    from scheduler.fact_checker import check_all_stages
+    from tradingagents.agents.utils.core_stock_tools import get_stock_data
+    from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+    from tradingagents.agents.utils.fundamental_data_tools import get_fundamentals, get_balance_sheet, get_cashflow
+    from tradingagents.agents.utils.news_data_tools import get_news, get_global_news, get_insider_transactions
+
+    db = _get_db()
+    try:
+        row = db.execute("SELECT * FROM analysis_reports WHERE id=?", (report_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "报告不存在")
+    finally:
+        db.close()
+
+    code = row["code"]
+    today = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    snapshots = {}
+
+    # === 七层数据快照 ===
+    # market: K线 + 技术指标 + 腾讯行情
+    try:
+        sd = get_stock_data.invoke({"symbol": code, "start_date": start, "end_date": today})
+        ind = get_indicators.invoke({"symbol": code, "indicator": "all", "curr_date": today})
+        from data.helpers import tencent_quote_batch
+        quotes = await tencent_quote_batch([code])
+        q = quotes.get(code, {})
+        snapshots["market"] = f"[get_stock_data]\n{sd}\n\n[get_indicators]\n{ind}\n\n[tencent_quote]\n{json.dumps(q, ensure_ascii=False)}"
+    except Exception as e:
+        logger.warning("recheck market 失败: %s", e)
+
+    # social: 舆情新闻
+    try:
+        news = get_news.invoke({"ticker": code, "start_date": start, "end_date": today})
+        snapshots["social"] = f"[get_news]\n{news}"
+    except Exception as e:
+        logger.warning("recheck social 失败: %s", e)
+
+    # news: 新闻 + 全球新闻
+    try:
+        news = get_news.invoke({"ticker": code, "start_date": start, "end_date": today})
+        gnews = get_global_news.invoke({"curr_date": today})
+        snapshots["news"] = f"[get_news]\n{news}\n\n[get_global_news]\n{gnews}"
+    except Exception as e:
+        logger.warning("recheck news 失败: %s", e)
+
+    # fundamentals: 基本面 + 资产负债 + 现金流
+    try:
+        fund = get_fundamentals.invoke({"ticker": code, "curr_date": today})
+        bs = get_balance_sheet.invoke({"ticker": code})
+        cf = get_cashflow.invoke({"ticker": code})
+        snapshots["fundamentals"] = f"[get_fundamentals]\n{fund}\n\n[get_balance_sheet]\n{bs}\n\n[get_cashflow]\n{cf}"
+    except Exception as e:
+        logger.warning("recheck fundamentals 失败: %s", e)
+
+    # policy: 政策新闻
+    try:
+        gnews = get_global_news.invoke({"curr_date": today})
+        snapshots["policy"] = f"[get_global_news]\n{gnews}"
+    except Exception as e:
+        logger.warning("recheck policy 失败: %s", e)
+
+    # hot_money: 资金面
+    try:
+        sd = get_stock_data.invoke({"symbol": code, "start_date": start, "end_date": today})
+        news = get_news.invoke({"ticker": code, "start_date": start, "end_date": today})
+        insider = get_insider_transactions.invoke({"ticker": code})
+        snapshots["hot_money"] = f"[get_stock_data]\n{sd}\n\n[get_news]\n{news}\n\n[get_insider_transactions]\n{insider}"
+    except Exception as e:
+        logger.warning("recheck hot_money 失败: %s", e)
+
+    # lockup: 解禁
+    try:
+        insider = get_insider_transactions.invoke({"ticker": code})
+        fund = get_fundamentals.invoke({"ticker": code, "curr_date": today})
+        snapshots["lockup"] = f"[get_insider_transactions]\n{insider}\n\n[get_fundamentals]\n{fund}"
+    except Exception as e:
+        logger.warning("recheck lockup 失败: %s", e)
+
+    # === 提取报告文本 ===
+    stage_report_map = {
+        "market": "market_report",
+        "social": "sentiment_report",
+        "news": "news_report",
+        "fundamentals": "fundamentals_report",
+        "policy": "policy_report",
+        "hot_money": "hot_money_report",
+        "lockup": "lockup_report",
+    }
+    task_stages = {}
+    for sid, col in stage_report_map.items():
+        val = row[col] or ""
+        if val:
+            task_stages[sid] = {"report": val}
+
+    if not snapshots:
+        return {"error": "无法获取数据快照", "stages_checked": 0}
+
+    # === 旁观者核对 ===
+    db2 = _get_db()
+    try:
+        fact_ledger = check_all_stages(snapshots, task_stages, db2)
+    finally:
+        db2.close()
+
+    # === 写回 DB ===
+    db3 = _get_db()
+    try:
+        db3.execute("UPDATE analysis_reports SET fact_check=? WHERE id=?",
+                    (json.dumps(fact_ledger, ensure_ascii=False), report_id))
+        db3.commit()
+    finally:
+        db3.close()
+
+    return fact_ledger
 
 
 def extract_numerical_claims(text: str) -> list:
@@ -771,23 +1067,19 @@ async def bystander_verify(report_id: int):
     if skipped_analysts:
         meta += f" | 未运行({len(skipped_analysts)}个): {', '.join(skipped_analysts)}"
     
-    # 4. 快照行情和事实账本（保持不变）
-    snapshot_info = ""
+    # 4. 事实账本（新格式 stages）
     fact_check_info = "无"
     try:
-        if row["market_snapshot"]:
-            snap = json.loads(row["market_snapshot"])
-            snapshot_info = f"现价={snap.get('price')} 涨跌幅={snap.get('change_pct')}% PE={snap.get('pe')} 总市值={snap.get('total_market_cap')} 成交量={snap.get('volume')}"
         if row["fact_check"]:
             fc = json.loads(row["fact_check"])
-            fact_check_info = f"准确率={fc.get('accuracy')}%（通过{fc.get('verified',0)}/偏差{fc.get('mismatched',0)}/待查{fc.get('unverifiable',0)}）"
-            if fc.get("claims"):
-                detail = []
-                for c in fc["claims"]:
-                    if c["status"] != "unverifiable":
-                        detail.append(f"{c['keyword']}: 报告={c['claimed_value']} 实际={c['actual_value']} ({'✓' if c['status']=='verified' else '✗'})")
-                if detail:
-                    fact_check_info += " | " + " ".join(detail[:8])
+            if fc.get("stages"):
+                lines = [f"总准确率={fc.get('overall_accuracy',0)}% 幻觉={fc.get('total_hallucinations',0)}"]
+                for sid, st in fc["stages"].items():
+                    lines.append(f"  {sid}: {st.get('accuracy',0)}% (匹配{st.get('matched',0)}/幻觉{st.get('mismatched',0)}/无源{st.get('no_source',0)})")
+                    for h in st.get("hallucinations", [])[:3]:
+                        if h.get("status") == "mismatch":
+                            lines.append(f"    ⚠ {h['keyword']}: 报告={h.get('claimed_value')} 实际={h.get('snapshot_value')}")
+                fact_check_info = "\n".join(lines)
     except Exception:
         pass
     
@@ -802,21 +1094,18 @@ async def bystander_verify(report_id: int):
 ## 完整报告
 {report_text[:3500]}
 
-## 实际行情（分析时刻）
-{snapshot_info}
-
 ## 事实核查
 {fact_check_info}
 
 ## 评估要求
 基于以上证据评估：
-1. **数据准确性**：报告数字 vs 行情快照 vs 事实核查结果
-2. **逻辑严密性**：推导自洽性，是否考虑了所有分析师的观点
-3. **深度充分性**：分析广度（{len(active_analysts)}个分析师）是否足够支撑结论
+1. **逻辑严密性**：各分析师观点是否自洽，结论是否被报告内容支撑
+2. **深度充分性**：分析广度（{len(active_analysts)}个分析师）是否足够支撑结论
+3. **数据一致性**：报告中引用的数字是否与事实核查结果一致
 4. **整体可信度**：综合评分
 
 JSON输出：
-{{"hallucinations": [{{"claim": "具体错误", "issue": "说明", "severity": "high/medium/low"}}], "overall_score": 0-100, "summary": "评估结论"}}"""
+{{"hallucinations": [{{"claim": "具体问题", "issue": "说明", "severity": "high/medium/low"}}], "overall_score": 0-100, "summary": "评估结论"}}"""
 
     # 调用旁观者模型
     import subprocess
@@ -887,6 +1176,15 @@ JSON输出：
             result = _json.loads(json_match.group())
         else:
             result = {"summary": content, "overall_score": 50, "hallucinations": []}
+
+        # 保存到DB
+        try:
+            _db = _get_db()
+            _db.execute("UPDATE analysis_reports SET bystander_verify=? WHERE id=?", (json.dumps(result, ensure_ascii=False), report_id))
+            _db.commit()
+            _db.close()
+        except Exception as _e:
+            import logging; logging.getLogger(__name__).warning("bystander save failed: %s", _e)
 
         return {
             "report_id": report_id,

@@ -2,6 +2,89 @@
 {% set active = "watchlist" %}
 {% block title %}自选股 — 炒股小牛马{% endblock %}
 
+{% block head_extras %}
+<style>
+/* 市场情绪条 */
+.sentiment-bar {
+  display: flex;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+}
+.sentiment-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sentiment-label {
+  color: var(--text-secondary);
+}
+.sentiment-value {
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.sentiment-value.up { color: var(--color-up); }
+.sentiment-value.down { color: var(--color-down); }
+.sentiment-value.limit-up { color: var(--color-up); font-weight: 700; }
+.sentiment-value.limit-down { color: var(--color-down); font-weight: 700; }
+
+/* 概览卡片 */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.overview-card {
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 12px;
+}
+.overview-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+.overview-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 0.85rem;
+}
+.overview-row .label {
+  color: var(--text-secondary);
+}
+.overview-row .value {
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+
+/* AI信号标签 */
+.sc-signal {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 4px;
+  display: inline-block;
+}
+.signal-buy {
+  background: rgba(82, 183, 136, 0.15);
+  color: var(--color-up);
+}
+.signal-sell {
+  background: rgba(224, 122, 95, 0.15);
+  color: var(--color-down);
+}
+.signal-hold {
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--text-secondary);
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <!-- 左侧：股票列表 -->
 <div class="stock-list">
@@ -45,6 +128,30 @@
       <div class="idx-name">创业板指</div>
       <div class="idx-value flat" id="idx-cyb">--</div>
       <div class="idx-change flat" id="idx-cyb-chg">--</div>
+    </div>
+  </div>
+
+  <!-- 市场情绪条 -->
+  <div class="sentiment-bar" id="sentimentBar">
+    <div class="sentiment-item">
+      <span class="sentiment-label">上涨</span>
+      <span class="sentiment-value up" id="sent-up">--</span>
+    </div>
+    <div class="sentiment-item">
+      <span class="sentiment-label">下跌</span>
+      <span class="sentiment-value down" id="sent-down">--</span>
+    </div>
+    <div class="sentiment-item">
+      <span class="sentiment-label">涨停</span>
+      <span class="sentiment-value limit-up" id="sent-limit-up">--</span>
+    </div>
+    <div class="sentiment-item">
+      <span class="sentiment-label">跌停</span>
+      <span class="sentiment-value limit-down" id="sent-limit-down">--</span>
+    </div>
+    <div class="sentiment-item">
+      <span class="sentiment-label">北向</span>
+      <span class="sentiment-value" id="sent-north">--</span>
     </div>
   </div>
 
@@ -140,221 +247,45 @@
 
     <!-- 详情Tab -->
     <div class="detail-tabs">
-      <button class="detail-tab active" onclick="switchDetail('7layer')">七层数据</button>
-      <button class="detail-tab" onclick="switchDetail('strategy')">策略</button>
-      <button class="detail-tab" onclick="switchDetail('buypoints')">买点</button>
+      <button class="detail-tab active" onclick="switchDetail('anomaly')">⚠️ 异动</button>
+      <button class="detail-tab" onclick="switchDetail('overview')">概览</button>
       <button class="detail-tab" onclick="switchDetail('news')">新闻</button>
       <button class="detail-tab" onclick="switchDetail('ai')">AI分析</button>
       <button class="detail-tab" onclick="switchDetail('research')">研报</button>
       <button class="detail-tab" onclick="switchDetail('announce')">公告</button>
     </div>
 
-    <!-- 七层数据 -->
-    <div id="dtab-7layer">
-      <div class="layer-grid" id="layerGrid">
-        <div class="layer-card">
-          <div class="layer-title">📊 基本面</div>
-          <div class="layer-row"><span class="label">PE(TTM)</span><span class="value" id="l-pe">--</span></div>
-          <div class="layer-row"><span class="label">PB</span><span class="value" id="l-pb">--</span></div>
-          <div class="layer-row"><span class="label">ROE</span><span class="value" id="l-roe">--</span></div>
-          <div class="layer-row"><span class="label">EPS</span><span class="value" id="l-eps">--</span></div>
-          <div class="layer-row"><span class="label">毛利率</span><span class="value" id="l-margin">--</span></div>
+    <!-- 概览 -->
+<div id="dtab-overview" style="display:none;">
+  <div class="anomaly-toolbar" style="margin-bottom:10px;">
+    <button class="btn btn-sm btn-primary" onclick="if(currentCode)loadOverview(currentCode)">🔄 刷新概览</button>
+    <span class="anomaly-hint" id="overviewHint">选择股票后自动加载</span>
+  </div>
+  <div class="overview-grid">
+        <!-- 基本面 -->
+        <div class="overview-card">
+          <div class="overview-title">📊 基本面</div>
+          <div class="overview-row"><span class="label">PE(TTM)</span><span class="value" id="o-pe">--</span></div>
+          <div class="overview-row"><span class="label">市净率</span><span class="value" id="o-pb">--</span></div>
+          <div class="overview-row"><span class="label">换手率</span><span class="value" id="o-turnover">--</span></div>
+          <div class="overview-row"><span class="label">总市值</span><span class="value" id="o-mcap">--</span></div>
         </div>
-        <div class="layer-card">
-          <div class="layer-title">📈 技术指标</div>
-          <div class="layer-row"><span class="label">RSI(14)</span><span class="value" id="l-rsi">--</span></div>
-          <div class="layer-row"><span class="label">MACD</span><span class="value" id="l-macd">--</span></div>
-          <div class="layer-row"><span class="label">KDJ</span><span class="value" id="l-kdj">--</span></div>
-          <div class="layer-row"><span class="label">布林带</span><span class="value" id="l-boll">--</span></div>
-          <div class="layer-row"><span class="label">均线</span><span class="value" id="l-ma">--</span></div>
+        <!-- 技术指标 -->
+        <div class="overview-card">
+          <div class="overview-title">📈 技术指标</div>
+          <div class="overview-row"><span class="label">RSI(14)</span><span class="value" id="o-rsi">--</span></div>
+          <div class="overview-row"><span class="label">MACD</span><span class="value" id="o-macd">--</span></div>
+          <div class="overview-row"><span class="label">KDJ</span><span class="value" id="o-kdj">--</span></div>
+          <div class="overview-row"><span class="label">5日均线</span><span class="value" id="o-ma5">--</span></div>
+          <div class="overview-row"><span class="label">20日均线</span><span class="value" id="o-ma20">--</span></div>
         </div>
-        <div class="layer-card">
-          <div class="layer-title">💰 资金面</div>
-          <div class="layer-row"><span class="label">主力净流入</span><span class="value" id="l-mainflow">--</span></div>
-          <div class="layer-row"><span class="label">北向资金</span><span class="value" id="l-north">--</span></div>
-          <div class="layer-row"><span class="label">融资余额</span><span class="value" id="l-margin-bal">--</span></div>
-          <div class="layer-row"><span class="label">龙虎榜</span><span class="value" id="l-dragon">--</span></div>
-        </div>
-        <div class="layer-card">
-          <div class="layer-title">📰 消息面</div>
-          <div class="layer-row"><span class="label">新闻情绪</span><span class="value" id="l-sentiment">--</span></div>
-          <div class="layer-row"><span class="label">研报评级</span><span class="value" id="l-rating">--</span></div>
-          <div class="layer-row"><span class="label">机构动向</span><span class="value" id="l-institution">--</span></div>
-        </div>
-        <div class="layer-card">
-          <div class="layer-title">🏛️ 政策面</div>
-          <div class="layer-row"><span class="label">行业政策</span><span class="value" id="l-policy">--</span></div>
-          <div class="layer-row"><span class="label">板块热度</span><span class="value" id="l-sector">--</span></div>
-        </div>
-        <div class="layer-card">
-          <div class="layer-title">⚠️ 风险面</div>
-          <div class="layer-row"><span class="label">解禁压力</span><span class="value" id="l-lockup">--</span></div>
-          <div class="layer-row"><span class="label">质押比例</span><span class="value" id="l-pledge">--</span></div>
-          <div class="layer-row"><span class="label">商誉占比</span><span class="value" id="l-goodwill">--</span></div>
-        </div>
-        <div class="layer-card">
-          <div class="layer-title">📋 策略</div>
-          <div class="layer-row"><span class="label">止盈价</span><span class="value" id="l-target">--</span></div>
-          <div class="layer-row"><span class="label">止损价</span><span class="value" id="l-stoploss">--</span></div>
-          <div class="layer-row"><span class="label">加仓价</span><span class="value" id="l-buypoint">--</span></div>
-          <div class="layer-row"><span class="label">策略状态</span><span class="value" id="l-strategy-state">--</span></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 策略 -->
-    <div id="dtab-strategy" style="display:none;">
-      <!-- 策略状态 -->
-      <div class="card">
-        <div class="card-title">策略状态</div>
-        <div class="strategy-state" id="strategyState">
-          <div class="state-badge" id="stateBadge">--</div>
-          <div class="state-desc" id="stateDesc">--</div>
-        </div>
-      </div>
-      
-      <!-- 关键价位 -->
-      <div class="card">
-        <div class="card-title">关键价位</div>
-        <div class="key-prices" id="keyPrices">
-          <div class="price-row">
-            <span class="label">目标买入价</span>
-            <span class="value" id="kpBuy">--</span>
-          </div>
-          <div class="price-row">
-            <span class="label">止损价</span>
-            <span class="value" id="kpStop">--</span>
-          </div>
-          <div class="price-row">
-            <span class="label">止盈价</span>
-            <span class="value" id="kpProfit">--</span>
-          </div>
-          <div class="price-row">
-            <span class="label">下次加仓价</span>
-            <span class="value" id="kpNextBuy">--</span>
-          </div>
-          <div class="price-row">
-            <span class="label">下次减仓价</span>
-            <span class="value" id="kpNextSell">--</span>
-          </div>
-        </div>
-      </div>
-      
-      <!-- 计划表 -->
-      <div class="card">
-        <div class="card-title">加仓/减仓计划</div>
-        <div class="plan-table-wrap">
-          <table class="plan-table" id="planTable">
-            <thead>
-              <tr>
-                <th>轮次</th>
-                <th>触发价</th>
-                <th>数量</th>
-                <th>动作</th>
-                <th>累计持仓</th>
-              </tr>
-            </thead>
-            <tbody id="planBody"></tbody>
-          </table>
-        </div>
-      </div>
-      
-      <!-- 费用测算 -->
-      <div class="card">
-        <div class="card-title">费用测算</div>
-        <div class="pnl-estimate" id="pnlEstimate">
-          <div class="pnl-row">
-            <span class="label">当前成本</span>
-            <span class="value" id="pnlCost">--</span>
-          </div>
-          <div class="pnl-row">
-            <span class="label">目标利润</span>
-            <span class="value" id="pnlTarget">--</span>
-          </div>
-          <div class="pnl-row">
-            <span class="label">预计佣金</span>
-            <span class="value" id="pnlCommission">--</span>
-          </div>
-          <div class="pnl-row">
-            <span class="label">预计印花税</span>
-            <span class="value" id="pnlStamp">--</span>
-          </div>
-        </div>
-      </div>
-      
-      <!-- 策略参数编辑 -->
-      <div class="card">
-        <div class="card-title">策略参数</div>
-        <div class="strategy-params" id="strategyParams">
-          <div class="param-row">
-            <span class="label">总预算</span>
-            <input type="number" id="paramBudget" class="param-input">
-            <span class="unit">元</span>
-          </div>
-          <div class="param-row">
-            <span class="label">参考买入价</span>
-            <input type="number" id="paramEntry" class="param-input">
-            <span class="unit">元</span>
-          </div>
-          <div class="param-row">
-            <span class="label">跌幅触发</span>
-            <input type="number" id="paramDropPct" class="param-input">
-            <span class="unit">%</span>
-          </div>
-          <div class="param-row">
-            <span class="label">加仓倍数</span>
-            <input type="number" id="paramAddMult" class="param-input">
-            <span class="unit">倍</span>
-          </div>
-          <div class="param-row">
-            <span class="label">反弹减仓</span>
-            <input type="number" id="paramBouncePct" class="param-input">
-            <span class="unit">%</span>
-          </div>
-          <div class="param-row">
-            <span class="label">减仓比例</span>
-            <input type="number" id="paramSellPct" class="param-input">
-            <span class="unit">%</span>
-          </div>
-          <button class="btn btn-primary" onclick="saveStrategyParams()">保存参数</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 买点 -->
-    <div id="dtab-buypoints" style="display:none;">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">📋 买点管理</div>
-          <button class="btn btn-sm btn-primary" onclick="showAddBuyPoint()">+ 添加买点</button>
-        </div>
-        <table class="data-table">
-          <thead>
-            <tr><th>价格</th><th>数量</th><th>理由</th><th>状态</th><th>时间</th><th>操作</th></tr>
-          </thead>
-          <tbody id="buyPointsBody">
-            <tr><td colspan="6" class="empty-state"><p>暂无买点记录</p></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <!-- 添加买点弹窗（内联） -->
-      <div class="card" id="addBuyPointForm" style="display:none;">
-        <div class="card-title">添加买点</div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-          <div class="form-group">
-            <label>价格</label>
-            <input type="number" id="bpPrice" step="0.01" placeholder="75.00" required>
-          </div>
-          <div class="form-group">
-            <label>数量（股）</label>
-            <input type="number" id="bpShares" step="100" placeholder="500">
-          </div>
-          <div class="form-group" style="flex:1;min-width:200px;">
-            <label>理由</label>
-            <input type="text" id="bpReason" placeholder="均线支撑、放量突破...">
-          </div>
-          <button class="btn btn-primary" onclick="submitBuyPoint()">保存</button>
-          <button class="btn btn-ghost" onclick="hideAddBuyPoint()">取消</button>
+        <!-- AI信号 -->
+        <div class="overview-card">
+          <div class="overview-title">🤖 AI信号</div>
+          <div class="overview-row"><span class="label">最新信号</span><span class="value" id="o-signal">--</span></div>
+          <div class="overview-row"><span class="label">信号日期</span><span class="value" id="o-signal-date">--</span></div>
+          <div class="overview-row"><span class="label">入场价</span><span class="value" id="o-entry-price">--</span></div>
+          <div class="overview-row"><span class="label">当前盈亏</span><span class="value" id="o-signal-pnl">--</span></div>
         </div>
       </div>
     </div>
@@ -427,12 +358,46 @@
     <!-- 公告 -->
     <div id="dtab-announce" style="display:none;">
       <div class="filter-bar">
-        <input type="date" id="announce-date-from" onchange="filterAnnouncements()" class="form-control" />
-        <span>至</span>
-        <input type="date" id="announce-date-to" onchange="filterAnnouncements()" class="form-control" />
+        <select id="announce-year" onchange="filterAnnouncements()" class="form-control">
+          <option value="">全部年份</option>
+          <option value="2026">2026</option>
+          <option value="2025">2025</option>
+          <option value="2024">2024</option>
+        </select>
+        <select id="announce-month" onchange="filterAnnouncements()" class="form-control">
+          <option value="">全部月份</option>
+          <option value="01">1月</option><option value="02">2月</option><option value="03">3月</option>
+          <option value="04">4月</option><option value="05">5月</option><option value="06">6月</option>
+          <option value="07">7月</option><option value="08">8月</option><option value="09">9月</option>
+          <option value="10">10月</option><option value="11">11月</option><option value="12">12月</option>
+        </select>
+        <select id="announce-type-filter" onchange="filterAnnouncements()" class="form-control">
+          <option value="">全部类型</option>
+          <option value="股东会">股东会</option>
+          <option value="分红">分红</option>
+          <option value="增减持">增减持</option>
+          <option value="业绩">业绩</option>
+        </select>
       </div>
       <div id="announceList">
         <div class="empty-state" style="padding:24px;"><p>请选择股票查看公告</p></div>
+      </div>
+    </div>
+
+    <!-- 异动 -->
+    <div id="dtab-anomaly">
+      <div class="anomaly-panel">
+        <div class="anomaly-toolbar">
+          <button class="btn btn-sm btn-primary" onclick="triggerStockAnomaly()">🔍 检测异动</button>
+          <span class="anomaly-hint" id="anomalyHint">点击按钮检测当前股票异动</span>
+        </div>
+        <div id="anomalyStockList" class="anomaly-stock-list">
+          <div class="anomaly-empty">
+            <div class="anomaly-empty-icon">📡</div>
+            <div class="anomaly-empty-title">暂无异动记录</div>
+            <div class="anomaly-empty-desc">点击上方按钮检测当前股票异动</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -461,7 +426,10 @@ function switchDetail(name) {
   document.querySelectorAll('[id^="dtab-"]').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.detail-tab').forEach(el => el.classList.remove('active'));
   document.getElementById('dtab-' + name).style.display = 'block';
-  event.target.classList.add('active');
+  // 用 name 匹配按钮，不依赖 event.target
+  document.querySelectorAll('.detail-tab').forEach(btn => {
+    if (btn.getAttribute('onclick')?.includes(`'${name}'`)) btn.classList.add('active');
+  });
   // 加载新闻
   if (name === 'news') {
     if (currentCode) {
@@ -471,11 +439,8 @@ function switchDetail(name) {
     loadClsNews();
     loadGlobalNews();
   }
-  if (name === 'strategy') {
-    if (currentCode) loadStrategy(currentCode);
-  }
-  if (name === 'buypoints') {
-    if (currentCode) loadBuyPoints(currentCode);
+  if (name === 'overview') {
+    if (currentCode) loadOverview(currentCode);
   }
   if (name === 'research') {
     if (currentCode) loadResearch(currentCode);
@@ -483,6 +448,124 @@ function switchDetail(name) {
   if (name === 'announce') {
     if (currentCode) loadAnnounce(currentCode);
   }
+  if (name === 'anomaly') {
+    if (currentCode) loadStockAnomalies(currentCode);
+  }
+}
+
+// 加载概览数据
+async function loadOverview(code) {
+  try {
+    // 获取行情数据
+    const quote = await API.get(`/api/quote/${code}`);
+    if (quote) {
+      // 基本面
+      document.getElementById('o-pe').textContent = quote.pe_ttm != null ? quote.pe_ttm.toFixed(2) : '--';
+      document.getElementById('o-pb').textContent = quote.pb != null ? quote.pb.toFixed(2) : '--';
+      document.getElementById('o-turnover').textContent = quote.turnover_rate != null ? quote.turnover_rate.toFixed(2) + '%' : '--';
+      document.getElementById('o-mcap').textContent = quote.market_cap != null ? formatMarketCap(quote.market_cap) : '--';
+    }
+
+    // 获取K线数据计算技术指标
+    const klineData = await API.get(`/api/kline/${code}?period=day&count=30`);
+    if (klineData && klineData.klines && klineData.klines.length > 0) {
+      const closes = klineData.klines.map(k => k.close);
+      const rsi = calculateRSI(closes, 14);
+      const macd = calculateMACD(closes);
+      const kdj = calculateKDJ(klineData.klines);
+      const ma5 = calculateMA(closes, 5);
+      const ma20 = calculateMA(closes, 20);
+
+      document.getElementById('o-rsi').textContent = rsi != null ? rsi.toFixed(2) : '--';
+      document.getElementById('o-macd').textContent = macd != null ? macd.toFixed(4) : '--';
+      document.getElementById('o-kdj').textContent = kdj != null ? kdj.toFixed(2) : '--';
+      document.getElementById('o-ma5').textContent = ma5 != null ? ma5.toFixed(2) : '--';
+      document.getElementById('o-ma20').textContent = ma20 != null ? ma20.toFixed(2) : '--';
+    }
+
+    // 获取AI信号
+    const signals = await API.get('/api/signal/signals/latest');
+    if (signals && signals.signals && signals.signals[code]) {
+      const sig = signals.signals[code];
+      const sigLabel = {
+        'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
+        'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出'
+      };
+      document.getElementById('o-signal').textContent = sigLabel[sig.signal] || sig.signal;
+      document.getElementById('o-signal-date').textContent = sig.signal_date || '--';
+      document.getElementById('o-entry-price').textContent = sig.entry_price != null ? '¥' + sig.entry_price.toFixed(2) : '--';
+      
+      // 计算盈亏
+      if (quote && quote.price && sig.entry_price) {
+        const pnl = ((quote.price - sig.entry_price) / sig.entry_price * 100).toFixed(2);
+        const pnlEl = document.getElementById('o-signal-pnl');
+        pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl + '%';
+        pnlEl.className = 'value ' + (pnl >= 0 ? 'up' : 'down');
+      }
+    }
+  } catch (e) {
+    console.error('loadOverview error:', e);
+  }
+}
+
+// 技术指标计算函数
+function calculateRSI(closes, period = 14) {
+  if (closes.length < period + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) {
+      avgGain = (avgGain * (period - 1) + diff) / period;
+      avgLoss = (avgLoss * (period - 1)) / period;
+    } else {
+      avgGain = (avgGain * (period - 1)) / period;
+      avgLoss = (avgLoss * (period - 1) - diff) / period;
+    }
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+function calculateMACD(closes, fast = 12, slow = 26, signal = 9) {
+  if (closes.length < slow + signal) return null;
+  const emaFast = calculateEMA(closes, fast);
+  const emaSlow = calculateEMA(closes, slow);
+  if (emaFast == null || emaSlow == null) return null;
+  return emaFast - emaSlow;
+}
+
+function calculateEMA(data, period) {
+  if (data.length < period) return null;
+  let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const multiplier = 2 / (period + 1);
+  for (let i = period; i < data.length; i++) {
+    ema = (data[i] - ema) * multiplier + ema;
+  }
+  return ema;
+}
+
+function calculateKDJ(klines, period = 9) {
+  if (klines.length < period) return null;
+  const recent = klines.slice(-period);
+  const high = Math.max(...recent.map(k => k.high));
+  const low = Math.min(...recent.map(k => k.low));
+  const close = klines[klines.length - 1].close;
+  if (high === low) return 50;
+  return ((close - low) / (high - low)) * 100;
+}
+
+function calculateMA(data, period) {
+  if (data.length < period) return null;
+  const slice = data.slice(-period);
+  return slice.reduce((a, b) => a + b, 0) / period;
 }
 </script>
 {% endblock %}

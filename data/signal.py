@@ -150,41 +150,51 @@ async def get_northbound(
     session: Optional[aiohttp.ClientSession] = None,
 ) -> dict:
     """
-    获取北向资金实时数据（东方财富 hsgtApi）。
+    获取北向资金实时数据（东方财富 kamt/get 端点）。
     返回 dict：
-      {north_net: float, sh_net: float, sz_net: float,
-       north_buy: float, north_sell: float, ...}
+      {total_net, sh_net, sz_net, status, date}
     单位：亿元。失败返回空 dict。
+    数据来源：hk2sh（沪股通北向）+ hk2sz（深股通北向）
+    status: 1=交易中, 2=已收盘, 3=未开盘/休市
     """
     cached = cache.read('signal', 'global_northbound')
     if cached is not None:
         return cached
 
     url = (
-        "https://push2.eastmoney.com/api/qt/kamt.rtmin/get?"
+        "https://push2.eastmoney.com/api/qt/kamt/get?"
         "fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56&"
-        "ut=b2884a393a59ad64002292a3e90d46a5&"
-        "cb=jQuery&_="
+        "ut=b2884a393a59ad64002292a3e90d46a5"
     )
 
     _session = session or await get_session()
     try:
         async with _session.get(url) as resp:
-            text = await resp.text()
-            # 提取 JSON（可能有 JSONP callback）
-            start = text.find("(")
-            end = text.rfind(")")
-            if start != -1 and end != -1:
-                text = text[start + 1 : end]
+            data = await resp.json(content_type=None)
+            d = data.get("data", {})
 
-            data = json.loads(text)
-            result_data = data.get("data", {})
+            # hk2sh = 沪股通(北向), hk2sz = 深股通(北向)
+            # dayNetAmtIn 单位: 万元
+            hk2sh = d.get("hk2sh", {})
+            hk2sz = d.get("hk2sz", {})
+
+            sh_net_wan = float(hk2sh.get("dayNetAmtIn", 0) or 0)
+            sz_net_wan = float(hk2sz.get("dayNetAmtIn", 0) or 0)
+
+            # 万元 → 亿元
+            sh_net = sh_net_wan / 10000
+            sz_net = sz_net_wan / 10000
+
+            # status: 1=交易中 2=已收盘 3=未开盘
+            status = hk2sh.get("status", 0)
+            date_str = hk2sh.get("date", "")
 
             result = {
-                "sh_net": result_data.get("s2n", 0),  # 沪股通净买入(万)
-                "sz_net": result_data.get("n2s", 0),  # 深股通净买入(万)
-                "total_net": (result_data.get("s2n", 0) or 0) + (result_data.get("n2s", 0) or 0),
-                "timestamp": result_data.get("time", ""),
+                "total_net": sh_net + sz_net,
+                "sh_net": sh_net,
+                "sz_net": sz_net,
+                "status": status,
+                "date": date_str,
             }
             cache.write('signal', 'global_northbound', result)
             return result

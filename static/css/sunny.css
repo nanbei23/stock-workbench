@@ -1,0 +1,963 @@
+/*
+ * ═══════════════════════════════════════════════════════
+ * ☀️ 阳光户外 (Sunny Outdoor) Theme
+ * ═══════════════════════════════════════════════════════
+ *
+ * A bright, warm, natural sunlight skin for 炒股小牛马 workbench.
+ * Designed with warm whites, cream tones, and sky-blue accents
+ * to evoke a clear sunny day. Flat & clean style — no glass/blur.
+ *
+ * A股标准: 涨=红(#DC2626), 跌=绿(#16A34A)
+ *
+ * Author : Hermes Agent
+ * Version: 1.0
+ * ═══════════════════════════════════════════════════════
+ */
+
+/* =============================================
+   1. ROOT VARIABLES
+   ============================================= */
+[data-theme="sunny"] {
+    --bg: #FFF8F0;
+    --bg-card: #FFFFFF;
+    --bg-hover: #FFF5EB;
+    --bg-sidebar: #FEF3E2;
+    --text-primary: #1C1917;
+    --text-secondary: #78716C;
+    --text-muted: #A8A29E;
+    --color-up: #DC2626;
+    --color-down: #16A34A;
+    --color-accent: #2563EB;
+    --color-accent-2: #F59E0B;
+    --color-warn: #F59E0B;
+    --color-primary: #2563EB;
+    --gradient-warm: linear-gradient(135deg, #FFF8F0 0%, #FEF3E2 100%);
+    --gradient-cool: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%);
+    --shadow-card: 0 2px 8px rgba(0,0,0,0.06);
+    --shadow-hover: 0 8px 24px rgba(0,0,0,0.10);
+    --border-light: rgba(0,0,0,0.08);
+    --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", "Menlo", monospace;
+}
+
+/* =============================================
+   2. BODY
+   ============================================= */
+[data-theme="sunny"] body {
+    background: var(--bg);
+    color: var(--text-primary);
+}
+
+/* =============================================
+   3. BANNER
+   ============================================= */
+[data-theme="sunny"] .banner {
+    background: #FFFFFF;
+    border-bottom: 1px solid var(--border-light);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+/* =============================================
+   4. LOGO
+   ============================================= */
+[data-theme="sunny"] .logo {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   5. TAB BUTTONS
+   ============================================= */
+[data-theme="sunny"] .tab-btn {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .tab-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+[data-theme="sunny"] .tab-btn.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+/* =============================================
+   6. STOCK LIST SIDEBAR
+   ============================================= */
+[data-theme="sunny"] .stock-list {
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-light);
+}
+
+/* =============================================
+   7. STOCK SEARCH
+   ============================================= */
+[data-theme="sunny"] .stock-search input {
+    background: #FFFFFF;
+    border: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .stock-search input:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+}
+[data-theme="sunny"] .stock-search input::placeholder {
+    color: var(--text-muted);
+}
+
+/* =============================================
+   8. STOCK CARDS
+   ============================================= */
+[data-theme="sunny"] .stock-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+[data-theme="sunny"] .stock-card:hover {
+    background: var(--bg-hover);
+    box-shadow: var(--shadow-hover);
+}
+[data-theme="sunny"] .stock-card.active {
+    border-color: var(--color-accent);
+    background: var(--bg-hover);
+}
+
+/* =============================================
+   9. STOCK CARD INNER ELEMENTS
+   ============================================= */
+[data-theme="sunny"] .sc-grip {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .sc-name {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .sc-code {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .sc-data-lbl {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .sc-data-val {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   10. STOCK CARD BAR (涨跌条)
+   ============================================= */
+[data-theme="sunny"] .stock-card-bar.up {
+    background: var(--color-up);
+}
+[data-theme="sunny"] .stock-card-bar.down {
+    background: var(--color-down);
+}
+[data-theme="sunny"] .stock-card-bar.flat {
+    background: var(--text-muted);
+}
+
+/* =============================================
+   11. STOCK CARD REMOVE BUTTON
+   ============================================= */
+[data-theme="sunny"] .stock-card .btn-remove {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .stock-card .btn-remove:hover {
+    color: var(--color-up);
+    background: rgba(220,38,38,0.08);
+}
+
+/* =============================================
+   12. INDEX BAR
+   ============================================= */
+[data-theme="sunny"] .index-bar,
+[data-theme="sunny"] .indices-bar {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .idx-name,
+[data-theme="sunny"] .index-name {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .idx-value,
+[data-theme="sunny"] .index-price {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   13. DETAIL TABS
+   ============================================= */
+[data-theme="sunny"] .detail-tabs {
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .detail-tab {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .detail-tab.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+[data-theme="sunny"] .detail-tab:hover:not(.active) {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+/* =============================================
+   14. NEWS TABS
+   ============================================= */
+[data-theme="sunny"] .news-tab {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .news-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+[data-theme="sunny"] .news-tab.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+/* =============================================
+   15. CARDS
+   ============================================= */
+[data-theme="sunny"] .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+[data-theme="sunny"] .card:hover {
+    box-shadow: var(--shadow-hover);
+}
+[data-theme="sunny"] .card-title {
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+
+/* =============================================
+   16. DATA TABLE
+   ============================================= */
+[data-theme="sunny"] .data-table th {
+    color: var(--text-secondary);
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .data-table td {
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .data-table tr:hover td {
+    background: var(--bg-hover);
+}
+
+/* =============================================
+   17. SUGGESTIONS TABLE
+   ============================================= */
+[data-theme="sunny"] .suggestions-table th {
+    color: var(--text-secondary);
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .suggestions-table td {
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .suggestions-table tr:hover td {
+    background: var(--bg-hover);
+}
+
+/* =============================================
+   18. BUTTONS
+   ============================================= */
+/* Primary — sky blue */
+[data-theme="sunny"] .btn-primary {
+    background: var(--color-accent);
+    color: #FFFFFF;
+    border: 1px solid var(--color-accent);
+}
+[data-theme="sunny"] .btn-primary:hover {
+    background: #1D4ED8;
+    border-color: #1D4ED8;
+}
+
+/* Ghost */
+[data-theme="sunny"] .btn-ghost {
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+    background: transparent;
+}
+[data-theme="sunny"] .btn-ghost:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+    border-color: var(--border-light);
+}
+
+/* Icon */
+[data-theme="sunny"] .btn-icon:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Refresh Now — sunshine gold */
+[data-theme="sunny"] .btn-refresh-now {
+    background: var(--color-accent-2);
+    color: #FFFFFF;
+    border: 1px solid var(--color-accent-2);
+}
+[data-theme="sunny"] .btn-refresh-now:hover {
+    background: #D97706;
+    border-color: #D97706;
+}
+
+/* Secondary */
+[data-theme="sunny"] .btn-secondary {
+    background: var(--bg-sidebar);
+    color: var(--text-primary);
+    border: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .btn-secondary:hover {
+    background: var(--bg-hover);
+    border-color: rgba(0,0,0,0.12);
+}
+
+/* Save — sunshine gold */
+[data-theme="sunny"] .btn-save {
+    background: var(--color-accent-2);
+    color: #FFFFFF;
+    border: 1px solid var(--color-accent-2);
+}
+[data-theme="sunny"] .btn-save:hover {
+    background: #D97706;
+    border-color: #D97706;
+}
+
+/* Test */
+[data-theme="sunny"] .btn-test {
+    background: transparent;
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent);
+}
+[data-theme="sunny"] .btn-test:hover {
+    background: rgba(37,99,235,0.08);
+}
+
+/* Password toggle */
+[data-theme="sunny"] .pwd-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Danger */
+[data-theme="sunny"] .btn-danger {
+    background: var(--color-up);
+    color: #FFFFFF;
+    border: 1px solid var(--color-up);
+}
+[data-theme="sunny"] .btn-danger:hover {
+    background: #B91C1C;
+    border-color: #B91C1C;
+}
+
+/* Cancel */
+[data-theme="sunny"] .btn-cancel {
+    background: var(--bg-sidebar);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .btn-cancel:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* =============================================
+   19. BADGES
+   ============================================= */
+[data-theme="sunny"] .badge-up {
+    background: rgba(220,38,38,0.10);
+    color: var(--color-up);
+}
+[data-theme="sunny"] .badge-down {
+    background: rgba(22,163,74,0.10);
+    color: var(--color-down);
+}
+[data-theme="sunny"] .badge-warn {
+    background: rgba(245,158,11,0.12);
+    color: #B45309;
+}
+[data-theme="sunny"] .badge-info {
+    background: rgba(37,99,235,0.10);
+    color: var(--color-accent);
+}
+
+/* =============================================
+   20. PROGRESS BAR
+   ============================================= */
+[data-theme="sunny"] .progress-bar {
+    background: rgba(0,0,0,0.06);
+}
+[data-theme="sunny"] .progress-fill {
+    background: var(--color-accent);
+}
+[data-theme="sunny"] .progress-bar-container {
+    color: var(--text-secondary);
+}
+
+/* =============================================
+   21. SIGNAL BUY / SELL / HOLD
+   ============================================= */
+[data-theme="sunny"] .signal-buy {
+    background: rgba(220,38,38,0.08);
+    color: var(--color-up);
+}
+[data-theme="sunny"] .signal-sell {
+    background: rgba(22,163,74,0.08);
+    color: var(--color-down);
+}
+[data-theme="sunny"] .signal-hold {
+    background: rgba(245,158,11,0.08);
+    color: #B45309;
+}
+[data-theme="sunny"] .report-signal.signal-buy {
+    background: rgba(220,38,38,0.08);
+}
+[data-theme="sunny"] .report-signal.signal-sell {
+    background: rgba(22,163,74,0.08);
+}
+[data-theme="sunny"] .report-signal.signal-hold {
+    background: rgba(245,158,11,0.08);
+}
+
+/* =============================================
+   22. ALERTS
+   ============================================= */
+[data-theme="sunny"] .alert-warn {
+    background: rgba(245,158,11,0.08);
+    border-left: 3px solid var(--color-warn);
+    color: #92400E;
+}
+[data-theme="sunny"] .alert-error {
+    background: rgba(220,38,38,0.06);
+    border-left: 3px solid var(--color-up);
+    color: #991B1B;
+}
+[data-theme="sunny"] .alert-info {
+    background: rgba(37,99,235,0.06);
+    border-left: 3px solid var(--color-accent);
+    color: #1E40AF;
+}
+
+/* =============================================
+   23. SENTIMENT BADGES
+   ============================================= */
+[data-theme="sunny"] .sent-badge.positive {
+    background: rgba(220,38,38,0.10);
+    color: var(--color-up);
+}
+[data-theme="sunny"] .sent-badge.negative {
+    background: rgba(22,163,74,0.10);
+    color: var(--color-down);
+}
+[data-theme="sunny"] .sent-badge.neutral {
+    background: rgba(168,162,158,0.15);
+    color: var(--text-secondary);
+}
+
+/* =============================================
+   24. REPORT RATING / ANNOUNCE TYPE
+   ============================================= */
+[data-theme="sunny"] .report-rating {
+    background: rgba(37,99,235,0.08);
+    color: var(--color-accent);
+}
+[data-theme="sunny"] .announce-type {
+    background: rgba(245,158,11,0.10);
+    color: #B45309;
+}
+
+/* =============================================
+   25. LIST ITEMS (news, research, announce)
+   ============================================= */
+[data-theme="sunny"] .news-item,
+[data-theme="sunny"] .research-item,
+[data-theme="sunny"] .announce-item {
+    border-bottom: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .news-item:hover,
+[data-theme="sunny"] .research-item:hover,
+[data-theme="sunny"] .announce-item:hover {
+    background: var(--bg-hover);
+}
+[data-theme="sunny"] .news-item a,
+[data-theme="sunny"] .research-item a,
+[data-theme="sunny"] .announce-item a {
+    color: var(--color-accent);
+}
+[data-theme="sunny"] .news-item a:hover,
+[data-theme="sunny"] .research-item a:hover,
+[data-theme="sunny"] .announce-item a:hover {
+    color: #1D4ED8;
+}
+
+/* =============================================
+   26. INFO LABEL / VALUE
+   ============================================= */
+[data-theme="sunny"] .info-label {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .info-value {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   27. CHART TABS
+   ============================================= */
+[data-theme="sunny"] .chart-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .chart-tab.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+/* =============================================
+   28. PNL LABEL
+   ============================================= */
+[data-theme="sunny"] .pnl-label {
+    color: var(--text-secondary);
+}
+
+/* =============================================
+   29. CALENDAR
+   ============================================= */
+[data-theme="sunny"] .calendar-header button {
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+    background: var(--bg-card);
+}
+[data-theme="sunny"] .calendar-header button:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+[data-theme="sunny"] .calendar-stats {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .calendar-day-header {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .calendar-day-num {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   30. MODAL
+   ============================================= */
+[data-theme="sunny"] .modal-overlay {
+    background: rgba(0,0,0,0.30);
+}
+[data-theme="sunny"] .modal-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: 0 16px 48px rgba(0,0,0,0.15);
+}
+[data-theme="sunny"] .modal-title {
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .modal-body {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .modal-body strong {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   31. CANCEL BUTTON (modal context)
+   ============================================= */
+[data-theme="sunny"] .btn-cancel {
+    background: var(--bg-sidebar);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .btn-cancel:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* =============================================
+   32. DANGER BUTTON (modal context)
+   ============================================= */
+[data-theme="sunny"] .btn-danger {
+    background: var(--color-up);
+    color: #FFFFFF;
+    border: 1px solid var(--color-up);
+}
+[data-theme="sunny"] .btn-danger:hover {
+    background: #B91C1C;
+    border-color: #B91C1C;
+}
+
+/* =============================================
+   33. FORM CONTROLS
+   ============================================= */
+[data-theme="sunny"] .form-control,
+[data-theme="sunny"] .form-select,
+[data-theme="sunny"] .form-input-sm,
+[data-theme="sunny"] .form-group input,
+[data-theme="sunny"] .form-group select {
+    background: #FFFFFF;
+    border: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .form-control:focus,
+[data-theme="sunny"] .form-select:focus,
+[data-theme="sunny"] .form-input-sm:focus,
+[data-theme="sunny"] .form-group input:focus,
+[data-theme="sunny"] .form-group select:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+    outline: none;
+}
+[data-theme="sunny"] .form-control::placeholder,
+[data-theme="sunny"] .form-input-sm::placeholder {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] select.form-control {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2378716C' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 30px;
+}
+
+/* =============================================
+   34. ORDER CARD
+   ============================================= */
+[data-theme="sunny"] .order-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+[data-theme="sunny"] .order-code {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .order-body {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .order-meta {
+    color: var(--text-muted);
+}
+
+/* =============================================
+   35. FILTER BAR
+   ============================================= */
+[data-theme="sunny"] .filter-bar > span {
+    color: var(--text-secondary);
+}
+
+/* =============================================
+   36. EPS FORECAST CARD
+   ============================================= */
+[data-theme="sunny"] .eps-forecast-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+
+/* =============================================
+   37. LAYER CARD
+   ============================================= */
+[data-theme="sunny"] .layer-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+[data-theme="sunny"] .layer-card .layer-title {
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .layer-row .label {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .layer-row .value {
+    color: var(--text-primary);
+}
+
+/* =============================================
+   38. STATUS BADGES
+   ============================================= */
+[data-theme="sunny"] .status-danger {
+    background: rgba(220,38,38,0.10);
+    color: var(--color-up);
+}
+[data-theme="sunny"] .status-warning {
+    background: rgba(245,158,11,0.10);
+    color: #B45309;
+}
+[data-theme="sunny"] .status-info {
+    background: rgba(37,99,235,0.10);
+    color: var(--color-accent);
+}
+[data-theme="sunny"] .status-default {
+    background: rgba(168,162,158,0.12);
+    color: var(--text-secondary);
+}
+
+/* =============================================
+   39. AI ANALYSIS
+   ============================================= */
+[data-theme="sunny"] .ai-left {
+    background: var(--bg-card);
+    border-right: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .ai-right {
+    background: var(--bg);
+}
+[data-theme="sunny"] .ai-container > .queue-panel {
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .ai-toggle-left,
+[data-theme="sunny"] .ai-toggle-right {
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+    background: var(--bg-card);
+}
+[data-theme="sunny"] .ai-toggle-left:hover,
+[data-theme="sunny"] .ai-toggle-right:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+[data-theme="sunny"] .ai-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+[data-theme="sunny"] .section-header h3 {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .update-time {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .analysis-progress {
+    background: rgba(0,0,0,0.05);
+}
+[data-theme="sunny"] .stage-indicator {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .stage-name {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .stage-dot.running {
+    background: var(--color-accent);
+    box-shadow: 0 0 6px rgba(37,99,235,0.40);
+}
+[data-theme="sunny"] .stage-dot.completed {
+    background: var(--color-down);
+}
+
+/* =============================================
+   40. RESULT SECTION / ADVICE
+   ============================================= */
+[data-theme="sunny"] .result-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .result-section h4 {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .advice-item {
+    border-bottom: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .advice-label {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .advice-value {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .advice-reasoning {
+    color: var(--text-muted);
+}
+
+/* =============================================
+   41. RISK TABS
+   ============================================= */
+[data-theme="sunny"] .risk-tab {
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+    background: var(--bg-card);
+}
+[data-theme="sunny"] .risk-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+[data-theme="sunny"] .risk-tab.active {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: rgba(37,99,235,0.06);
+}
+[data-theme="sunny"] .risk-content {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+}
+
+/* =============================================
+   42. ANOMALY ITEMS
+   ============================================= */
+[data-theme="sunny"] .anomaly-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .anomaly-empty {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .anomaly-stock {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .anomaly-change {
+    /* color set by .up/.down classes */
+}
+[data-theme="sunny"] .anomaly-message {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .anomaly-advice {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .anomaly-time {
+    color: var(--text-muted);
+}
+
+/* =============================================
+   43. REPORT ITEMS
+   ============================================= */
+[data-theme="sunny"] .report-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+}
+[data-theme="sunny"] .report-item:hover {
+    box-shadow: var(--shadow-hover);
+}
+[data-theme="sunny"] .report-code {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .report-time {
+    color: var(--text-muted);
+}
+[data-theme="sunny"] .report-item-meta {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .report-expander summary {
+    color: var(--color-accent);
+}
+[data-theme="sunny"] .report-expander summary:hover {
+    color: #1D4ED8;
+}
+[data-theme="sunny"] .report-content {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .report-content h3,
+[data-theme="sunny"] .report-content h4,
+[data-theme="sunny"] .report-content h5 {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .report-content strong {
+    color: var(--text-primary);
+}
+[data-theme="sunny"] .report-content code {
+    background: rgba(0,0,0,0.04);
+    color: var(--color-accent);
+}
+[data-theme="sunny"] .report-content hr {
+    border-color: var(--border-light);
+}
+[data-theme="sunny"] .report-chars {
+    color: var(--text-muted);
+}
+
+/* =============================================
+   44. SIGNAL BANNER
+   ============================================= */
+[data-theme="sunny"] .signal-banner {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-card);
+}
+
+/* =============================================
+   45. PORTFOLIO / SETTINGS CONTAINERS
+   ============================================= */
+[data-theme="sunny"] .portfolio-container,
+[data-theme="sunny"] .settings-container {
+    background: var(--bg);
+    color: var(--text-primary);
+}
+
+/* =============================================
+   46. EMPTY STATE
+   ============================================= */
+[data-theme="sunny"] .empty-state {
+    color: var(--text-muted);
+}
+
+/* =============================================
+   47. SCROLLBAR
+   ============================================= */
+[data-theme="sunny"] ::-webkit-scrollbar-track {
+    background: rgba(0,0,0,0.03);
+}
+[data-theme="sunny"] ::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.12);
+    border-radius: 4px;
+}
+[data-theme="sunny"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0,0,0,0.20);
+}
+
+/* =============================================
+   48. NOTIFY BADGE
+   ============================================= */
+[data-theme="sunny"] .notify-badge {
+    background: var(--color-accent);
+    color: #FFFFFF;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.25);
+}
+[data-theme="sunny"] .notify-badge span {
+    background: #FFFFFF;
+    color: var(--color-accent);
+}
+
+/* =============================================
+   49. ACCOUNT SWITCHER
+   ============================================= */
+[data-theme="sunny"] #accountSwitcher {
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+
+/* =============================================
+   50. MOBILE TAB BAR
+   ============================================= */
+[data-theme="sunny"] .mobile-tab-bar {
+    background: var(--bg-card);
+    border-top: 1px solid var(--border-light);
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
+}
+[data-theme="sunny"] .mobile-tab-item {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .mobile-tab-item.active {
+    color: var(--color-accent);
+}
+[data-theme="sunny"] .mobile-tab-item:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+/* =============================================
+   51. THEME SWITCHER
+   ============================================= */
+[data-theme="sunny"] .theme-switcher {
+    color: var(--text-secondary);
+}
+[data-theme="sunny"] .theme-switcher:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}

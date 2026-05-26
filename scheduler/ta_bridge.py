@@ -29,6 +29,8 @@ from scheduler.ai_engine import (
     get_stock_name,
 )
 from scheduler.gbrain_client import get_context, write_analysis_report
+from scheduler.data_snapshot import DataSnapshotCallback
+from scheduler.fact_checker import check_all_stages
 from tasks import AnalysisTask, _tasks, _tasks_status, MAX_CONCURRENT, MAX_QUEUE
 
 
@@ -78,40 +80,69 @@ PIPELINE_STAGES = [
 # ============================================================
 # Core TA runner (blocking — intended for asyncio.to_thread)
 # ============================================================
+# 数据快照：由 DataSnapshotCallback 在 LangChain callback 中自动捕获
+# 七层分析师工具的原始返回值，不再依赖腾讯/东财行情API
+# ============================================================
 
-def run_trading_agents(task_id: str, code: str, trade_date: str):
+
+def _save_stage_progress(task_id: str, code: str, task):
+    """将已完成的stage报告存入analysis_progress表，供断点续跑加载。"""
+    try:
+        db = _get_db()
+        try:
+            for stage_id, stage_data in task.stages.items():
+                if stage_data.get("status") == "completed" and stage_data.get("report"):
+                    db.execute(
+                        "INSERT OR REPLACE INTO analysis_progress (task_id, code, stage_id, report_text, completed_at) VALUES (?, ?, ?, ?, ?)",
+                        (task_id, code, stage_id, stage_data["report"], stage_data.get("completed_at"))
+                    )
+            db.commit()
+            logger.info("_save_stage_progress: 已保存 %s 的进度到DB", task_id)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("_save_stage_progress 失败: %s", e)
+
+
+def _load_stage_progress(task_id: str) -> dict:
+    """从analysis_progress表加载之前任务的已完成stage报告。"""
+    try:
+        db = _get_db()
+        try:
+            rows = db.execute(
+                "SELECT stage_id, report_text, completed_at FROM analysis_progress WHERE task_id = ?",
+                (task_id,)
+            ).fetchall()
+            result = {}
+            for row in rows:
+                result[row["stage_id"]] = {
+                    "report": row["report_text"],
+                    "completed_at": row["completed_at"],
+                }
+            logger.info("_load_stage_progress: 从DB加载了 %d 个阶段 (task=%s)", len(result), task_id)
+            return result
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("_load_stage_progress 失败: %s", e)
+        return {}
+
+
+async def run_with_snapshot(task_id: str, code: str, trade_date: str,
+                           resume_from_task_id: str = None):
+    """在线程中运行分析（数据快照由 DataSnapshotCallback 在分析过程中自动捕获）。"""
+    await asyncio.to_thread(
+        run_trading_agents, task_id, code, trade_date,
+        resume_from_task_id,
+    )
+
+
+def run_trading_agents(task_id: str, code: str, trade_date: str,
+                       resume_from_task_id: str = None):
     """TradingAgents-astock分析（在线程池中运行）"""
     task = _tasks[task_id]
     task.status = "running"
     task.started_at = datetime.now().isoformat()
-
-    # ★ 快照当前行情（腾讯+东财双源，避免不同数据源PE口径差异导致假偏差）
-    try:
-        from data.helpers import asyncio, tencent_quote_batch
-        import aiohttp
-        async def _capture():
-            quotes = await tencent_quote_batch([code])
-            snap = dict(quotes.get(code, {}))
-            # 同时拉东财PE（PUSH2 f162=PE动态 f163=PE静态 f115=PE_TTM）
-            secid = f"1.{code}" if code.startswith("60") else f"0.{code}"
-            async with aiohttp.ClientSession() as s:
-                url = "https://push2.eastmoney.com/api/qt/stock/get"
-                params = {"secid": secid, "fields": "f162,f163,f115,f167,f43", "ut": "fa5fd1943c7b386f172d6893dbfba10b"}
-                async with s.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as r:
-                    d = await r.json(content_type=None)
-                    em = d.get("data", {}) if d else {}
-                    if em:
-                        snap["em_pe_dynamic"] = em.get("f162")  # PE动态
-                        snap["em_pe_static"] = em.get("f163")   # PE静态
-                        snap["em_pe_ttm"] = em.get("f115")      # PE_TTM
-                        snap["em_price"] = em.get("f43")        # 现价
-                        snap["em_pb"] = em.get("f167")          # PB
-            return snap
-        snap = asyncio.run(_capture())
-        task._market_snapshot = json.dumps(snap) if snap else None
-    except Exception as e:
-        logger.warning("行情快照失败: %s", e)
-        task._market_snapshot = None
 
     # 获取深度参数
     depth = getattr(task, 'depth', 'standard') or 'standard'
@@ -152,6 +183,18 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
         task.stages[aid]["status"] = "running"
         task.stages[aid]["started_at"] = datetime.now().isoformat()
 
+    # ★ 断点续跑：加载之前完成的stage报告
+    _resume_stages = {}
+    if resume_from_task_id:
+        _resume_stages = _load_stage_progress(resume_from_task_id)
+        if _resume_stages:
+            for sid, data in _resume_stages.items():
+                if sid in task.stages and task.stages[sid].get("status") != "skipped":
+                    task.stages[sid]["status"] = "completed"
+                    task.stages[sid]["report"] = data["report"]
+                    task.stages[sid]["completed_at"] = data["completed_at"]
+            logger.info("断点续跑: 从任务 %s 加载了 %d 个已完成阶段", resume_from_task_id, len(_resume_stages))
+
     try:
         # L3: gbrain read-enhancement
         gbrain_context = ""
@@ -178,6 +221,8 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
             "如果数据源未提供某个指标，明确说【该数据未提供】，不得猜测。"
             "所有数值引用必须与数据源完全一致，不得四舍五入或近似。"
             "禁止在推理过程中凭空生成历史价格、对比数据或假设数值。"
+            f"【标的信息】本报告分析的股票是 {task.code}（{task.name}），"
+            f"报告中必须使用正确的公司名称「{task.name}」，禁止使用其他公司名称。"
         )
         current_system = config.get("system_prompt", "")
         config["system_prompt"] = accuracy_prefix + "\n\n" + current_system
@@ -191,8 +236,14 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
         start_time = time.time()
 
         token_tracker = TokenTrackerCallback()
-        graph = TradingAgentsGraph(selected_analysts=analyst_ids, debug=True, config=config, callbacks=[token_tracker])
+        snapshot_cb = DataSnapshotCallback()
+        graph = TradingAgentsGraph(selected_analysts=analyst_ids, debug=True, config=config, callbacks=[token_tracker, snapshot_cb])
         logger.info("Graph实例化耗时: %.2fs", time.time() - start_time)
+
+        # ★ 初始化数据快照追踪：设置第一个分析师阶段
+        _analyst_queue = [aid for aid in analyst_ids if task.stages.get(aid, {}).get("status") == "running"]
+        if _analyst_queue:
+            snapshot_cb.set_current_stage(_analyst_queue[0])
 
         # ── 逐节点stream，通过state新增key实时更新阶段 ──
         STATE_KEY_TO_STAGE = {
@@ -232,33 +283,57 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
                 stream_args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
             trace = []
-            for chunk in graph.graph.stream(init_state, **stream_args):
-                # 检测state key值从空变为有内容 → 映射到stage
-                for key, stage_id in STATE_KEY_TO_STAGE.items():
-                    if stage_id in _completed_stages:
-                        continue
-                    value = chunk.get(key)
-                    # 字符串: 内容>20字才算有报告; dict: 至少一个子值>10字
-                    has_content = False
-                    if isinstance(value, str) and len(value.strip()) > 20:
-                        has_content = True
-                    elif isinstance(value, dict):
-                        has_content = any(len(str(v).strip()) > 10 for v in value.values() if isinstance(v, (str, int, float)))
-                    if has_content:
-                        # 跳过标记为skipped的阶段（快速模式）
-                        if task.stages.get(stage_id, {}).get("status") == "skipped":
-                            _completed_stages.add(stage_id)
-                            continue
-                        _completed_stages.add(stage_id)
-                        task.stages[stage_id]["status"] = "completed"
-                        task.stages[stage_id]["completed_at"] = datetime.now().isoformat()
-                        logger.info("Stage完成: %s (key='%s', len=%d)", stage_id, key, len(str(value)))
+            _last_stream_error = None
+            for _attempt in range(3):
+                try:
+                    trace = []
+                    for chunk in graph.graph.stream(init_state, **stream_args):
+                        # 检测state key值从空变为有内容 → 映射到stage
+                        for key, stage_id in STATE_KEY_TO_STAGE.items():
+                            if stage_id in _completed_stages:
+                                continue
+                            value = chunk.get(key)
+                            # 字符串: 内容>20字才算有报告; dict: 至少一个子值>10字
+                            has_content = False
+                            if isinstance(value, str) and len(value.strip()) > 20:
+                                has_content = True
+                            elif isinstance(value, dict):
+                                has_content = any(len(str(v).strip()) > 10 for v in value.values() if isinstance(v, (str, int, float)))
+                            if has_content:
+                                # 跳过标记为skipped的阶段（快速模式）
+                                if task.stages.get(stage_id, {}).get("status") == "skipped":
+                                    _completed_stages.add(stage_id)
+                                    continue
+                                _completed_stages.add(stage_id)
+                                task.stages[stage_id]["status"] = "completed"
+                                task.stages[stage_id]["completed_at"] = datetime.now().isoformat()
+                                logger.info("Stage完成: %s (key='%s', len=%d)", stage_id, key, len(str(value)))
+                                # ★ 数据快照：flush 当前阶段的工具数据，切换到下一阶段
+                                snapshot_cb.flush()
+                                _next_analyst = [a for a in _analyst_queue if a not in _completed_stages]
+                                if _next_analyst:
+                                    snapshot_cb.set_current_stage(_next_analyst[0])
+                                # ★ 每完成一个stage立即存盘
+                                _save_stage_progress(task_id, code, task)
 
-                if chunk.get("messages") and len(chunk["messages"]) > 0:
-                    chunk["messages"][-1].pretty_print()
-                trace.append(chunk)
-                # 实时同步token统计到task，供SSE读取
-                task.token_stats = token_tracker.get_stats()
+                        if chunk.get("messages") and len(chunk["messages"]) > 0:
+                            chunk["messages"][-1].pretty_print()
+                        trace.append(chunk)
+                        # 实时同步token统计到task，供SSE读取
+                        task.token_stats = token_tracker.get_stats()
+                    _last_stream_error = None
+                    break  # 成功，退出重试循环
+                except Exception as stream_err:
+                    _last_stream_error = stream_err
+                    if _attempt < 2:
+                        wait_sec = 15 * (_attempt + 1)
+                        logger.warning("Stream第%d次尝试失败: %s，%ds后重试...", _attempt+1, stream_err, wait_sec)
+                        _save_stage_progress(task_id, code, task)  # 保存已有的进度
+                        time.sleep(wait_sec)
+                    else:
+                        logger.error("Stream重试3次均失败: %s", stream_err)
+            if _last_stream_error:
+                raise _last_stream_error
 
             final_state = trace[-1] if trace else {}
             signal = graph.process_signal(final_state.get("final_trade_decision", ""))
@@ -326,10 +401,15 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
         trader_text = task.stages.get("trader", {}).get("report", "") or ""
         parse_text = all_text + "\n" + pm_text + "\n" + trader_text
 
-        signal_str = extract_signal(parse_text)
-        target_price = extract_target_price(parse_text)
-        confidence = extract_confidence(parse_text)
-        risk_score = extract_risk_score(parse_text)
+        # 提取信号：只从 PM 最终决策提取，不混入 trader 执行方案
+        # trader 文本含"卖出"/"买入"是执行方案描述，不是决策
+        signal_str = extract_signal(pm_text)
+        if signal_str == "HOLD":
+            # PM 没有明确信号，尝试从 final_decision reasoning 提取
+            signal_str = extract_signal(all_text)
+        target_price = extract_target_price(pm_text) or extract_target_price(all_text)
+        confidence = extract_confidence(pm_text) or extract_confidence(all_text)
+        risk_score = extract_risk_score(pm_text) or extract_risk_score(all_text)
 
         risk_debate = parse_risk_debate(risk_state)
 
@@ -338,6 +418,8 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
         task.elapsed = round(elapsed, 1)
         task.token_stats = token_tracker.get_stats()
         task.result = {
+            "code": task.code,
+            "name": task.name,
             "action": signal_str,
             "target_price": target_price,
             "confidence": confidence,
@@ -349,6 +431,40 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
             "gbrain_context": gbrain_context,
         }
 
+        # ★ 事实账本：用旁观者模型逐阶段核对数据快照 vs 报告
+        try:
+            snapshot_summary = snapshot_cb.get_summary()
+            logger.info("数据快照摘要: %s", snapshot_summary)
+            data_snapshot = {}
+            for sid in ["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]:
+                data_snapshot[sid] = snapshot_cb.get_stage_snapshot(sid)
+            db = _get_db()
+            try:
+                # 注入股票代码→名称映射，供事实账本核对公司名称
+                try:
+                    _name_rows = db.execute("SELECT code, name FROM watchlist").fetchall()
+                    name_lines = ["【股票代码→公司名称映射】"]
+                    for _nr in _name_rows:
+                        name_lines.append(f"{_nr['code']} = {_nr['name']}")
+                    if task.code and task.name:
+                        name_lines.append(f"{task.code} = {task.name}")
+                    name_info = "\n".join(name_lines)
+                    for sid in data_snapshot:
+                        if data_snapshot[sid]:
+                            data_snapshot[sid] = data_snapshot[sid] + "\n\n" + name_info
+                except Exception:
+                    pass
+                fact_ledger = check_all_stages(data_snapshot, task.stages, db)
+            finally:
+                db.close()
+            task._fact_ledger = fact_ledger
+            logger.info("事实账本生成完成: 准确率=%.1f%%, 幻觉=%d",
+                        fact_ledger.get("overall_accuracy", 0),
+                        fact_ledger.get("total_hallucinations", 0))
+        except Exception as e:
+            logger.warning("事实账本生成失败: %s", e)
+            task._fact_ledger = None
+
         _save_report_to_db(task)
         write_analysis_report(task)
 
@@ -357,10 +473,12 @@ def run_trading_agents(task_id: str, code: str, trade_date: str):
     except ImportError as e:
         task.status = "failed"
         task.error = f"TradingAgents未安装: {e}"
+        _save_stage_progress(task_id, code, task)
         logger.error("TradingAgents未安装: %s", e)
     except Exception as e:
         task.status = "failed"
         task.error = str(e)
+        _save_stage_progress(task_id, code, task)
         logger.error("TradingAgents分析失败: %s", e, exc_info=True)
 
 
@@ -418,43 +536,77 @@ def _run_bystander_verify(db, report_id, code, _unused):
     if not api_key:
         return
 
-    # 构建上下文（简化版：报告摘要 + 快照 + 事实账本）
-    report_text = (row["final_decision"] or "") or ""
-    for col in ["market_report", "fundamentals_report"]:
-        v = row[col] or ""
-        if v: report_text += "\n" + v[:500]
+    # 构建上下文：①分析结论 ②报告全文 ③事实账本
+    signal = row["signal"] or "N/A"
+    confidence = row["confidence"]
+    risk_score = row["risk_score"]
+    conclusion = f"信号={signal}"
+    if confidence: conclusion += f" 置信度={confidence}"
+    if risk_score: conclusion += f" 风险评分={risk_score}"
 
-    snapshot_info = ""
+    # ② 报告全文（7分析师 + 4决策链，各400字）
+    analyst_sections = [
+        ("市场技术", row["market_report"]),
+        ("市场情绪", row["sentiment_report"]),
+        ("新闻舆情", row["news_report"]),
+        ("基本面", row["fundamentals_report"]),
+        ("政策分析", row["policy_report"]),
+        ("游资追踪", row["hot_money_report"]),
+        ("解禁监控", row["lockup_report"]),
+    ]
+    decision_sections = [
+        ("多空辩论", row["investment_debate"]),
+        ("风控评估", row["risk_debate"]),
+        ("交易计划", row["trader_plan"]),
+        ("最终决策", row["final_decision"]),
+    ]
+    active_analysts = [name for name, v in analyst_sections if v]
+    report_text = ""
+    for name, content in analyst_sections:
+        if content:
+            report_text += f"\n### {name}\n{content[:400]}\n"
+    for name, content in decision_sections:
+        if content:
+            report_text += f"\n### {name}\n{content[:400]}\n"
+
+    # ③ 事实账本（新格式 stages）
     fact_check_info = "无"
-    if row["market_snapshot"]:
-        try:
-            snap = json.loads(row["market_snapshot"])
-            snapshot_info = f"现价={snap.get('price')} PE={snap.get('pe')}"
-            if snap.get("em_pe_dynamic"):
-                snapshot_info += f" PE动态={snap['em_pe_dynamic']}"
-            if snap.get("em_pe_static"):
-                snapshot_info += f" PE静态={snap['em_pe_static']}"
-        except: pass
     if row["fact_check"]:
         try:
             fc = json.loads(row["fact_check"])
-            fact_check_info = f"准确率={fc.get('accuracy')}% (通过{fc.get('verified',0)}/偏差{fc.get('mismatched',0)})"
+            if fc.get("stages"):
+                lines = [f"总准确率={fc.get('overall_accuracy',0)}% 幻觉={fc.get('total_hallucinations',0)}"]
+                for sid, st in fc["stages"].items():
+                    lines.append(f"  {sid}: {st.get('accuracy',0)}% (匹配{st.get('matched',0)}/幻觉{st.get('mismatched',0)}/无源{st.get('no_source',0)})")
+                    for h in st.get("hallucinations", [])[:3]:
+                        if h.get("status") == "mismatch":
+                            lines.append(f"    ⚠ {h['keyword']}: 报告={h.get('claimed_value')} 实际={h.get('snapshot_value')}")
+                fact_check_info = "\n".join(lines)
         except: pass
 
     prompt = f"""你是A股分析报告的独立复核员。评估报告质量。
 
-## 分析报告
-{report_text[:2000]}
+## 分析结论
+{conclusion}
 
-## 实际行情
-{snapshot_info}
+## 分析元数据
+已运行分析师({len(active_analysts)}个): {', '.join(active_analysts)}
+
+## 完整报告
+{report_text[:3500]}
 
 ## 事实核查
 {fact_check_info}
 
 ## 评估要求
-基于以上证据评估数据准确性、逻辑严密性、整体可信度。
-JSON输出：{{"hallucinations":[],"overall_score":0-100,"summary":"结论"}}"""
+基于以上证据评估：
+1. **逻辑严密性**：各分析师观点是否自洽，结论是否被报告内容支撑
+2. **深度充分性**：分析广度是否足够，是否遗漏关键维度
+3. **数据一致性**：报告中引用的数字是否与事实核查结果一致
+4. **整体可信度**：综合评分
+
+JSON输出：
+{{"hallucinations": [{{"claim": "具体问题", "issue": "说明", "severity": "high/medium/low"}}], "overall_score": 0-100, "summary": "评估结论"}}"""
 
     try:
         result = subprocess.run([
@@ -487,76 +639,43 @@ def _save_report_to_db(task: AnalysisTask):
         stages = task.stages
         result = task.result or {}
 
-        # ★ 基于快照计算事实账本
+        # ★ 事实账本：使用旁观者模型逐阶段核对的结果
         fact_check_json = None
-        snapshot_str = getattr(task, '_market_snapshot', None)
-        if snapshot_str:
+        fact_ledger = getattr(task, '_fact_ledger', None)
+        if fact_ledger:
             try:
-                snapshot = json.loads(snapshot_str)
-                report_text = ""
-                for col in ["market_report","fundamentals_report","final_decision"]:
-                    val = (stages.get(col, {}).get("report") or
-                           stages.get(col, {}) if isinstance(stages.get(col), str) else None)
-                    if val:
-                        report_text += (val if isinstance(val, str) else str(val)) + "\n"
-                # 用快照数据做人肉比对（PE等多源交叉验证）
-                claims = _extract_claims(report_text)
-                actual_data = {}
-                for k, v in {
-                    "现价": snapshot.get("price"),
-                    "涨跌幅": snapshot.get("change_pct"),
-                    "PE": snapshot.get("pe"),
-                    "总市值": snapshot.get("total_market_cap"),
-                    "成交量": snapshot.get("volume"),
-                }.items():
-                    if v is not None:
-                        actual_data[k] = [v]
-                # 东财多口径PE作为备选匹配源
-                em_pes = []
-                for em_key in ["em_pe_dynamic", "em_pe_static", "em_pe_ttm"]:
-                    v = snapshot.get(em_key)
-                    if v is not None and float(v) > 0:
-                        em_pes.append(v)
-                if em_pes:
-                    actual_data["PE"] = [snapshot.get("pe")] + em_pes if snapshot.get("pe") else em_pes
-                # 东财现价备选
-                if snapshot.get("em_price"):
-                    actual_data["现价"].append(snapshot["em_price"]) if snapshot.get("price") else [snapshot["em_price"]]
-                if snapshot.get("em_pb"):
-                    actual_data.setdefault("PB", [])
-                    actual_data["PB"].append(snapshot["em_pb"])
-
-                results = []
-                for claim in claims:
-                    matched = False
-                    actual_val = None
-                    for key, vals in actual_data.items():
-                        if claim["keyword"] in key:
-                            for val in vals:
-                                if val and abs(float(claim["value"]) - float(val)) < max(abs(float(val)) * 0.1, 1):
-                                    matched = True
-                                    actual_val = val
-                                    break
-                            if not matched and vals:
-                                actual_val = vals[0]  # 显示首选值
-                            break
-                    results.append({
-                        "claim": claim["text"], "keyword": claim["keyword"],
-                        "claimed_value": claim["value"], "actual_value": actual_val,
-                        "status": "unverifiable" if not actual_val else ("verified" if matched else "mismatch"),
-                    })
-                verified = sum(1 for r in results if r["status"] == "verified")
-                mismatched = sum(1 for r in results if r["status"] == "mismatch")
-                total = len(results)
-                fact_check_json = json.dumps({
-                    "accuracy": round(verified / max(total - (total - verified - mismatched), 1) * 100, 1),
-                    "verified": verified, "mismatched": mismatched,
-                    "unverifiable": total - verified - mismatched,
-                    "snapshot_time": datetime.now().isoformat(),
-                    "claims": results[:20],
-                }, ensure_ascii=False)
+                fact_check_json = json.dumps(fact_ledger, ensure_ascii=False)
             except Exception as e:
-                logger.warning("事实账本计算失败: %s", e)
+                logger.warning("事实账本序列化失败: %s", e)
+
+        # 数据快照摘要（存入 market_snapshot 列供旁观者复核参考）
+        snapshot_str = None
+        try:
+            snapshot_cb_summary = {}
+            for sid in ["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]:
+                stage_data = stages.get(sid, {})
+                if stage_data.get("report"):
+                    snapshot_cb_summary[sid] = {
+                        "status": stage_data.get("status"),
+                        "report_len": len(stage_data.get("report", "")),
+                    }
+            if snapshot_cb_summary:
+                snapshot_str = json.dumps(snapshot_cb_summary, ensure_ascii=False)
+        except Exception:
+            pass
+
+        # 模型模式
+        model_mode = "balanced"
+        try:
+            from api.settings_api import _conn, DEFAULTS
+            sdb = _conn()
+            row = sdb.execute("SELECT value FROM settings WHERE key='llm_provider'").fetchone()
+            sdb.close()
+            model_mode = (row[0] if row else DEFAULTS.get("llm_provider", "balanced"))
+        except Exception:
+            pass
+
+        depth = getattr(task, 'depth', 'standard') or 'standard'
 
         db.execute("""
             INSERT INTO analysis_reports
@@ -564,8 +683,9 @@ def _save_report_to_db(task: AnalysisTask):
              market_report, sentiment_report, news_report, fundamentals_report,
              policy_report, hot_money_report, lockup_report,
              investment_debate, risk_debate, final_decision, trader_plan,
-             raw_state, duration_seconds, market_snapshot, fact_check, bystander_verify)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             raw_state, duration_seconds, market_snapshot, fact_check, bystander_verify,
+             depth, model_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task.task_id,
             task.code,
@@ -588,6 +708,8 @@ def _save_report_to_db(task: AnalysisTask):
             snapshot_str,
             fact_check_json,
             None,  # bystander_verify 后续自动填充
+            depth,
+            model_mode,
         ))
         db.commit()
         report_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -595,11 +717,19 @@ def _save_report_to_db(task: AnalysisTask):
         task.result['_reportId'] = report_id
         logger.info("报告已保存: id=%d, code=%s", report_id, task.code)
 
-        # ★ 自动运行报告复核并存入DB
-        try:
-            _run_bystander_verify(db, report_id, task.code, report_id)
-        except Exception as e:
-            logger.warning("报告复核自动运行失败: %s", e)
+        # 自动创建信号跟踪
+        signal = result.get("signal")
+        if signal:
+            try:
+                from scheduler.signal_tracker import create_tracking
+                entry_price = result.get("entry_price") or result.get("current_price")
+                target_price = result.get("target_price")
+                name = result.get("name") or task.code
+                create_tracking(report_id, task.code, name, signal,
+                                entry_price or 0, target_price)
+            except Exception as e:
+                logger.warning("自动创建信号跟踪失败: %s", e)
+
     except Exception as e:
         logger.error("保存报告失败: %s", e)
     finally:
@@ -645,7 +775,7 @@ async def trigger_l2_for_stock(code: str, trade_date: str = None) -> Optional[st
     from tasks import run_with_limits
 
     async def _wrapper(tid, c, td):
-        await asyncio.to_thread(run_trading_agents, tid, c, td)
+        await run_with_snapshot(tid, c, td)
 
     asyncio.create_task(run_with_limits(task_id, _wrapper, code, trade_date))
     logger.info("🔄 Auto-triggered L2: %s(%s) task=%s", name, code, task_id)

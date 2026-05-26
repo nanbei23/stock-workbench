@@ -133,6 +133,11 @@ function updateModelOptions() {
     const currentQuick = quickSelect.value;
     deepSelect.innerHTML = catalog.deep.map(m => `<option value="${m}" ${m === currentDeep ? 'selected' : ''}>${m}</option>`).join('');
     quickSelect.innerHTML = catalog.quick.map(m => `<option value="${m}" ${m === currentQuick ? 'selected' : ''}>${m}</option>`).join('');
+    // 更新端点 placeholder
+    const endpointInput = document.getElementById('set-custom_endpoint');
+    if (endpointInput && PROVIDER_DEFAULT_ENDPOINTS[provider]) {
+        endpointInput.placeholder = PROVIDER_DEFAULT_ENDPOINTS[provider];
+    }
 }
 
 // ── 测试API连接 ──
@@ -173,6 +178,149 @@ async function testVerificationConnection() {
     } catch (e) {
         resultSpan.className = 'test-result error';
         resultSpan.textContent = '✗ 网络错误';
+    }
+}
+
+// ── 供应商默认端点 ──
+const PROVIDER_DEFAULT_ENDPOINTS = {
+    deepseek: 'https://api.deepseek.com',
+    openai: 'https://api.openai.com',
+    anthropic: 'https://api.anthropic.com',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode',
+    glm: 'https://open.bigmodel.cn/api/paas',
+    xai: 'https://api.x.ai',
+    minimax: 'https://api.minimax.chat',
+    ollama: 'http://localhost:11434',
+    google: 'https://generativelanguage.googleapis.com',
+};
+
+// ── 获取远程模型列表 ──
+async function fetchRemoteModels() {
+    const endpointInput = document.getElementById('set-custom_endpoint');
+    const endpoint = endpointInput.value.trim() || endpointInput.placeholder.trim();
+    const apiKey = document.getElementById('set-api_key').value.trim();
+    const resultSpan = document.getElementById('fetchModelsResult');
+    const btn = document.getElementById('fetchModelsBtn');
+    
+    if (!endpoint) {
+        resultSpan.className = 'test-result error';
+        resultSpan.textContent = '✗ 请先填写API端点';
+        return;
+    }
+    
+    btn.disabled = true;
+    btn.textContent = '⏳ 获取中...';
+    resultSpan.className = 'test-result';
+    resultSpan.textContent = '正在连接...';
+    
+    try {
+        const resp = await fetch(`${API_BASE}/settings/fetch-models`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ endpoint, api_key: apiKey })
+        });
+        const data = await resp.json();
+        
+        if (resp.ok && data.status === 'ok' && data.models.length > 0) {
+            const deepSelect = document.getElementById('set-deep_think_model');
+            const quickSelect = document.getElementById('set-quick_think_model');
+            const currentDeep = deepSelect.value;
+            const currentQuick = quickSelect.value;
+            
+            const opts = data.models.map(m => 
+                `<option value="${m}" ${m === currentDeep ? 'selected' : ''}>${m}</option>`
+            ).join('');
+            deepSelect.innerHTML = opts;
+            quickSelect.innerHTML = data.models.map(m => 
+                `<option value="${m}" ${m === currentQuick ? 'selected' : ''}>${m}</option>`
+            ).join('');
+            
+            // 更新缓存
+            const provider = document.getElementById('set-llm_provider').value;
+            MODEL_CATALOG[provider] = { deep: [...data.models], quick: [...data.models] };
+            
+            resultSpan.className = 'test-result ok';
+            resultSpan.textContent = `✓ 获取到 ${data.models.length} 个模型`;
+        } else {
+            resultSpan.className = 'test-result error';
+            resultSpan.textContent = `✗ ${data.detail || '未获取到模型'}`;
+        }
+    } catch (e) {
+        resultSpan.className = 'test-result error';
+        resultSpan.textContent = `✗ 网络错误: ${e.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 获取模型';
+    }
+}
+
+// ── 核对模型 → 默认端点映射（复用 PROVIDER_DEFAULT_ENDPOINTS）──
+function getVerEndpoint(model) {
+    if (!model) return PROVIDER_DEFAULT_ENDPOINTS.mimo || '';
+    const m = model.toLowerCase();
+    if (m.includes('mimo'))     return 'https://token-plan-cn.xiaomimimo.com/v1';
+    if (m.includes('deepseek')) return PROVIDER_DEFAULT_ENDPOINTS.deepseek;
+    if (m.includes('gpt') || m.includes('o1') || m.includes('o3')) return PROVIDER_DEFAULT_ENDPOINTS.openai;
+    if (m.includes('claude'))   return PROVIDER_DEFAULT_ENDPOINTS.anthropic;
+    if (m.includes('qwen'))     return PROVIDER_DEFAULT_ENDPOINTS.qwen;
+    if (m.includes('glm'))      return PROVIDER_DEFAULT_ENDPOINTS.glm;
+    if (m.includes('grok'))     return PROVIDER_DEFAULT_ENDPOINTS.xai;
+    if (m.includes('abab'))     return PROVIDER_DEFAULT_ENDPOINTS.minimax;
+    if (m.includes('gemini'))   return PROVIDER_DEFAULT_ENDPOINTS.google;
+    if (m.includes('llama') || m.includes('mistral')) return PROVIDER_DEFAULT_ENDPOINTS.ollama;
+    return '';
+}
+
+function updateVerEndpointPlaceholder() {
+    const model = document.getElementById('set-verification_model')?.value;
+    const endpointInput = document.getElementById('set-verification_endpoint');
+    const ep = getVerEndpoint(model);
+    if (ep) endpointInput.placeholder = ep;
+}
+
+// ── 获取核对模型列表 ──
+async function fetchVerificationModels() {
+    const endpointInput = document.getElementById('set-verification_endpoint');
+    const endpoint = endpointInput.value.trim() || endpointInput.placeholder.trim();
+    const apiKey = document.getElementById('set-verification_api_key')?.value?.trim() || '';
+    const resultSpan = document.getElementById('fetchVerModelsResult');
+    const btn = document.getElementById('fetchVerModelsBtn');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ 获取中...';
+    resultSpan.className = 'test-result';
+    resultSpan.textContent = '正在连接...';
+
+    try {
+        const resp = await fetch(`${API_BASE}/settings/fetch-models`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ endpoint, api_key: apiKey })
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.status === 'ok' && data.models.length > 0) {
+            const select = document.getElementById('set-verification_model');
+            const currentValue = select.value;
+            // 保留常用选项 + 追加远程模型
+            const presets = ['mimo-v2.5-pro', 'deepseek-chat', 'deepseek-reasoner'];
+            const merged = [...new Set([...presets, ...data.models])];
+            select.innerHTML = merged.map(m =>
+                `<option value="${m}" ${m === currentValue ? 'selected' : ''}>${m}</option>`
+            ).join('');
+
+            resultSpan.className = 'test-result ok';
+            resultSpan.textContent = `✓ 获取到 ${data.models.length} 个模型`;
+        } else {
+            resultSpan.className = 'test-result error';
+            resultSpan.textContent = `✗ ${data.detail || '未获取到模型'}`;
+        }
+    } catch (e) {
+        resultSpan.className = 'test-result error';
+        resultSpan.textContent = `✗ 网络错误: ${e.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 获取模型';
     }
 }
 

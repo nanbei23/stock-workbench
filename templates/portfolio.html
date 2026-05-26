@@ -38,71 +38,42 @@
         <div style="font-size:1.5rem;font-weight:700;font-family:var(--font-mono);" id="cash">--</div>
       </div>
       <div>
-        <div style="font-size:0.8rem;color:var(--text-secondary);">总盈亏</div>
-        <div style="font-size:1.5rem;font-weight:700;font-family:var(--font-mono);" id="totalPnl">--</div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">当日盈亏</div>
+        <div style="font-size:1.5rem;font-weight:700;font-family:var(--font-mono);" id="dailyPnl">--</div>
       </div>
     </div>
     <div class="grid grid-4" style="margin-top:8px;">
       <div>
-        <div style="font-size:0.8rem;color:var(--text-secondary);">总佣金</div>
-        <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="totalCommission">--</div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">总盈亏</div>
+        <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="totalPnl">--</div>
       </div>
       <div>
-        <div style="font-size:0.8rem;color:var(--text-secondary);">总印花税</div>
-        <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="totalStampTax">--</div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">资金使用率</div>
+        <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="cashRatio">--</div>
+      </div>
+      <div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">胜率</div>
+        <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="winRateOverview">--</div>
       </div>
     </div>
   </div>
 
   <!-- Tab切换 -->
   <div class="detail-tabs">
-    <button class="detail-tab active" onclick="switchPTab('holdings')">持仓明细</button>
-    <button class="detail-tab" onclick="switchPTab('trades')">成交记录</button>
-    <button class="detail-tab" onclick="switchPTab('orders')">条件单</button>
-    <button class="detail-tab" onclick="switchPTab('calendar')">盈亏日历</button>
+    <button class="detail-tab active" data-tab="holdings" onclick="switchPTab('holdings')">📊 持仓</button>
+    <button class="detail-tab" data-tab="plan" onclick="switchPTab('plan')">📋 计划</button>
+    <button class="detail-tab" data-tab="trades" onclick="switchPTab('trades')">📝 交易</button>
   </div>
 
   <div id="ptab-holdings">
     <div class="card">
       <table class="data-table">
         <thead>
-          <tr><th>股票</th><th>持仓</th><th>成本</th><th>现价</th><th>市值</th><th>盈亏</th><th>盈亏%</th></tr>
+          <tr><th>股票</th><th>持仓</th><th>成本</th><th>现价</th><th>市值</th><th>仓位%</th><th>当日盈亏</th><th>盈亏</th><th>盈亏%</th><th>止损距离 <select id="stopLossSelect" onchange="updateStopLoss()" style="font-size:0.75rem;padding:2px 4px;border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);"><option value="5">-5%</option><option value="8" selected>-8%</option><option value="10">-10%</option><option value="15">-15%</option></select></th></tr>
         </thead>
         <tbody id="holdingsBody">
-          <tr><td colspan="7" class="empty-state"><p>暂无持仓</p></td></tr>
+          <tr><td colspan="10" class="empty-state"><p>暂无持仓</p></td></tr>
         </tbody>
-      </table>
-    </div>
-
-    <!-- 待持仓（Pending Positions） -->
-    <div class="pending-section">
-      <div class="card">
-        <div class="pending-header">
-          <h3>📋 待持仓</h3>
-          <span class="pending-count" id="pendingCount">0</span>
-        </div>
-        <div id="pendingBody">
-          <div class="pending-empty">暂无待持仓股票</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 待持仓对比（计划 vs 实际） -->
-    <div id="pendingComparison" style="display:none;margin-top:16px;">
-      <h4 style="margin-bottom:8px;">📊 待持仓对比（计划 vs 实际）</h4>
-      <table class="table" style="font-size:0.8rem;">
-        <thead>
-          <tr>
-            <th>股票</th>
-            <th>计划价</th>
-            <th>当前价</th>
-            <th>偏差</th>
-            <th>计划金额</th>
-            <th>实际金额</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody id="pendingCompBody"></tbody>
       </table>
     </div>
 
@@ -128,7 +99,38 @@
         </div>
       </div>
     </div>
+
+    <!-- 盈亏日历 -->
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:600;padding:12px 12px 0;">📊 盈亏日历</div>
+      <div class="calendar-header">
+        <button onclick="changeMonth(-1)">◀</button>
+        <span id="calendarTitle">2026年5月</span>
+        <button onclick="changeMonth(1)">▶</button>
+        <span class="calendar-stats">
+          本月盈亏: <span id="monthPnl">--</span>
+          胜率: <span id="winRate">--</span>
+        </span>
+      </div>
+      <div class="calendar-grid" id="calendarGrid"></div>
+    </div>
   </div>
+
+  <!-- 计划 Tab -->
+  <div id="ptab-plan" style="display:none;">
+    <div class="card">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div class="card-title">📋 交易计划</div>
+        <span class="pending-count" id="planCount" style="font-size:0.8rem;color:var(--text-secondary);">0</span>
+        <button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-left:auto;">+ 新建计划</button>
+      </div>
+      <div id="planList">
+        <div class="empty-state"><div class="icon">📋</div><p>暂无交易计划</p></div>
+      </div>
+    </div>
+
+  </div>
+
   <div id="ptab-trades" style="display:none;">
     <div class="card">
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -143,50 +145,44 @@
       </table>
     </div>
   </div>
-  <div id="ptab-orders" style="display:none;">
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">条件单管理</div>
-        <button class="btn btn-sm btn-primary" onclick="showAddOrder()">+ 新建条件单</button>
-      </div>
-      <div id="ordersList">
-        <div class="empty-state"><div class="icon">🔔</div><p>暂无条件单</p></div>
-      </div>
-    </div>
-  </div>
-  <div id="ptab-calendar" style="display:none;">
-    <div class="card">
-      <div class="calendar-header">
-        <button onclick="changeMonth(-1)">◀</button>
-        <span id="calendarTitle">2026年5月</span>
-        <button onclick="changeMonth(1)">▶</button>
-        <span class="calendar-stats">
-          本月盈亏: <span id="monthPnl">--</span>
-          胜率: <span id="winRate">--</span>
-        </span>
-      </div>
-      <div class="calendar-grid" id="calendarGrid"></div>
-    </div>
-  </div>
 </div>
 
-<!-- 添加条件单弹窗 -->
-<div class="modal-overlay" id="orderModal">
+<!-- 交易计划弹窗（统一） -->
+<div class="modal-overlay" id="planModal">
   <div class="modal-box" style="max-width:480px;">
-    <div class="modal-title">新建条件单</div>
-    <form id="orderForm" onsubmit="submitOrder(event)">
+    <div class="modal-title">新建交易计划</div>
+    <form id="planForm" onsubmit="submitPlan(event)">
       <div class="form-grid">
         <div class="form-group">
           <label>股票代码</label>
-          <input type="text" id="orderCode" placeholder="300373" required>
+          <input type="text" id="planCode" placeholder="股票代码" required>
         </div>
         <div class="form-group">
           <label>股票名称</label>
-          <input type="text" id="orderName" placeholder="扬杰科技">
+          <input type="text" id="planName" placeholder="股票名称">
         </div>
         <div class="form-group">
-          <label>条件类型</label>
-          <select id="orderCondType">
+          <label>方向</label>
+          <select id="planDirection">
+            <option value="buy">买入</option>
+            <option value="sell">卖出</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>类型</label>
+          <select id="planType">
+            <option value="watch">观察</option>
+            <option value="near_target">接近买点</option>
+            <option value="conditional">条件触发</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>目标价</label>
+          <input type="number" id="planTargetPrice" step="0.01" placeholder="目标价格">
+        </div>
+        <div class="form-group">
+          <label>触发条件</label>
+          <select id="planCondType">
             <option value="price_lte">价格 ≤</option>
             <option value="price_gte">价格 ≥</option>
             <option value="change_pct_gte">涨幅 ≥ %</option>
@@ -194,31 +190,20 @@
           </select>
         </div>
         <div class="form-group">
-          <label>触发价格/百分比</label>
-          <input type="number" id="orderTargetPrice" step="0.01" placeholder="75.00" required>
-        </div>
-        <div class="form-group">
-          <label>动作</label>
-          <select id="orderAction">
-            <option value="buy">买入</option>
-            <option value="sell">卖出</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>数量（股）</label>
-          <input type="number" id="orderShares" step="100" placeholder="500">
+          <label>计划股数</label>
+          <input type="number" id="planShares" step="100" value="100">
         </div>
         <div class="form-group">
           <label>失效时间（可选）</label>
-          <input type="datetime-local" id="orderExpiresAt">
+          <input type="datetime-local" id="planExpiresAt">
         </div>
       </div>
       <div class="form-group" style="margin-bottom:16px;">
-        <label>备注</label>
-        <input type="text" id="orderNotes" placeholder="建仓条件单">
+        <label>理由 / 备注</label>
+        <input type="text" id="planReason" placeholder="技术面支撑位...">
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-ghost" onclick="closeOrderModal()">取消</button>
+        <button type="button" class="btn btn-ghost" onclick="closePlanModal()">取消</button>
         <button type="submit" class="btn btn-primary">确认创建</button>
       </div>
     </form>
@@ -233,11 +218,11 @@
       <div class="form-grid">
         <div class="form-group">
           <label>股票代码</label>
-          <input type="text" id="tradeCode" placeholder="600519" required>
+          <input type="text" id="tradeCode" placeholder="股票代码" required>
         </div>
         <div class="form-group">
           <label>股票名称</label>
-          <input type="text" id="tradeName" placeholder="贵州茅台">
+          <input type="text" id="tradeName" placeholder="股票名称">
         </div>
         <div class="form-group">
           <label>方向</label>
@@ -248,11 +233,11 @@
         </div>
         <div class="form-group">
           <label>价格</label>
-          <input type="number" id="tradePrice" step="0.01" placeholder="1500.00" required>
+          <input type="number" id="tradePrice" step="0.01" placeholder="价格" required>
         </div>
         <div class="form-group">
           <label>数量（股）</label>
-          <input type="number" id="tradeShares" step="100" placeholder="100" required>
+          <input type="number" id="tradeShares" step="100" placeholder="数量" required>
         </div>
         <div class="form-group">
           <label>佣金</label>
@@ -275,40 +260,6 @@
   </div>
 </div>
 
-<!-- 添加待持仓弹窗 -->
-<div class="modal-overlay" id="pendingModal">
-  <div class="modal-box" style="max-width:480px;">
-    <div class="modal-title">添加待持仓</div>
-    <form id="pendingForm" onsubmit="submitPending(event)">
-      <div class="form-grid">
-        <div class="form-group">
-          <label>股票代码</label>
-          <input type="text" id="pendingCode" placeholder="300373" required>
-        </div>
-        <div class="form-group">
-          <label>股票名称</label>
-          <input type="text" id="pendingName" placeholder="扬杰科技">
-        </div>
-        <div class="form-group">
-          <label>目标买入价</label>
-          <input type="number" id="pendingPrice" step="0.01" placeholder="75.00">
-        </div>
-        <div class="form-group">
-          <label>计划股数</label>
-          <input type="number" id="pendingShares" step="100" value="100">
-        </div>
-      </div>
-      <div class="form-group" style="margin-bottom:16px;">
-        <label>买入理由</label>
-        <input type="text" id="pendingReason" placeholder="技术面支撑位...">
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-ghost" onclick="closePendingModal()">取消</button>
-        <button type="submit" class="btn btn-primary">确认添加</button>
-      </div>
-    </form>
-  </div>
-</div>
 {% endblock %}
 
 {% block scripts %}

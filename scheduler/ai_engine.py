@@ -99,16 +99,83 @@ def strip_think(text: str) -> str:
 
 
 def extract_signal(text: str) -> str:
-    """从文本中提取交易信号"""
+    """从文本中提取交易信号（7档：STRONG_BUY / BUY / OVERWEIGHT / HOLD / UNDERWEIGHT / SELL / STRONG_SELL）"""
     if not text:
         return "HOLD"
     text_upper = text.upper()
-    if any(kw in text_upper for kw in ["SELL", "卖出", "清仓", "减仓", "平仓"]):
-        if "不卖出" in text or "不建议卖出" in text or "不急于卖出" in text:
+
+    # 评级术语映射表（大小写不敏感）
+    RATING_MAP = {
+        "STRONG BUY": "STRONG_BUY", "STRONGBUY": "STRONG_BUY",
+        "BUY": "BUY",
+        "OVERWEIGHT": "OVERWEIGHT",
+        "EQUAL-WEIGHT": "HOLD", "EQUALWEIGHT": "HOLD", "NEUTRAL": "HOLD", "MARKET-PERFORM": "HOLD",
+        "HOLD": "HOLD",
+        "UNDERWEIGHT": "UNDERWEIGHT",
+        "SELL": "SELL",
+        "STRONG SELL": "STRONG_SELL", "STRONGSELL": "STRONG_SELL",
+    }
+
+    import re
+
+    # 第1优先级：识别明确的评级声明
+    rating_match = re.search(
+        r'评级[：:\s]+\**\s*(Strong\s*Buy|Strong\s*Sell|Overweight|Underweight|Equal[- ]?Weight|Neutral|Market[- ]?Perform|Buy|Sell|Hold)',
+        text, re.IGNORECASE
+    )
+    if rating_match:
+        r = rating_match.group(1).strip().upper().replace(" ", "")
+        # Try exact match first, then with space restored
+        result = RATING_MAP.get(r) or RATING_MAP.get(r.replace("STRONG", "STRONG "))
+        if result:
+            return result
+
+    # 第1.5优先级：全文搜索专业评级术语
+    if "OVERWEIGHT" in text_upper and "UNDERWEIGHT" not in text_upper:
+        return "OVERWEIGHT"
+    if "UNDERWEIGHT" in text_upper and "OVERWEIGHT" not in text_upper:
+        return "UNDERWEIGHT"
+
+    # 第2优先级："最终交易决策" 段落内的信号词
+    decision_section = ""
+    for marker in ["最终交易决策", "最终裁决", "投资决策", "交易决策"]:
+        idx = text.find(marker)
+        if idx >= 0:
+            decision_section = text[idx:idx+500]
+            break
+    if decision_section:
+        ds = decision_section.upper()
+        if "HOLD" in ds or "维持现状" in ds or "空仓观望" in ds or "不执行买入" in ds or "不进行任何建仓" in ds:
+            return "HOLD"
+        if "STRONG SELL" in ds or "STRONGSELL" in ds:
+            return "STRONG_SELL"
+        if "SELL" in ds or "清仓" in ds or "平仓" in ds:
+            return "SELL"
+        if "STRONG BUY" in ds or "STRONGBUY" in ds:
+            return "STRONG_BUY"
+        if "BUY" in ds or "建仓" in ds or "加仓" in ds or "开仓" in ds:
+            if "不建仓" in decision_section or "不加仓" in decision_section or "不执行" in decision_section:
+                return "HOLD"
+            return "BUY"
+
+    # 第3优先级：全文关键词匹配（带否定检测）
+    neg_buy = ["不买入", "不建议买入", "不执行买入", "不进行任何建仓", "不建仓", "否决", "不急于买入", "不宜买入", "暂不买入", "继续空仓"]
+    neg_sell = ["不卖出", "不建议卖出", "不急于卖出", "暂不卖出", "不要卖出"]
+
+    if any(kw in text_upper for kw in ["STRONG SELL", "清仓", "平仓"]):
+        if any(neg in text for neg in neg_sell):
+            return "HOLD"
+        return "STRONG_SELL"
+    if any(kw in text_upper for kw in ["SELL", "卖出", "减仓"]):
+        if any(neg in text for neg in neg_sell):
             return "HOLD"
         return "SELL"
+    if any(kw in text_upper for kw in ["STRONG BUY"]):
+        if any(neg in text for neg in neg_buy):
+            return "HOLD"
+        return "STRONG_BUY"
     if any(kw in text_upper for kw in ["BUY", "买入", "建仓", "加仓", "开仓"]):
-        if "不买入" in text or "不建议买入" in text:
+        if any(neg in text for neg in neg_buy):
             return "HOLD"
         return "BUY"
     return "HOLD"
