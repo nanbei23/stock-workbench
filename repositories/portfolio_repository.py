@@ -258,12 +258,7 @@ async def fetch_cash_and_fees(db, account_id=None):
     cash_row = await (
         await db.execute("SELECT value FROM settings WHERE key = ?", (cash_key,))
     ).fetchone()
-    if cash_row:
-        cash = float(cash_row[0])
-    elif account_id and account_id != "default":
-        cash = 0.0
-    else:
-        cash = 132516.0
+    cash = float(cash_row[0]) if cash_row else 0.0
     if account_id:
         fee_row = await (
             await db.execute(

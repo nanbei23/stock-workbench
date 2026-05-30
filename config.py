@@ -3,13 +3,13 @@ from pathlib import Path
 
 # Paths
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "data" / "workbench.db"
+DB_PATH = Path(os.getenv("WORKBENCH_DB_PATH", BASE_DIR / "data" / "workbench.db"))
 CACHE_DIR = Path.home() / ".tradingagents" / "cache"
 GBRAIN_BIN = Path.home() / ".bun" / "bin" / "gbrain"
 
 # Server
-HOST = "0.0.0.0"
-PORT = 8000
+HOST = os.getenv("HOST", "0.0.0.0")
+PORT = int(os.getenv("PORT", "8000"))
 
 # Fee model
 COMMISSION_RATE = 0.0003    # 佣金万3

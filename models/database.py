@@ -288,6 +288,52 @@ CREATE TABLE IF NOT EXISTS hermes_console_events (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS hermes_tool_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    draft_id TEXT,
+    tool TEXT NOT NULL,
+    args_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_json TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    confirmed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS hermes_tasks (
+    task_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    draft_id TEXT NOT NULL,
+    source_text TEXT,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'waiting_confirm',
+    summary TEXT,
+    draft_json TEXT,
+    result_json TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS hermes_task_steps (
+    task_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    action TEXT,
+    title TEXT,
+    summary TEXT,
+    status TEXT NOT NULL DEFAULT 'waiting_confirm',
+    payload_json TEXT,
+    tool_json TEXT,
+    impact_json TEXT,
+    result_json TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (task_id, step_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_signal_tracking_status ON signal_tracking(status);
 CREATE INDEX IF NOT EXISTS idx_tracking_code ON signal_tracking(code);
 CREATE INDEX IF NOT EXISTS idx_tracking_signal ON signal_tracking(signal);
@@ -303,6 +349,12 @@ CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_updated ON analysis_tasks(s
 CREATE INDEX IF NOT EXISTS idx_analysis_tasks_code_updated ON analysis_tasks(code, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_hermes_console_session_created
     ON hermes_console_events(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hermes_tool_runs_session_created
+    ON hermes_tool_runs(session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hermes_tasks_session_updated
+    ON hermes_tasks(session_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hermes_task_steps_status
+    ON hermes_task_steps(task_id, status);
 """
 
 MIGRATIONS = [
@@ -345,6 +397,67 @@ MIGRATIONS = [
             ON analysis_tasks(status, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_analysis_tasks_code_updated
             ON analysis_tasks(code, updated_at DESC);
+        """,
+    ),
+    (
+        3,
+        "hermes_tool_runs",
+        """
+        CREATE TABLE IF NOT EXISTS hermes_tool_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            draft_id TEXT,
+            tool TEXT NOT NULL,
+            args_json TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            result_json TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            confirmed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_tool_runs_session_created
+            ON hermes_tool_runs(session_id, created_at DESC);
+        """,
+    ),
+    (
+        4,
+        "hermes_task_timeline",
+        """
+        CREATE TABLE IF NOT EXISTS hermes_tasks (
+            task_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            draft_id TEXT NOT NULL,
+            source_text TEXT,
+            title TEXT,
+            status TEXT NOT NULL DEFAULT 'waiting_confirm',
+            summary TEXT,
+            draft_json TEXT,
+            result_json TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS hermes_task_steps (
+            task_id TEXT NOT NULL,
+            step_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            action TEXT,
+            title TEXT,
+            summary TEXT,
+            status TEXT NOT NULL DEFAULT 'waiting_confirm',
+            payload_json TEXT,
+            tool_json TEXT,
+            impact_json TEXT,
+            result_json TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (task_id, step_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_hermes_tasks_session_updated
+            ON hermes_tasks(session_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_hermes_task_steps_status
+            ON hermes_task_steps(task_id, status);
         """,
     ),
 ]

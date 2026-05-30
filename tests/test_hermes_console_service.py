@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import models.database as database
@@ -27,6 +27,63 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         database.DB_PATH = self.original_db_path
         hermes_console_service._DRAFTS.clear()
         self.tmp.cleanup()
+
+    async def _make_llm_multi_step_plan(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT OR REPLACE INTO portfolio (code, name, total_shares, available_shares, avg_cost)
+                VALUES ('000001', '平安银行', 500, 400, 10.25)
+                """
+            )
+            db.commit()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"plan":{"title":"茅台观察计划","steps":['
+                                    '{"title":"先查平安银行持仓","action":"query_position","code":"000001","name":"平安银行"},'
+                                    '{"title":"加入茅台自选","tool":"add_watchlist","args":{"code":"600519","name":"贵州茅台"}},'
+                                    '{"title":"创建茅台条件单","tool":"create_conditional_order","args":{"code":"600519","name":"贵州茅台",'
+                                    '"trade_action":"buy","condition_type":"price_lte","target_price":1680,"shares":100}}'
+                                    ']}}'
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        async def fake_settings():
+            return {
+                "custom_endpoint": "https://example.com/v1",
+                "api_key": "sk-test",
+                "quick_think_model": "test-model",
+            }
+
+        with patch("services.hermes_console_service._llm_settings", new=fake_settings), patch(
+            "services.hermes_console_service.httpx.AsyncClient", new=FakeClient
+        ):
+            return await hermes_console_service.handle_message("查平安银行持仓，把茅台加自选，并低于1680建100股买入条件单")
 
     async def test_add_watchlist_requires_confirmation_then_writes(self):
         parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")
@@ -66,12 +123,78 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(draft["payload"]["shares"], 200)
         self.assertEqual(draft["payload"]["price"], 10.5)
+        self.assertEqual(draft["impact_preview"]["status"], "ready")
+        self.assertIn("增加到 200 股", draft["impact_preview"]["summary"])
         await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
 
         with sqlite3.connect(self.db_path) as db:
             row = db.execute("SELECT total_shares, avg_cost FROM portfolio WHERE code='000001'").fetchone()
         self.assertEqual(row[0], 200)
         self.assertEqual(row[1], 10.5)
+
+    async def test_confirm_recovers_unexecuted_draft_from_history_after_restart(self):
+        parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")
+        draft_id = parsed["draft"]["id"]
+        hermes_console_service._DRAFTS.clear()
+
+        result = await hermes_console_service.confirm_draft(parsed["session_id"], draft_id)
+
+        self.assertEqual(result["status"], "ok")
+        with sqlite3.connect(self.db_path) as db:
+            stock = db.execute("SELECT code, name FROM watchlist WHERE code='600519'").fetchone()
+            audit = db.execute(
+                "SELECT status FROM hermes_tool_runs WHERE session_id=? AND draft_id=?",
+                (parsed["session_id"], draft_id),
+            ).fetchone()
+        self.assertEqual(stock, ("600519", "贵州茅台"))
+        self.assertEqual(audit[0], "ok")
+
+    async def test_confirm_rejects_duplicate_draft_execution(self):
+        parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")
+        draft_id = parsed["draft"]["id"]
+        await hermes_console_service.confirm_draft(parsed["session_id"], draft_id)
+
+        with self.assertRaises(HTTPException) as ctx:
+            await hermes_console_service.confirm_draft(parsed["session_id"], draft_id)
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        with sqlite3.connect(self.db_path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM hermes_tool_runs WHERE session_id=? AND draft_id=? AND status='ok'",
+                (parsed["session_id"], draft_id),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+
+    async def test_cancel_draft_persists_and_blocks_later_confirmation(self):
+        parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")
+        draft_id = parsed["draft"]["id"]
+
+        result = await hermes_console_service.cancel_draft(parsed["session_id"], draft_id)
+
+        self.assertEqual(result["status"], "cancelled")
+        with sqlite3.connect(self.db_path) as db:
+            stock = db.execute("SELECT code FROM watchlist WHERE code='600519'").fetchone()
+            audit = db.execute(
+                "SELECT status FROM hermes_tool_runs WHERE session_id=? AND draft_id=?",
+                (parsed["session_id"], draft_id),
+            ).fetchone()
+        self.assertIsNone(stock)
+        self.assertEqual(audit[0], "cancelled")
+
+        with self.assertRaises(HTTPException) as ctx:
+            await hermes_console_service.confirm_draft(parsed["session_id"], draft_id)
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    async def test_cancel_recovers_draft_from_history_after_restart(self):
+        parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")
+        draft_id = parsed["draft"]["id"]
+        hermes_console_service._DRAFTS.clear()
+
+        result = await hermes_console_service.cancel_draft(parsed["session_id"], draft_id)
+
+        self.assertEqual(result["status"], "cancelled")
+        runs = await hermes_console_service.list_tool_runs(parsed["session_id"])
+        self.assertEqual(runs["runs"][0]["status"], "cancelled")
 
     async def test_list_sessions_summarizes_history(self):
         first = await hermes_console_service.handle_message("查询 000001 持仓")
@@ -151,6 +274,229 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["draft"]["payload"]["shares"], 200)
         self.assertEqual(parsed["draft"]["payload"]["price"], 10.5)
 
+    async def test_llm_tool_call_generates_auditable_draft_and_confirm_writes(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"tool":"record_trade","args":{"code":"000001","name":"平安银行",'
+                                    '"direction":"buy","shares":200,"price":10.5},'
+                                    '"confidence":0.92,"reason":"用户明确要求买入两手"}'
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        async def fake_settings():
+            return {
+                "custom_endpoint": "https://example.com/v1",
+                "api_key": "sk-test",
+                "quick_think_model": "test-model",
+            }
+
+        with patch("services.hermes_console_service._llm_settings", new=fake_settings), patch(
+            "services.hermes_console_service.httpx.AsyncClient", new=FakeClient
+        ):
+            parsed = await hermes_console_service.handle_message("帮我买入平安银行两手，成交价十块五")
+
+        draft = parsed["draft"]
+        self.assertEqual(parsed["parser"], "llm")
+        self.assertEqual(draft["tool_call"]["tool"], "record_trade")
+        self.assertEqual(draft["tool_call"]["args"]["shares"], 200)
+
+        await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
+
+        with sqlite3.connect(self.db_path) as db:
+            trade = db.execute("SELECT code, direction, shares, price FROM trades WHERE code='000001'").fetchone()
+            audit_count = db.execute(
+                "SELECT COUNT(*) FROM hermes_tool_runs WHERE session_id=?",
+                (parsed["session_id"],),
+            ).fetchone()[0]
+            audit = db.execute(
+                "SELECT tool, status, args_json FROM hermes_tool_runs WHERE session_id=? AND status='ok'",
+                (parsed["session_id"],),
+            ).fetchone()
+        self.assertEqual(trade, ("000001", "buy", 200, 10.5))
+        self.assertEqual(audit_count, 1)
+        self.assertEqual(audit[0], "record_trade")
+        self.assertEqual(audit[1], "ok")
+        self.assertIn('"shares": 200', audit[2])
+
+        runs = await hermes_console_service.list_tool_runs(parsed["session_id"])
+        self.assertEqual(runs["count"], 1)
+        self.assertEqual(runs["runs"][0]["tool"], "record_trade")
+        self.assertEqual(runs["runs"][0]["args"]["shares"], 200)
+
+    async def test_llm_plan_generates_multi_step_draft_and_confirms_write_steps(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost)
+                VALUES ('000001', '平安银行', 500, 400, 10.25)
+                """
+            )
+            db.commit()
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"plan":{"title":"茅台观察计划","steps":['
+                                    '{"title":"先查平安银行持仓","action":"query_position","code":"000001","name":"平安银行"},'
+                                    '{"title":"加入茅台自选","tool":"add_watchlist","args":{"code":"600519","name":"贵州茅台"}},'
+                                    '{"title":"创建茅台条件单","tool":"create_conditional_order","args":{"code":"600519","name":"贵州茅台",'
+                                    '"trade_action":"buy","condition_type":"price_lte","target_price":1680,"shares":100}}'
+                                    ']}}'
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        async def fake_settings():
+            return {
+                "custom_endpoint": "https://example.com/v1",
+                "api_key": "sk-test",
+                "quick_think_model": "test-model",
+            }
+
+        with patch("services.hermes_console_service._llm_settings", new=fake_settings), patch(
+            "services.hermes_console_service.httpx.AsyncClient", new=FakeClient
+        ):
+            parsed = await hermes_console_service.handle_message("查平安银行持仓，把茅台加自选，并低于1680建100股买入条件单")
+
+        draft = parsed["draft"]
+        self.assertEqual(draft["action"], "multi_step_plan")
+        self.assertTrue(draft["executable"])
+        self.assertEqual(len(draft["plan_steps"]), 3)
+        self.assertEqual(draft["plan_steps"][0]["kind"], "read")
+        self.assertIn("500 股", draft["plan_steps"][0]["summary"])
+        self.assertEqual(draft["plan_steps"][1]["tool_call"]["tool"], "add_watchlist")
+        self.assertEqual(draft["plan_steps"][1]["impact_preview"]["status"], "ready")
+        self.assertIn("默认自选", draft["plan_steps"][1]["impact_preview"]["summary"])
+        self.assertEqual(draft["plan_steps"][2]["impact_preview"]["status"], "ready")
+        self.assertIn("待执行条件单", draft["plan_steps"][2]["impact_preview"]["summary"])
+
+        result = await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
+
+        self.assertEqual(result["status"], "ok")
+        with sqlite3.connect(self.db_path) as db:
+            watch = db.execute("SELECT code, name FROM watchlist WHERE code='600519'").fetchone()
+            order = db.execute("SELECT code, action, shares, target_price FROM conditional_orders WHERE code='600519'").fetchone()
+            runs = db.execute(
+                "SELECT draft_id, tool, status FROM hermes_tool_runs WHERE session_id=? ORDER BY id",
+                (parsed["session_id"],),
+            ).fetchall()
+        self.assertEqual(watch, ("600519", "贵州茅台"))
+        self.assertEqual(order, ("600519", "buy", 100, 1680.0))
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(runs[0][0].endswith(":step-2"))
+        self.assertEqual(runs[0][1:], ("add_watchlist", "ok"))
+        self.assertTrue(runs[1][0].endswith(":step-3"))
+        self.assertEqual(runs[1][1:], ("create_conditional_order", "ok"))
+
+    async def test_llm_plan_persists_task_timeline(self):
+        parsed = await self._make_llm_multi_step_plan()
+        draft = parsed["draft"]
+
+        with sqlite3.connect(self.db_path) as db:
+            task = db.execute(
+                "SELECT session_id, status, title FROM hermes_tasks WHERE task_id=?",
+                (draft["id"],),
+            ).fetchone()
+            steps = db.execute(
+                "SELECT step_id, kind, status FROM hermes_task_steps WHERE task_id=? ORDER BY position",
+                (draft["id"],),
+            ).fetchall()
+
+        self.assertEqual(task, (parsed["session_id"], "waiting_confirm", "茅台观察计划"))
+        self.assertEqual(
+            steps,
+            [
+                ("step-1", "read", "done"),
+                ("step-2", "write", "ready"),
+                ("step-3", "write", "ready"),
+            ],
+        )
+
+    async def test_confirm_plan_step_keeps_plan_active_for_remaining_steps(self):
+        parsed = await self._make_llm_multi_step_plan()
+        draft = parsed["draft"]
+
+        first = await hermes_console_service.confirm_plan_step(parsed["session_id"], draft["id"], "step-2")
+        second = await hermes_console_service.confirm_plan_step(parsed["session_id"], draft["id"], "step-3")
+
+        self.assertEqual(first["status"], "ok")
+        self.assertEqual(second["status"], "ok")
+        with sqlite3.connect(self.db_path) as db:
+            watch = db.execute("SELECT code, name FROM watchlist WHERE code='600519'").fetchone()
+            order = db.execute("SELECT code, action, shares, target_price FROM conditional_orders WHERE code='600519'").fetchone()
+            task_status = db.execute("SELECT status FROM hermes_tasks WHERE task_id=?", (draft["id"],)).fetchone()[0]
+            step_statuses = db.execute(
+                "SELECT step_id, status FROM hermes_task_steps WHERE task_id=? ORDER BY position",
+                (draft["id"],),
+            ).fetchall()
+
+        self.assertEqual(watch, ("600519", "贵州茅台"))
+        self.assertEqual(order, ("600519", "buy", 100, 1680.0))
+        self.assertEqual(task_status, "ok")
+        self.assertEqual(step_statuses, [("step-1", "done"), ("step-2", "ok"), ("step-3", "ok")])
+
+    async def test_skip_plan_step_updates_timeline_without_writing(self):
+        parsed = await self._make_llm_multi_step_plan()
+        draft = parsed["draft"]
+
+        result = await hermes_console_service.skip_plan_step(parsed["session_id"], draft["id"], "step-3")
+
+        self.assertEqual(result["status"], "skipped")
+        with sqlite3.connect(self.db_path) as db:
+            order = db.execute("SELECT code FROM conditional_orders WHERE code='600519'").fetchone()
+            step_status = db.execute(
+                "SELECT status FROM hermes_task_steps WHERE task_id=? AND step_id='step-3'",
+                (draft["id"],),
+            ).fetchone()[0]
+        self.assertIsNone(order)
+        self.assertEqual(step_status, "skipped")
+
     async def test_common_stock_alias_fills_missing_code(self):
         parsed = await hermes_console_service.handle_message("帮我把平安银行今天买两手，十块五附近记到账上")
 
@@ -158,6 +504,32 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["draft"]["payload"]["code"], "000001")
         self.assertEqual(parsed["draft"]["payload"]["name"], "平安银行")
         self.assertTrue(parsed["draft"]["executable"])
+
+    async def test_ai_search_completion_fills_missing_stock_code_before_confirmation(self):
+        async def fake_search(query):
+            return {"code": "300750", "name": "宁德时代"}
+
+        with patch("services.hermes_console_service._ai_search_stock_candidate", new=fake_search):
+            parsed = await hermes_console_service.handle_message("宁王买 100 股 成交价 200")
+
+        draft = parsed["draft"]
+        self.assertTrue(draft["executable"])
+        self.assertEqual(draft["payload"]["code"], "300750")
+        self.assertEqual(draft["payload"]["name"], "宁德时代")
+        self.assertIn("AI 搜索补全股票", draft["completion_sources"][0])
+        self.assertIn("补齐能查到的信息", parsed["answer"])
+
+    async def test_quote_completion_fills_missing_trade_price_before_confirmation(self):
+        async def fake_quote(code):
+            return {"code": code, "name": "平安银行", "price": 10.23}
+
+        with patch("services.hermes_console_service._quote_for_completion", new=fake_quote):
+            parsed = await hermes_console_service.handle_message("买入 000001 平安银行 2手")
+
+        draft = parsed["draft"]
+        self.assertTrue(draft["executable"])
+        self.assertEqual(draft["payload"]["price"], 10.23)
+        self.assertIn("行情补全成交价参考", draft["completion_sources"][0])
 
 
 class HermesConsoleApiTests(unittest.TestCase):
@@ -196,6 +568,78 @@ class HermesConsoleApiTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["sessions"][0]["session_id"], "s1")
+
+    def test_cancel_route_uses_service(self):
+        app = FastAPI()
+        app.include_router(hermes_router, prefix="/api")
+        client = TestClient(app)
+
+        async def fake_cancel(session_id, draft_id):
+            return {"session_id": session_id, "draft_id": draft_id, "status": "cancelled"}
+
+        original = hermes_console_service.cancel_draft
+        hermes_console_service.cancel_draft = fake_cancel
+        try:
+            resp = client.post("/api/hermes/cancel", json={"session_id": "s1", "draft_id": "d1"})
+        finally:
+            hermes_console_service.cancel_draft = original
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "cancelled")
+
+    def test_step_confirm_route_uses_service(self):
+        app = FastAPI()
+        app.include_router(hermes_router, prefix="/api")
+        client = TestClient(app)
+
+        async def fake_confirm_step(session_id, draft_id, step_id):
+            return {"session_id": session_id, "draft_id": draft_id, "step_id": step_id, "status": "ok"}
+
+        original = hermes_console_service.confirm_plan_step
+        hermes_console_service.confirm_plan_step = fake_confirm_step
+        try:
+            resp = client.post("/api/hermes/step/confirm", json={"session_id": "s1", "draft_id": "d1", "step_id": "step-2"})
+        finally:
+            hermes_console_service.confirm_plan_step = original
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["step_id"], "step-2")
+
+    def test_step_skip_route_uses_service(self):
+        app = FastAPI()
+        app.include_router(hermes_router, prefix="/api")
+        client = TestClient(app)
+
+        async def fake_skip_step(session_id, draft_id, step_id):
+            return {"session_id": session_id, "draft_id": draft_id, "step_id": step_id, "status": "skipped"}
+
+        original = hermes_console_service.skip_plan_step
+        hermes_console_service.skip_plan_step = fake_skip_step
+        try:
+            resp = client.post("/api/hermes/step/skip", json={"session_id": "s1", "draft_id": "d1", "step_id": "step-3"})
+        finally:
+            hermes_console_service.skip_plan_step = original
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "skipped")
+
+    def test_tool_runs_route_uses_service(self):
+        app = FastAPI()
+        app.include_router(hermes_router, prefix="/api")
+        client = TestClient(app)
+
+        async def fake_runs(session_id, limit=30):
+            return {"session_id": session_id, "count": 1, "runs": [{"tool": "record_trade", "status": "ok"}]}
+
+        original = hermes_console_service.list_tool_runs
+        hermes_console_service.list_tool_runs = fake_runs
+        try:
+            resp = client.get("/api/hermes/session/s1/tool-runs?limit=10")
+        finally:
+            hermes_console_service.list_tool_runs = original
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["runs"][0]["tool"], "record_trade")
 
 
 if __name__ == "__main__":

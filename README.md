@@ -1,158 +1,168 @@
-# 🐂 炒股小牛马 — Stock Workbench
+# 炒股小牛马 Stock Workbench
 
-本地运行的 A 股盯盘 + AI 深度分析工作台，面向个人投资者的决策辅助工具。
+本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.1.0`。
 
-## ✨ 功能
+本项目面向个人研究和交易工作流辅助，不构成投资建议。所有写库操作都应由用户确认后执行。
 
-| 模块 | 功能 |
-|------|------|
-| 📊 **自选股** | 实时行情（腾讯数据源）、K线分时图、异动监控（10种类型）、新闻聚合（东财/财联社/公众号）、公告搜索、AI分析报告 |
-| 💼 **持仓管理** | 持仓列表、盈亏统计、交易计划、止损设置、盈亏日历 |
-| 🤖 **AI分析台** | TradingAgents 12 阶段深度分析、多Agent（技术/情绪/新闻/基本面/政策/游资/解禁+5阶段Pipeline）、SSE进度、事实账本+旁观者复核 |
-| 📈 **信号绩效** | AI报告信号前向验证、7档信号统计、月度收益率趋势、持仓跟踪 |
-| ⚙️ **设置** | 行情监控、AI引擎（9供应商+获取模型）、通知、费率、数据导入导出 |
-| 🎨 **三套皮肤** | 赛博朋克 / 午夜 / 阳光户外，CSS变量驱动一键切换 |
+## 核心能力
 
-## 🚀 快速开始
+| 模块 | 能力 |
+| --- | --- |
+| 自选股 | 腾讯行情、K 线分时、异动监控、新闻/公告/研报聚合、AI 报告入口 |
+| 持仓 | 多账户资产看板、合并视图、交易记录、盈亏统计、交易计划、条件单 |
+| AI 分析台 | TradingAgents-astock 分析任务、队列状态、历史任务、失败原因、重试/取消、报告质量和信号跟踪 |
+| Hermes 对话台 | 自然语言意图识别、Hermes session 历史、多步任务计划、写库草稿、分步确认/跳过、审计记录 |
+| 设置 | OpenAI 兼容模型供应商、Base URL 获取模型、快速/深度/旁观者模型、迁移状态、备份恢复 |
+| 前端 | Vite + TypeScript 渐进式构建、Vanilla JS 页面、三套主题、竖屏盯盘优化 |
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.12 推荐
+- Node.js 20+ 推荐
+- 可访问 A 股行情和资讯数据源的网络环境
+- 可选：LLM API Key，用于 AI 分析和 Hermes 自然语言解析
+
+### 安装
 
 ```bash
-# 1. 克隆
 git clone <your-repo-url>
-cd stock-workbench
+cd stock-workbench-local
 
-# 2. 安装依赖
+python3.12 -m venv .venv312
+. .venv312/bin/activate
 pip install -r requirements.txt
 
-# 3. 启动（A股数据源需要中国大陆网络）
-python -m uvicorn app:app --host 0.0.0.0 --port 8000
-
-# 4. 浏览器打开
-open http://localhost:8000
+npm ci
 ```
 
-## 🧱 技术栈
-
-| 层 | 技术 |
-|---|------|
-| Web 框架 | FastAPI + Jinja2 |
-| 前端 | Vanilla JS（无框架依赖） |
-| 图表 | Lightweight Charts v4 (TradingView) |
-| 数据库 | SQLite + aiosqlite |
-| HTTP | aiohttp |
-| AI 引擎 | TradingAgents-astock（进程内调用） |
-| 数据源 | 腾讯行情、东方财富、财联社、搜狗微信 |
-| 定时任务 | APScheduler |
-
-## 📁 目录结构
-
-```
-stock-workbench/
-├── app.py                    # FastAPI 入口
-├── config.py                 # 配置（DB路径等）
-├── requirements.txt
-├── PRD.md                    # 产品需求文档
-├── api/                      # API 路由层
-│   ├── ai_api.py             # AI分析、异动
-│   ├── portfolio_api.py      # 持仓管理
-│   ├── settings_api.py       # 设置、获取模型
-│   ├── signal_api.py         # 信号跟踪
-│   ├── quote_api.py          # 行情
-│   ├── news_api.py           # 新闻
-│   ├── strategy_api.py       # 策略
-│   └── pdf_export.py         # PDF导出
-├── data/                     # 数据获取层
-│   ├── quote.py              # 腾讯行情
-│   ├── kline.py              # K线（腾讯+百度）
-│   ├── news.py               # 新闻聚合
-│   ├── announce.py           # 公告（东方财富）
-│   ├── research.py           # 研报
-│   ├── market.py             # 市场指数
-│   ├── signal.py             # 7档信号
-│   └── helpers.py            # 工具函数
-├── models/                   # 数据库模型
-│   ├── database.py           # SQLite表结构（14张表）
-│   ├── watchlist.py          # 自选股
-│   ├── portfolio.py          # 持仓
-│   └── strategy.py           # 策略
-├── scheduler/                # 定时任务 & AI引擎
-│   ├── ta_bridge.py          # TradingAgents桥接
-│   ├── signal_tracker.py     # 信号跟踪
-│   ├── anomaly_checker.py    # 异动检测
-│   ├── fact_checker.py       # 事实账本
-│   └── scheduler.py          # 定时任务注册
-├── templates/                # Jinja2 模板
-│   ├── base.html             # 基础布局+导航+浮窗
-│   ├── index.html            # 自选股页
-│   ├── ai.html               # AI分析台
-│   ├── portfolio.html        # 持仓页
-│   ├── settings.html         # 设置页
-│   └── signal.html           # 信号绩效页
-├── static/
-│   ├── css/
-│   │   ├── style.css         # 基础样式（~4800行）
-│   │   ├── cyberpunk.css     # 赛博朋克主题
-│   │   ├── midnight.css      # 午夜主题
-│   │   ├── sunny.css         # 阳光户外主题
-│   │   └── SKIN_SPEC.md      # 皮肤开发规范
-│   └── js/
-│       ├── stock.js          # 自选股逻辑
-│       ├── ai.js             # AI分析台逻辑
-│       ├── portfolio.js      # 持仓逻辑
-│       ├── settings.js       # 设置逻辑
-│       └── chart.js          # K线图表
-└── data/                     # 运行时数据
-    └── workbench.db          # SQLite数据库
-```
-
-## 🎨 主题
-
-| 主题 | 特点 |
-|------|------|
-| 🌆 **赛博朋克** | 暗黑玻璃态，青蓝渐变+粉红涨+翡翠绿跌 |
-| 🌙 **午夜** | 纯黑平铺，琥珀金强调+标准红涨绿跌 |
-| ☀️ **阳光户外** | 暖白底#FFF8F0，天蓝+阳光金+标准红涨绿跌 |
-
-主题切换：点击Banner右侧按钮，`localStorage` 持久化。
-
-## ⚙️ 配置
-
-所有设置存 SQLite 数据库，通过 `/settings` 页面可视化修改：
-
-- **行情监控**：自动刷新间隔、异动阈值
-- **AI 引擎**：LLM 供应商（9个）、模型选择、🔍 一键获取远程模型列表
-- **旁观者核对**：独立模型复核分析报告
-- **通知 / 费率 / 数据**：导入导出备份
-
-## 📡 API 端点
-
-完整端点清单见 [PRD.md#十一](./PRD.md#十一api端点清单)，主要分组：
-
-- `/api/settings/*` — 设置 CRUD + 获取模型 + 测试连接
-- `/api/watchlist/*` / `/api/quote/*` — 自选股 + 行情
-- `/api/ai/*` — AI 分析 + 异动 + 报告 + SSE 进度
-- `/api/signal/*` — 信号跟踪 + 绩效统计
-- `/api/news/*` / `/api/announce/*` — 新闻 + 公告
-
-## 🧪 开发
+首次配置可复制环境样例作为本地部署参考：
 
 ```bash
-# 语法检查
-python _check_syntax.py
-
-# 导入检查
-python _check_imports.py
-
-# 变更验证
-python verify_changes.py
+cp .env.example .env
 ```
 
-## ⚠️ 注意事项
+也可以直接在页面的 `设置 -> AI 引擎` 中配置 Base URL、API Key 和模型列表。`.env` 不会自动加载；需要环境变量时，请用 shell、进程管理器或部署平台注入。
 
-- **需要中国大陆网络**：数据源（腾讯行情、东方财富等）依赖国内网络
-- **macOS aiohttp**：需使用 `TCPConnector(family=socket.AF_INET)` 绕过 IPv6 问题
-- **AI 引擎**：需要 `TradingAgents-astock` pip 包 + LLM API Key
-- **皮肤规范**：开发新主题请参考 `static/css/SKIN_SPEC.md`
+### 启动
 
-## 📄 许可证
+```bash
+python app.py
+```
+
+打开：
+
+```text
+http://127.0.0.1:8000
+```
+
+主要页面：
+
+- `/` 自选股
+- `/portfolio` 持仓
+- `/ai` AI 分析台
+- `/hermes` Hermes 对话台
+- `/performance` 信号绩效
+- `/settings` 设置
+
+### Intel macOS 自动部署
+
+目标机器是 Intel 芯片 macOS Monterey 时，可使用内置部署脚本：
+
+```bash
+chmod +x scripts/deploy_macos_x86.sh scripts/run_macos_x86.sh
+scripts/deploy_macos_x86.sh
+```
+
+脚本会安装依赖、构建前端、初始化数据库，并安装当前用户的 launchd 服务。详细说明见 [docs/deploy_macos_x86.md](docs/deploy_macos_x86.md)。
+
+## Hermes 写库安全模型
+
+Hermes 只允许通过受控工具写入本地数据库：
+
+- `add_watchlist`
+- `record_trade`
+- `set_position`
+- `create_conditional_order`
+
+流程是：
+
+1. 用户用自然语言描述目标。
+2. LLM 或规则解析生成只读查询、写库草稿或多步计划。
+3. 只读步骤自动预览。
+4. 写库步骤必须由用户确认，支持单步确认、单步跳过和整单取消。
+5. 所有工具调用记录到审计表，可从 Hermes 页面回溯。
+
+写库上下文手册见 [docs/hermes_db_write_manual.md](docs/hermes_db_write_manual.md)。
+
+## 技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| Web | FastAPI + Jinja2 |
+| 数据库 | SQLite + aiosqlite |
+| 前端 | Vanilla JS + Vite + TypeScript contracts |
+| 图表 | Lightweight Charts |
+| HTTP | aiohttp + httpx |
+| 任务调度 | APScheduler |
+| AI 引擎 | TradingAgents-astock + OpenAI 兼容模型供应商 |
+
+## 目录结构
+
+```text
+stock-workbench-local/
+├── app.py                         # FastAPI 入口
+├── app_metadata.py                # 发布版本元信息
+├── config.py                      # 本地配置
+├── api/                           # API 路由
+├── services/                      # 业务服务和 Hermes 工具注册
+├── repositories/                  # 数据访问封装
+├── models/                        # SQLite schema 与模型
+├── scheduler/                     # 定时任务和 AI 任务桥接
+├── schemas/                       # Pydantic 契约
+├── templates/                     # Jinja2 页面
+├── static/                        # CSS 和页面脚本
+├── frontend/src/                  # Vite/TypeScript 渐进式前端源码
+├── docs/                          # 操作文档
+├── tests/                         # 单元测试
+├── CHANGELOG.md                   # 版本变更
+└── RELEASE_CHECKLIST.md           # 发布检查清单
+```
+
+## 开发命令
+
+```bash
+python -m compileall app.py api models repositories scheduler services schemas tests
+python -m unittest discover tests
+node --check static/js/hermes.js
+npm run typecheck
+npm run build
+```
+
+针对 Hermes 的快速回归：
+
+```bash
+python -m unittest tests.test_hermes_console_service
+```
+
+## 发布
+
+发布前按 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) 执行完整检查。
+
+当前版本重点见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 数据和密钥
+
+以下内容不应提交：
+
+- `.env`
+- `data/*.db`
+- `data/backups/`
+- `node_modules/`
+- `.venv*/`
+- LLM API Key 或模型供应商密钥
+
+## License
 
 [MIT](LICENSE)

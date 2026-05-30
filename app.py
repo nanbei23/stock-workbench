@@ -1,4 +1,4 @@
-"""炒股小牛马工作台 v2.0 — FastAPI入口"""
+"""炒股小牛马工作台 v2.1 — FastAPI入口"""
 import sys
 import json
 import asyncio
@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 
+from app_metadata import APP_NAME, APP_VERSION
 from models.database import init_db, get_db
 from scheduler.jobs import setup_scheduler
 from config import HOST, PORT
@@ -25,15 +26,15 @@ async def lifespan(app: FastAPI):
     from tasks import mark_interrupted_tasks
     await mark_interrupted_tasks()
     sched = setup_scheduler()
-    print("✅ 数据库初始化完成")
-    print("✅ 定时任务已启动")
+    logger.info("Database initialized")
+    logger.info("Scheduler started")
     yield
     sched.shutdown()
     from data.helpers import close_session
     await close_session()
-    print("🛑 服务关闭")
+    logger.info("Service stopped")
 
-app = FastAPI(title="炒股小牛马工作台", version="2.0", lifespan=lifespan)
+app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
 
 # 静态文件 + 模板
 app.mount("/static", StaticFiles(directory="static"), name="static")

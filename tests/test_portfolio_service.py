@@ -99,6 +99,26 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.status_code, 404)
 
+    async def test_portfolio_overview_defaults_cash_to_zero(self):
+        result = await portfolio_service.get_portfolio_overview("default")
+
+        self.assertEqual(result["cash"], 0.0)
+        self.assertEqual(result["total_assets"], 0)
+        self.assertEqual(result["market_value"], 0)
+
+    async def test_portfolio_overview_uses_configured_cash_balance(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                ("cash_balance_default", "50000"),
+            )
+            db.commit()
+
+        result = await portfolio_service.get_portfolio_overview("default")
+
+        self.assertEqual(result["cash"], 50000.0)
+        self.assertEqual(result["total_assets"], 50000.0)
+
 
 class PortfolioApiTests(unittest.TestCase):
     def setUp(self):

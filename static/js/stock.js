@@ -860,7 +860,6 @@ function initWebSocket() {
 
   wsQuotes.onopen = () => {
     wsConnected = true;
-    console.log('[WS] 实时行情已连接');
     // WebSocket 连接成功后，停止 HTTP 轮询
     stopAutoRefresh();
   };
@@ -876,7 +875,6 @@ function initWebSocket() {
 
   wsQuotes.onclose = () => {
     wsConnected = false;
-    console.log('[WS] 连接断开，5秒后重连');
     clearTimeout(wsReconnectTimer);
     wsReconnectTimer = setTimeout(initWebSocket, 5000);
   };

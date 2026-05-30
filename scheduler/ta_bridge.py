@@ -317,8 +317,6 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
                                 # ★ 每完成一个stage立即存盘
                                 _save_stage_progress(task_id, code, task)
 
-                        if chunk.get("messages") and len(chunk["messages"]) > 0:
-                            chunk["messages"][-1].pretty_print()
                         trace.append(chunk)
                         # 实时同步token统计到task，供SSE读取
                         task.token_stats = token_tracker.get_stats()
