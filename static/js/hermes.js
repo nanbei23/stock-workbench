@@ -292,9 +292,9 @@ function hermesMessageHtml(role, text, extras = '', createdAt = '', trustedHtml 
 }
 
 function hermesRoleMeta(role) {
-    if (role === 'user') return {name: '你', mark: 'ME'};
-    if (role === 'tool') return {name: '本地写入', mark: 'DB'};
-    return {name: 'Hermes', mark: 'HM'};
+    if (role === 'user') return {name: '你', mark: '我'};
+    if (role === 'tool') return {name: '本地写入', mark: '库'};
+    return {name: 'Hermes', mark: '助'};
 }
 
 function renderHermesDraft(draft) {

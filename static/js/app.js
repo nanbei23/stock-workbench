@@ -84,14 +84,58 @@ function toggleSearch() {
 
 function refreshAll() { location.reload(); }
 
+function classifyAdaptiveViewport() {
+  const width = window.innerWidth || document.documentElement.clientWidth || 0;
+  const height = window.innerHeight || document.documentElement.clientHeight || 0;
+  const ratio = width && height ? width / height : 1;
+  const isPortrait = height > width;
+  const isCoarse = window.matchMedia?.('(pointer: coarse)').matches || false;
+  const minSide = Math.min(width, height);
+  const maxSide = Math.max(width, height);
+  const isTabletSize = (isCoarse && minSide >= 700 && maxSide <= 1400) || (minSide >= 760 && maxSide <= 1366);
+  const classes = [
+    'screen-portrait',
+    'screen-landscape',
+    'viewport-watch-portrait',
+    'viewport-watch-portrait-156',
+    'viewport-watch-portrait-18',
+    'viewport-desktop-wide',
+    'viewport-desktop-xl',
+    'viewport-ipad',
+    'viewport-ipad-portrait',
+    'viewport-ipad-landscape',
+    'viewport-ultrawide',
+  ];
+  document.body.classList.remove(...classes);
+  document.body.classList.add(isPortrait ? 'screen-portrait' : 'screen-landscape');
+  if (isPortrait && width >= 700 && height >= 1050 && !isTabletSize) {
+    document.body.classList.add('viewport-watch-portrait');
+    document.body.classList.add(width <= 940 ? 'viewport-watch-portrait-156' : 'viewport-watch-portrait-18');
+  }
+  if (!isPortrait && width >= 1800) document.body.classList.add('viewport-desktop-wide');
+  if (!isPortrait && width >= 2400) document.body.classList.add('viewport-desktop-xl');
+  if (!isPortrait && ratio >= 2.05) document.body.classList.add('viewport-ultrawide');
+  if (isTabletSize) {
+    document.body.classList.add('viewport-ipad');
+    document.body.classList.add(isPortrait ? 'viewport-ipad-portrait' : 'viewport-ipad-landscape');
+  }
+  return { width, height, isPortrait, isTabletSize, autoDense: isPortrait && width >= 700 && height >= 1050 };
+}
+
 function applyDenseMode(enabled) {
-  document.body.classList.toggle('dense-watch-mode', !!enabled);
+  const adaptive = classifyAdaptiveViewport();
+  const stored = localStorage.getItem('dense_watch_mode');
+  const hasManualPreference = stored === 'true' || stored === 'false';
+  const effective = hasManualPreference ? !!enabled : adaptive.autoDense;
+  document.body.classList.toggle('dense-watch-mode', effective);
+  document.body.classList.toggle('auto-dense-watch-mode', !hasManualPreference && adaptive.autoDense);
   const label = document.getElementById('denseModeName');
-  if (label) label.textContent = enabled ? '竖屏' : '标准';
+  if (label) label.textContent = effective ? (hasManualPreference ? '竖屏' : '自动') : '标准';
 }
 
 function toggleDenseMode() {
-  const next = localStorage.getItem('dense_watch_mode') !== 'true';
+  const current = document.body.classList.contains('dense-watch-mode');
+  const next = !current;
   localStorage.setItem('dense_watch_mode', next ? 'true' : 'false');
   applyDenseMode(next);
 }
@@ -99,6 +143,11 @@ function toggleDenseMode() {
 window.toggleDenseMode = toggleDenseMode;
 document.addEventListener('DOMContentLoaded', () => {
   applyDenseMode(localStorage.getItem('dense_watch_mode') === 'true');
+  let adaptiveTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(adaptiveTimer);
+    adaptiveTimer = setTimeout(() => applyDenseMode(localStorage.getItem('dense_watch_mode') === 'true'), 120);
+  });
 });
 
 // ── Account Management ──────────────────────────────────────
@@ -123,6 +172,7 @@ async function loadAccounts() {
 
 document.addEventListener('DOMContentLoaded', loadAccounts);
 document.addEventListener('DOMContentLoaded', loadOnboardingStatus);
+document.addEventListener('DOMContentLoaded', initGlobalHermesPanel);
 
 function showToast(msg, type='info') {
     let container = document.getElementById('toast-container');
@@ -231,3 +281,63 @@ function renderOnboardingPanel(data) {
         }
     });
 }
+
+function toggleGlobalHermesPanel(force) {
+    const panel = document.getElementById('globalHermesPanel');
+    if (!panel) return;
+    const shouldOpen = typeof force === 'boolean' ? force : !panel.classList.contains('open');
+    panel.classList.toggle('open', shouldOpen);
+    panel.setAttribute('aria-hidden', shouldOpen ? 'false' : 'true');
+    if (shouldOpen) {
+        setTimeout(() => document.getElementById('globalHermesInput')?.focus(), 80);
+    }
+}
+
+function appendGlobalHermesMessage(role, message) {
+    const log = document.getElementById('globalHermesLog');
+    if (!log) return;
+    const node = document.createElement('div');
+    node.className = `global-hermes-message ${role}`;
+    node.textContent = message;
+    log.appendChild(node);
+    log.scrollTop = log.scrollHeight;
+}
+
+async function sendGlobalHermesMessage() {
+    const input = document.getElementById('globalHermesInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    appendGlobalHermesMessage('user', text);
+    appendGlobalHermesMessage('assistant pending', '正在交给 Hermes 识别...');
+    try {
+        const sessionId = localStorage.getItem('global_hermes_session_id') || null;
+        const data = await API.post('/api/hermes/message', { message: text, session_id: sessionId });
+        if (data.session_id) localStorage.setItem('global_hermes_session_id', data.session_id);
+        const pending = document.querySelector('.global-hermes-message.pending');
+        if (pending) pending.remove();
+        appendGlobalHermesMessage('assistant', data.message || data.reply || data.summary || '已生成响应，请在完整对话台查看详情。');
+        if (data.draft || data.task) {
+            appendGlobalHermesMessage('assistant', '检测到需要确认的草稿或多步任务，建议打开完整对话台继续确认。');
+        }
+    } catch (e) {
+        const pending = document.querySelector('.global-hermes-message.pending');
+        if (pending) pending.remove();
+        appendGlobalHermesMessage('assistant', `发送失败：${e.message}`);
+    }
+}
+
+function initGlobalHermesPanel() {
+    const input = document.getElementById('globalHermesInput');
+    if (!input) return;
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendGlobalHermesMessage();
+        }
+    });
+}
+
+window.toggleGlobalHermesPanel = toggleGlobalHermesPanel;
+window.sendGlobalHermesMessage = sendGlobalHermesMessage;

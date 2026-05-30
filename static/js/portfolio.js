@@ -331,7 +331,7 @@ async function loadPortfolio() {
     const listEl = document.getElementById('portfolioList');
     
     if (positions.length === 0) {
-      listEl.innerHTML = '<div class="empty-state" style="padding:32px 16px;"><div class="icon ui-glyph">PF</div><p>暂无持仓</p></div>';
+      listEl.innerHTML = '<div class="empty-state" style="padding:32px 16px;"><div class="icon ui-glyph" data-icon="仓"></div><p>暂无持仓</p></div>';
       return;
     }
     
@@ -449,7 +449,7 @@ async function loadTradingPlans() {
     if (countEl) countEl.textContent = plans.length;
 
     if (plans.length === 0) {
-      listEl.innerHTML = '<div class="empty-state"><div class="icon ui-glyph">PL</div><p>暂无交易计划</p><button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-top:8px;">+ 新建计划</button></div>';
+      listEl.innerHTML = '<div class="empty-state"><div class="icon ui-glyph" data-icon="计"></div><p>暂无交易计划</p><button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-top:8px;">+ 新建计划</button></div>';
       return;
     }
 

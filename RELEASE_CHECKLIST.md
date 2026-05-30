@@ -23,6 +23,7 @@ npm ci
 python -m compileall app.py api models repositories scheduler services schemas tests
 python -m unittest discover tests
 node --check static/js/hermes.js
+node --check static/js/shadow.js
 npm run typecheck
 npm run build
 ```
@@ -38,7 +39,10 @@ Open these pages on `http://127.0.0.1:8000`:
 - [ ] `/` loads the watchlist workspace.
 - [ ] `/portfolio` loads accounts and positions.
 - [ ] `/ai` loads the AI task center.
+- [ ] `/hotspots` loads hotspot themes and research progress.
 - [ ] `/hermes` loads the Hermes console, history, draft panel, and audit panel.
+- [ ] `/shadow` loads AI performance, signal validation, shadow portfolio, execution deviation, and model calibration.
+- [ ] `/ops` loads operations center diagnostics.
 - [ ] `/settings` loads model-provider, migration, and backup settings.
 
 Check these APIs:
@@ -47,6 +51,10 @@ Check these APIs:
 - [ ] `GET /api/settings/backup/status`
 - [ ] `GET /api/hermes/sessions?limit=5`
 - [ ] `GET /api/model-providers`
+- [ ] `GET /api/performance/overview?window=30`
+- [ ] `GET /api/shadow/execution-deviation`
+- [ ] `GET /api/market-regime`
+- [ ] `GET /api/hotspots?limit=12`
 
 ## 5. Hermes Safety Checks
 
@@ -61,6 +69,6 @@ Check these APIs:
 
 ```bash
 git add .
-git commit -m "Release v2.4.0"
-git tag v2.4.0
+git commit -m "Release v2.7.0"
+git tag v2.7.0
 ```

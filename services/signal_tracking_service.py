@@ -23,8 +23,15 @@ def add_tracking(req):
     }
 
 
-def list_tracking(status=None, signal=None, code=None):
-    return signal_tracker.get_tracking_list(status=status, signal=signal, code=code)
+def list_tracking(status=None, signal=None, code=None, window="all", model_mode=None, depth=None):
+    return signal_tracker.get_tracking_list(
+        status=status,
+        signal=signal,
+        code=code,
+        window=window,
+        model_mode=model_mode,
+        depth=depth,
+    )
 
 
 def close_tracking(tracking_id: int, exit_price: float):
@@ -34,8 +41,8 @@ def close_tracking(tracking_id: int, exit_price: float):
     return {"message": "已平仓"}
 
 
-def get_stats():
-    return signal_tracker.get_stats()
+def get_stats(window="all", model_mode=None, depth=None):
+    return signal_tracker.get_stats(window=window, model_mode=model_mode, depth=depth)
 
 
 def get_latest_signals():

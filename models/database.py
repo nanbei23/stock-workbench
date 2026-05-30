@@ -268,6 +268,45 @@ CREATE TABLE IF NOT EXISTS signal_tracking (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS ai_shadow_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER UNIQUE,
+    code TEXT NOT NULL,
+    name TEXT,
+    action TEXT NOT NULL,
+    signal TEXT,
+    suggested_price REAL,
+    fill_price REAL,
+    target_price REAL,
+    stop_loss_price REAL,
+    shares INTEGER DEFAULT 0,
+    confidence REAL,
+    risk_score REAL,
+    status TEXT DEFAULT 'pending',
+    source_reason TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    filled_at TEXT,
+    closed_at TEXT,
+    close_price REAL,
+    pnl REAL,
+    pnl_pct REAL
+);
+
+CREATE TABLE IF NOT EXISTS ai_shadow_positions (
+    code TEXT PRIMARY KEY,
+    name TEXT,
+    total_shares INTEGER DEFAULT 0,
+    avg_cost REAL DEFAULT 0,
+    current_price REAL DEFAULT 0,
+    market_value REAL DEFAULT 0,
+    unrealized_pnl REAL DEFAULT 0,
+    unrealized_pnl_pct REAL DEFAULT 0,
+    realized_pnl REAL DEFAULT 0,
+    source_order_ids TEXT DEFAULT '[]',
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS analysis_tasks (
     task_id TEXT PRIMARY KEY,
     code TEXT NOT NULL,
@@ -349,6 +388,9 @@ CREATE INDEX IF NOT EXISTS idx_signal_tracking_status ON signal_tracking(status)
 CREATE INDEX IF NOT EXISTS idx_tracking_code ON signal_tracking(code);
 CREATE INDEX IF NOT EXISTS idx_tracking_signal ON signal_tracking(signal);
 CREATE INDEX IF NOT EXISTS idx_tracking_date ON signal_tracking(signal_date);
+CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_report ON ai_shadow_orders(report_id);
+CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_code_status ON ai_shadow_orders(code, status);
+CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_created ON ai_shadow_orders(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trades_code_time ON trades(code, trade_time);
 CREATE INDEX IF NOT EXISTS idx_conditional_orders_status ON conditional_orders(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_conditional_orders_code_status ON conditional_orders(code, status);
@@ -489,6 +531,55 @@ MIGRATIONS = [
         );
         CREATE INDEX IF NOT EXISTS idx_cash_ledger_account_created
             ON cash_ledger(account_id, created_at DESC);
+        """,
+    ),
+    (
+        6,
+        "ai_shadow_portfolio",
+        """
+        CREATE TABLE IF NOT EXISTS ai_shadow_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER UNIQUE,
+            code TEXT NOT NULL,
+            name TEXT,
+            action TEXT NOT NULL,
+            signal TEXT,
+            suggested_price REAL,
+            fill_price REAL,
+            target_price REAL,
+            stop_loss_price REAL,
+            shares INTEGER DEFAULT 0,
+            confidence REAL,
+            risk_score REAL,
+            status TEXT DEFAULT 'pending',
+            source_reason TEXT,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            filled_at TEXT,
+            closed_at TEXT,
+            close_price REAL,
+            pnl REAL,
+            pnl_pct REAL
+        );
+        CREATE TABLE IF NOT EXISTS ai_shadow_positions (
+            code TEXT PRIMARY KEY,
+            name TEXT,
+            total_shares INTEGER DEFAULT 0,
+            avg_cost REAL DEFAULT 0,
+            current_price REAL DEFAULT 0,
+            market_value REAL DEFAULT 0,
+            unrealized_pnl REAL DEFAULT 0,
+            unrealized_pnl_pct REAL DEFAULT 0,
+            realized_pnl REAL DEFAULT 0,
+            source_order_ids TEXT DEFAULT '[]',
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_report
+            ON ai_shadow_orders(report_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_code_status
+            ON ai_shadow_orders(code, status);
+        CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_created
+            ON ai_shadow_orders(created_at DESC);
         """,
     ),
 ]

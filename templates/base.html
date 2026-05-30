@@ -5,16 +5,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}炒股小牛马{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.4.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.7.0">
     <!-- 赛博朋克主题 -->
     <link rel="stylesheet" href="/static/css/cyberpunk.css">
     <!-- 午夜主题 -->
     <link rel="stylesheet" href="/static/css/midnight.css">
     <link rel="stylesheet" href="/static/css/sunny.css">
+    <link rel="stylesheet" href="/static/css/fresh-gradient.css?v=2.7.0">
+    <link rel="stylesheet" href="/static/css/adaptive-layout.css?v=2.7.0">
     <!-- Orbitron字体（赛博朋克主题用） -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <script src="/static/js/app.js?v=2.4.0"></script>
+    <script src="/static/js/app.js?v=2.7.0"></script>
     <!-- marked.js — markdown渲染 -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     {% block head_extras %}{% endblock %}
@@ -53,31 +55,58 @@
 </head>
 <body>
     <div class="app">
+        {% set nav_current = '自选股' if request.url.path == '/' else
+            '持仓' if request.url.path == '/portfolio' else
+            'AI分析台' if request.url.path == '/ai' else
+            '热点主线' if request.url.path == '/hotspots' else
+            '对话台' if request.url.path == '/hermes' else
+            'AI绩效' if request.url.path in ['/shadow', '/performance'] else
+            '运营中心' if request.url.path == '/ops' else
+            '设置' if request.url.path == '/settings' else '导航' %}
         <header class="banner">
-            <a href="/" class="logo"><span class="logo-mark">SW</span><span>炒股小牛马</span></a>
+            <a href="/" class="logo"><span class="logo-mark">股</span><span>炒股小牛马</span></a>
             <nav class="nav-tabs">
-                <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}"><span class="ui-glyph" data-icon="WL"></span>自选股</a>
-                <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}"><span class="ui-glyph" data-icon="PF"></span>持仓</a>
-                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}"><span class="ui-glyph" data-icon="AI"></span>AI分析台</a>
-                <a href="/hermes" class="tab-btn {% if request.url.path == '/hermes' %}active{% endif %}"><span class="ui-glyph" data-icon="HC"></span>对话台</a>
-                <a href="/performance" class="tab-btn {% if request.url.path == '/performance' %}active{% endif %}"><span class="ui-glyph" data-icon="PX"></span>信号绩效</a>
-                <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}"><span class="ui-glyph" data-icon="ST"></span>设置</a>
+                <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}" title="自选股"><span class="ui-glyph" data-icon="选"></span>自选股</a>
+                <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}" title="持仓"><span class="ui-glyph" data-icon="仓"></span>持仓</a>
+                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}" title="AI分析台"><span class="ui-glyph" data-icon="析"></span>AI分析台</a>
+                <a href="/hotspots" class="tab-btn {% if request.url.path == '/hotspots' %}active{% endif %}" title="热点主线"><span class="ui-glyph" data-icon="热"></span>热点主线</a>
+                <a href="/hermes" class="tab-btn {% if request.url.path == '/hermes' %}active{% endif %}" title="对话台"><span class="ui-glyph" data-icon="聊"></span>对话台</a>
+                <a href="/shadow" class="tab-btn {% if request.url.path in ['/shadow', '/performance'] %}active{% endif %}" title="AI绩效"><span class="ui-glyph" data-icon="绩"></span>AI绩效</a>
+                <a href="/ops" class="tab-btn {% if request.url.path == '/ops' %}active{% endif %}" title="运营中心"><span class="ui-glyph" data-icon="控"></span>运营中心</a>
+                <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}" title="设置"><span class="ui-glyph" data-icon="设"></span>设置</a>
             </nav>
+            <details class="nav-menu">
+                <summary><span class="ui-glyph" data-icon="导"></span><span>导航：{{ nav_current }}</span></summary>
+                <div class="nav-menu-panel">
+                    <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">自选股</a>
+                    <a href="/portfolio" class="{% if request.url.path == '/portfolio' %}active{% endif %}">持仓</a>
+                    <a href="/ai" class="{% if request.url.path == '/ai' %}active{% endif %}">AI分析台</a>
+                    <a href="/hotspots" class="{% if request.url.path == '/hotspots' %}active{% endif %}">热点主线</a>
+                    <a href="/hermes" class="{% if request.url.path == '/hermes' %}active{% endif %}">对话台</a>
+                    <a href="/shadow" class="{% if request.url.path in ['/shadow', '/performance'] %}active{% endif %}">AI绩效</a>
+                    <a href="/ops" class="{% if request.url.path == '/ops' %}active{% endif %}">运营中心</a>
+                    <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">设置</a>
+                </div>
+            </details>
             <select id="accountSwitcher" style="margin-left:auto;padding:4px 14px;border-radius:20px;font-size:0.75rem;font-weight:600;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);cursor:pointer;transition:all 0.2s;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22 fill=%22%23888%22><polygon points=%220,0 10,0 5,6%22/></svg>');background-repeat:no-repeat;background-position:right 8px center;padding-right:24px;">
               <option value="default">默认账户</option>
             </select>
             <div class="bell-wrapper" id="bellWrapper">
               <div class="notify-badge" id="bellBtn" onclick="toggleBellPanel()" title="异动监控">
-                <span class="ui-glyph" data-icon="AL"></span><span id="bellBadge">0</span>
+                <span class="ui-glyph" data-icon="警"></span><span class="notify-label">异动</span><span id="bellBadge">0</span>
               </div>
             </div>
             <button class="theme-switcher" id="themeSwitcher" title="切换主题">
-                <span class="theme-icon ui-glyph" id="themeIcon" data-icon="CY"></span>
+                <span class="theme-icon ui-glyph" id="themeIcon" data-icon="赛"></span>
                 <span class="theme-name" id="themeName">赛博</span>
             </button>
             <button class="theme-switcher dense-switcher" id="denseModeSwitcher" title="15.6寸竖屏盯盘模式" onclick="toggleDenseMode()">
-                <span class="theme-icon ui-glyph" data-icon="VP"></span>
+                <span class="theme-icon ui-glyph" data-icon="竖"></span>
                 <span class="theme-name" id="denseModeName">标准</span>
+            </button>
+            <button class="theme-switcher hermes-side-trigger" id="globalHermesTrigger" title="打开 Hermes 侧栏" onclick="toggleGlobalHermesPanel()">
+                <span class="theme-icon ui-glyph" data-icon="聊"></span>
+                <span class="theme-name">助手</span>
             </button>
         </header>
         <main class="main-content">
@@ -87,27 +116,35 @@
         <!-- 移动端底部Tab栏（CSS media query控制显示） -->
         <nav class="mobile-tab-bar">
             <a href="/" class="mobile-tab-item {% if request.url.path == '/' %}active{% endif %}">
-                <span class="tab-icon" data-icon="WL"></span>
+                <span class="tab-icon" data-icon="选"></span>
                 <span>自选股</span>
             </a>
             <a href="/portfolio" class="mobile-tab-item {% if request.url.path == '/portfolio' %}active{% endif %}">
-                <span class="tab-icon" data-icon="PF"></span>
+                <span class="tab-icon" data-icon="仓"></span>
                 <span>持仓</span>
             </a>
             <a href="/ai" class="mobile-tab-item {% if request.url.path == '/ai' %}active{% endif %}">
-                <span class="tab-icon" data-icon="AI"></span>
+                <span class="tab-icon" data-icon="析"></span>
                 <span>AI分析台</span>
             </a>
+            <a href="/hotspots" class="mobile-tab-item {% if request.url.path == '/hotspots' %}active{% endif %}">
+                <span class="tab-icon" data-icon="热"></span>
+                <span>热点主线</span>
+            </a>
             <a href="/hermes" class="mobile-tab-item {% if request.url.path == '/hermes' %}active{% endif %}">
-                <span class="tab-icon" data-icon="HC"></span>
+                <span class="tab-icon" data-icon="聊"></span>
                 <span>对话台</span>
             </a>
-            <a href="/performance" class="mobile-tab-item {% if request.url.path == '/performance' %}active{% endif %}">
-                <span class="tab-icon" data-icon="PX"></span>
-                <span>信号绩效</span>
+            <a href="/shadow" class="mobile-tab-item {% if request.url.path in ['/shadow', '/performance'] %}active{% endif %}">
+                <span class="tab-icon" data-icon="绩"></span>
+                <span>AI绩效</span>
+            </a>
+            <a href="/ops" class="mobile-tab-item {% if request.url.path == '/ops' %}active{% endif %}">
+                <span class="tab-icon" data-icon="控"></span>
+                <span>运营中心</span>
             </a>
             <a href="/settings" class="mobile-tab-item {% if request.url.path == '/settings' %}active{% endif %}">
-                <span class="tab-icon" data-icon="ST"></span>
+                <span class="tab-icon" data-icon="设"></span>
                 <span>设置</span>
             </a>
         </nav>
@@ -117,9 +154,10 @@
     <script>
     (function() {
         const THEMES = [
-            { id: 'cyberpunk', name: '赛博',   icon: 'CY' },
-            { id: 'midnight',  name: '午夜',   icon: 'MD' },
-            { id: 'sunny',     name: '阳光',   icon: 'SN' },
+            { id: 'cyberpunk', name: '赛博',   icon: '赛' },
+            { id: 'midnight',  name: '午夜',   icon: '夜' },
+            { id: 'sunny',     name: '阳光',   icon: '阳' },
+            { id: 'fresh-gradient', name: '清爽渐变', icon: '清' },
         ];
 
         function getTheme() {
@@ -160,6 +198,26 @@
         });
     })();
     </script>
+
+    <aside class="global-hermes-panel" id="globalHermesPanel" aria-hidden="true">
+      <header>
+        <div>
+          <span>Hermes Agent</span>
+          <h3>全局操作侧栏</h3>
+        </div>
+        <button type="button" class="global-hermes-close" onclick="toggleGlobalHermesPanel(false)" aria-label="关闭">×</button>
+      </header>
+      <div class="global-hermes-log" id="globalHermesLog">
+        <div class="global-hermes-message assistant">可以直接描述要查询、整理或写入的操作。涉及写库时会先生成草稿等待确认。</div>
+      </div>
+      <footer>
+        <textarea id="globalHermesInput" rows="3" placeholder="例如：把今天关注的 AI 算力主线整理成观察清单"></textarea>
+        <div>
+          <a href="/hermes">打开完整对话台</a>
+          <button type="button" class="btn btn-sm btn-primary" onclick="sendGlobalHermesMessage()">发送</button>
+        </div>
+      </footer>
+    </aside>
 
     <!-- 全局异动浮窗 -->
     <div class="anomaly-modal-overlay" id="anomalyModal" style="display:none;" onclick="if(event.target===this)closeAnomalyModal()">

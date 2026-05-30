@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+
+{% block title %}运营中心 — 炒股小牛马{% endblock %}
+
+{% block head_extras %}
+<style>
+  .ops-page {
+    width: min(1180px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding-bottom: 32px;
+  }
+
+  .ops-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .ops-head h1 {
+    margin: 0 0 4px;
+    font-size: 1.4rem;
+    letter-spacing: 0;
+  }
+
+  .ops-head p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+  }
+
+  .ops-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .ops-score-band {
+    display: grid;
+    grid-template-columns: minmax(160px, 220px) repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .ops-score-main,
+  .ops-kpi,
+  .ops-panel {
+    border: 1px solid var(--border-light);
+    background: var(--surface);
+    border-radius: 8px;
+  }
+
+  .ops-score-main,
+  .ops-kpi {
+    padding: 14px;
+  }
+
+  .ops-score-main span,
+  .ops-kpi span,
+  .ops-mini-label {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    margin-bottom: 6px;
+  }
+
+  .ops-score-main strong {
+    font-family: var(--font-mono);
+    font-size: 2.3rem;
+    line-height: 1;
+  }
+
+  .ops-kpi strong {
+    font-family: var(--font-mono);
+    font-size: 1.25rem;
+  }
+
+  .ops-score-main small,
+  .ops-kpi small {
+    display: block;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .ops-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+    gap: 12px;
+  }
+
+  .ops-panel {
+    padding: 14px;
+    min-width: 0;
+  }
+
+  .ops-panel h2 {
+    margin: 0 0 10px;
+    font-size: 1rem;
+    letter-spacing: 0;
+  }
+
+  .ops-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .ops-panel-head h2 {
+    margin: 0;
+  }
+
+  .ops-two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .ops-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .ops-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: var(--surface-secondary);
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .ops-row b {
+    display: block;
+    font-size: 0.88rem;
+    margin-bottom: 3px;
+  }
+
+  .ops-row small {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    line-height: 1.45;
+  }
+
+  .ops-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    border: 1px solid var(--border-light);
+  }
+
+  .ops-badge.ok {
+    color: var(--color-down);
+    background: rgba(82,183,136,0.12);
+    border-color: rgba(82,183,136,0.24);
+  }
+
+  .ops-badge.warn {
+    color: var(--color-up);
+    background: rgba(224,122,95,0.12);
+    border-color: rgba(224,122,95,0.24);
+  }
+
+  .ops-table {
+    display: grid;
+    gap: 6px;
+  }
+
+  .ops-table-row {
+    display: grid;
+    grid-template-columns: minmax(80px, 1.2fr) repeat(3, minmax(64px, .8fr));
+    gap: 8px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-light);
+    font-size: 0.8rem;
+  }
+
+  .ops-table-row:last-child {
+    border-bottom: 0;
+  }
+
+  .ops-bar {
+    height: 8px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .ops-bar span {
+    display: block;
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 999px;
+  }
+
+  .ops-empty {
+    color: var(--text-muted);
+    font-size: 0.84rem;
+    padding: 12px;
+    border: 1px dashed var(--border-light);
+    border-radius: 8px;
+    text-align: center;
+  }
+
+  body.dense-watch-mode .ops-page {
+    width: min(980px, calc(100vw - 18px));
+  }
+
+  body.dense-watch-mode .ops-score-band {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  body.dense-watch-mode .ops-panel,
+  body.dense-watch-mode .ops-kpi,
+  body.dense-watch-mode .ops-score-main {
+    padding: 10px;
+  }
+
+  body.viewport-desktop-xl .ops-two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.viewport-ipad .ops-score-band,
+  body.viewport-watch-portrait .ops-score-band {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  body.viewport-ipad-portrait .ops-score-band,
+  body.viewport-watch-portrait-156 .ops-score-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.viewport-ipad-portrait .ops-score-main,
+  body.viewport-watch-portrait-156 .ops-score-main {
+    grid-column: 1 / -1;
+  }
+
+  body.viewport-ipad .ops-two,
+  body.viewport-watch-portrait .ops-two {
+    grid-template-columns: 1fr;
+  }
+
+  @media (max-width: 920px) {
+    .ops-score-band,
+    .ops-grid,
+    .ops-two {
+      grid-template-columns: 1fr;
+    }
+    .ops-head {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    .ops-actions {
+      justify-content: flex-start;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ops-page">
+  <header class="ops-head">
+    <div>
+      <h1>运营中心</h1>
+      <p>把数据可信、风控、资产、AI质量、备份和诊断放在一个发布级总控台。</p>
+    </div>
+    <div class="ops-actions">
+      <button class="btn btn-sm btn-ghost" onclick="toggleDenseMode()">切换竖屏模式</button>
+      <button class="btn btn-sm btn-ghost" onclick="createOpsBackup()">创建备份</button>
+      <button class="btn btn-sm btn-primary" onclick="loadOpsDashboard()">刷新</button>
+    </div>
+  </header>
+
+  <section class="ops-score-band" id="opsScoreBand">
+    <div class="ops-score-main"><span>运营分</span><strong>--</strong></div>
+    <div class="ops-kpi"><span>数据可信</span><strong>--</strong></div>
+    <div class="ops-kpi"><span>风控状态</span><strong>--</strong></div>
+    <div class="ops-kpi"><span>AI报告</span><strong>--</strong></div>
+    <div class="ops-kpi"><span>通知</span><strong>--</strong></div>
+  </section>
+
+  <div class="ops-grid">
+    <div class="ops-list">
+      <section class="ops-panel">
+        <div class="ops-panel-head">
+          <h2>数据可信体系</h2>
+          <button class="btn btn-sm btn-ghost" onclick="fixOpsDataHealth()">一键修复</button>
+        </div>
+        <div class="ops-two">
+          <div id="opsDataChecks" class="ops-list"></div>
+          <div id="opsFreshness" class="ops-list"></div>
+        </div>
+      </section>
+
+      <section class="ops-panel">
+        <h2>投资组合专业化</h2>
+        <div id="opsPortfolioSummary" class="ops-list"></div>
+      </section>
+
+      <section class="ops-panel">
+        <h2>AI 报告质量闭环</h2>
+        <div id="opsQualitySummary" class="ops-list"></div>
+      </section>
+    </div>
+
+    <aside class="ops-list">
+      <section class="ops-panel">
+        <h2>全局风控中心</h2>
+        <div id="opsRiskCenter" class="ops-list"></div>
+      </section>
+
+      <section class="ops-panel">
+        <h2>安装升级与备份</h2>
+        <div id="opsReleaseOps" class="ops-list"></div>
+      </section>
+
+      <section class="ops-panel">
+        <h2>任务与通知</h2>
+        <div id="opsNotifications" class="ops-list"></div>
+      </section>
+
+      <section class="ops-panel">
+        <h2>可观测性诊断</h2>
+        <div id="opsDiagnostics" class="ops-list"></div>
+      </section>
+    </aside>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ops.js?v=2.7.0"></script>
+{% endblock %}

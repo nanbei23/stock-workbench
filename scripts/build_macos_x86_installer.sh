@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-2.4.0}"
+VERSION="${VERSION:-2.7.0}"
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_DIR="$DIST_DIR/stock-workbench-v$VERSION-macos-x86"
 ARCHIVE="$DIST_DIR/stock-workbench-v$VERSION-macos-x86.tar.gz"
@@ -31,6 +31,9 @@ main() {
   log "Copying application files"
   rsync -a \
     --exclude '.git' \
+    --include '.env.example' \
+    --exclude '.env' \
+    --exclude '.env.*' \
     --exclude '.venv' \
     --exclude '.venv312' \
     --exclude 'node_modules' \

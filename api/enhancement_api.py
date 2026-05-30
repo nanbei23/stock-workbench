@@ -1,11 +1,27 @@
 """Enhancement API: model provider pool, review panels, risk and health checks."""
 
-from fastapi import APIRouter, Query
+import hashlib
+import json
+
+from fastapi import APIRouter, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from services import enhancement_service
 
 router = APIRouter(tags=["enhancements"])
+
+
+def _cached_json(payload: dict, request: Request, max_age: int = 30):
+    encoded = json.dumps(jsonable_encoder(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    etag = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": f"private, max-age={max_age}"})
+    return JSONResponse(
+        content=json.loads(encoded),
+        headers={"ETag": etag, "Cache-Control": f"private, max-age={max_age}"},
+    )
 
 
 class ModelProviderPayload(BaseModel):
@@ -85,6 +101,16 @@ async def risk_exposure():
     return await enhancement_service.risk_exposure()
 
 
+@router.get("/portfolio/risk-center")
+async def risk_center():
+    return await enhancement_service.risk_center()
+
+
+@router.get("/portfolio/professional-summary")
+async def portfolio_professional_summary():
+    return await enhancement_service.portfolio_professional_summary()
+
+
 @router.get("/events")
 async def events():
     return await enhancement_service.events()
@@ -128,6 +154,46 @@ async def task_metrics():
 @router.get("/system-diagnostics")
 async def system_diagnostics():
     return await enhancement_service.system_diagnostics()
+
+
+@router.get("/operations/dashboard")
+async def operations_dashboard():
+    return await enhancement_service.operations_dashboard()
+
+
+@router.get("/market-regime")
+async def market_regime(request: Request):
+    return _cached_json(await enhancement_service.market_regime(), request, max_age=20)
+
+
+@router.get("/hotspots")
+async def market_hotspots(request: Request, limit: int = Query(default=12, ge=1, le=30)):
+    return _cached_json(await enhancement_service.market_hotspots(limit=limit), request, max_age=45)
+
+
+@router.get("/hotspots/{topic_name}")
+async def hotspot_detail(topic_name: str, request: Request):
+    return _cached_json(await enhancement_service.hotspot_detail(topic_name), request, max_age=45)
+
+
+@router.get("/research-pulse")
+async def research_pulse(request: Request):
+    return _cached_json(enhancement_service.research_pulse(), request, max_age=30)
+
+
+@router.get("/strategy-lifecycle")
+async def strategy_lifecycle(request: Request):
+    return _cached_json(await enhancement_service.strategy_lifecycle(), request, max_age=30)
+
+
+@router.get("/research-progress")
+async def research_progress(request: Request):
+    return _cached_json(await enhancement_service.research_progress(), request, max_age=10)
+
+
+@router.get("/notifications/digest")
+async def notification_digest():
+    return await enhancement_service.notification_digest()
 
 
 @router.get("/ai/readiness")

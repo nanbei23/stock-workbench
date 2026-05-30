@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+## 2.7.0 - 2026-05-31
+
+### Added
+
+- Added the Hotspot Themes page with market regime, research pulse, hotspot board, strategy lifecycle, and real-time research progress summaries.
+- Added read-only cache-friendly APIs for market regime, hotspots, hotspot detail, research pulse, strategy lifecycle, and research progress.
+- Added the global Hermes side drawer so the AI operation console is available from every top-level page.
+- Added the `清爽渐变` theme inspired by the OpenAshare-style airy dashboard layout.
+- Added the AI Shadow Portfolio and unified AI Performance workspace.
+- Added AI performance overview API with signal validation, shadow portfolio, execution deviation, model/depth filters, and calibration data in one payload.
+- Added confidence calibration with Brier Score, model/depth breakdowns, execution deviation buckets, and shadow portfolio simulation diagnostics.
+
+### Changed
+
+- Merged the previous signal performance page into `/shadow`, now labeled as `AI绩效`.
+- Redirected `/performance` to `/shadow` to keep one performance workspace.
+- Updated signal performance to support time-window, model-mode, and analysis-depth filters.
+- Updated release metadata, frontend cache versions, package metadata, and Intel macOS installer default version to `2.7.0`.
+
+### Fixed
+
+- Fixed SELL, UNDERWEIGHT, and STRONG_SELL signal performance direction so price declines count as positive signal returns.
+- Fixed sell-side stop-loss and target-hit direction handling for signal tracking.
+- Fixed the macOS installer package builder to exclude local `.env` files.
+
+## 2.6.0 - 2026-05-30
+
+### Added
+
+- Added the Operations Center page for data trust, global risk, portfolio analysis, AI quality, release operations, notifications, and diagnostics.
+- Added operations dashboard, risk center, portfolio professional summary, and notification digest APIs.
+- Added configurable global risk thresholds for concentration, cash buffer, daily loss, pending order amount, and quote freshness.
+
+### Changed
+
+- Updated release metadata, frontend cache versions, package metadata, and Intel macOS installer default version to `2.6.0`.
+
 ## 2.4.0 - 2026-05-30
 
 ### Added

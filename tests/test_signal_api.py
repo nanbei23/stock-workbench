@@ -42,7 +42,14 @@ class SignalApiTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()[0]["code"], "000001")
-        list_tracking.assert_called_once_with(status="open", signal=None, code=None)
+        list_tracking.assert_called_once_with(
+            status="open",
+            signal=None,
+            code=None,
+            window="all",
+            model_mode=None,
+            depth=None,
+        )
 
     def test_close_tracking_route_uses_service_layer(self):
         with patch(

@@ -1,9 +1,10 @@
 """Cross-cutting enhancement features for settings, AI review, and risk panels."""
 
+import asyncio
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
 import httpx
 from fastapi import HTTPException
@@ -11,6 +12,9 @@ from fastapi import HTTPException
 from models.database import get_db
 from repositories import portfolio_repository
 from repositories import settings_repository
+from services import ai_report_service, quote_service, settings_service
+from data.market import get_market_sentiment
+from data.signal import get_hot_reasons, get_industry_ranking
 
 
 MODEL_PROVIDERS_KEY = "model_providers"
@@ -36,6 +40,32 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+async def _safe_live(coro, fallback, timeout: float = 3.0):
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except Exception:
+        return fallback
+
+
+def _clamp(value: float, low: float, high: float):
+    return max(low, min(high, value))
+
+
+def _breadth_usable(breadth: dict) -> bool:
+    total = _safe_int(breadth.get("total"))
+    counted = _safe_int(breadth.get("up")) + _safe_int(breadth.get("down")) + _safe_int(breadth.get("flat"))
+    if total <= 0:
+        return False
+    return counted >= min(total * 0.5, max(800, total * 0.18))
 
 
 def _settings():
@@ -336,6 +366,911 @@ async def risk_exposure():
         "positions": sorted(positions, key=lambda item: item["weight_pct"], reverse=True),
         "buckets": [{"bucket": k, "market_value": round(v, 2), "weight_pct": round(v / total * 100, 2) if total else 0} for k, v in sorted(buckets.items())],
         "warnings": warnings,
+    }
+
+
+async def risk_center():
+    settings = _settings()
+    risk = await risk_exposure()
+    overview_rows = await _fetchall(
+        """
+        SELECT
+          COALESCE(SUM(CASE WHEN key = 'cash_balance' THEN CAST(value AS REAL) ELSE 0 END), 0) AS default_cash,
+          COALESCE(SUM(CASE WHEN key LIKE 'cash_balance_%' THEN CAST(value AS REAL) ELSE 0 END), 0) AS account_cash
+        FROM settings
+        WHERE key = 'cash_balance' OR key LIKE 'cash_balance_%'
+        """
+    )
+    pnl_rows = await _fetchall(
+        """
+        SELECT date, total_pnl, total_assets
+        FROM daily_pnl
+        WHERE code6 = '' OR code6 IS NULL
+        ORDER BY date DESC
+        LIMIT 1
+        """
+    )
+    pending_rows = await _fetchall(
+        """
+        SELECT code, name, action, shares, target_price, expires_at
+        FROM conditional_orders
+        WHERE status = 'pending'
+        ORDER BY created_at DESC
+        LIMIT 20
+        """
+    )
+    stale_rows = await _fetchall(
+        """
+        SELECT code, name, updated_at
+        FROM portfolio
+        WHERE total_shares > 0
+          AND (updated_at IS NULL OR updated_at < datetime('now', ?))
+        ORDER BY updated_at ASC
+        LIMIT 10
+        """,
+        (f"-{max(1, _safe_int(settings.get('risk_quote_stale_hours'), 24))} hours",),
+    )
+
+    thresholds = {
+        "max_position_pct": _safe_float(settings.get("risk_max_position_pct"), 30),
+        "max_bucket_pct": _safe_float(settings.get("risk_max_bucket_pct"), 45),
+        "min_cash_pct": _safe_float(settings.get("risk_min_cash_pct"), 5),
+        "daily_loss_pct": _safe_float(settings.get("risk_daily_loss_pct"), 3),
+        "max_pending_order_amount": _safe_float(settings.get("risk_max_pending_order_amount"), 50000),
+        "quote_stale_hours": _safe_int(settings.get("risk_quote_stale_hours"), 24),
+    }
+    cash = 0.0
+    if overview_rows:
+        row = overview_rows[0]
+        cash = _safe_float(row.get("account_cash")) or _safe_float(row.get("default_cash"))
+    market_value = _safe_float(risk.get("total_market_value"))
+    total_assets = market_value + cash
+    cash_pct = cash / total_assets * 100 if total_assets else 0
+
+    checks = []
+    top_position = (risk.get("positions") or [{}])[0] if risk.get("positions") else None
+    top_weight = _safe_float(top_position.get("weight_pct")) if top_position else 0
+    checks.append({
+        "key": "position_concentration",
+        "label": "单票集中度",
+        "status": "warning" if top_weight > thresholds["max_position_pct"] else "ok",
+        "value": round(top_weight, 2),
+        "limit": thresholds["max_position_pct"],
+        "message": f"{top_position.get('name') or top_position.get('code')} 仓位 {top_weight:.1f}%" if top_position else "暂无持仓",
+    })
+
+    top_bucket = max(risk.get("buckets") or [], key=lambda item: item.get("weight_pct", 0), default=None)
+    bucket_weight = _safe_float(top_bucket.get("weight_pct")) if top_bucket else 0
+    checks.append({
+        "key": "bucket_concentration",
+        "label": "主题集中度",
+        "status": "warning" if bucket_weight > thresholds["max_bucket_pct"] else "ok",
+        "value": round(bucket_weight, 2),
+        "limit": thresholds["max_bucket_pct"],
+        "message": f"代码段 {top_bucket.get('bucket')} 暴露 {bucket_weight:.1f}%" if top_bucket else "暂无暴露",
+    })
+
+    checks.append({
+        "key": "cash_buffer",
+        "label": "现金缓冲",
+        "status": "warning" if total_assets and cash_pct < thresholds["min_cash_pct"] else "ok",
+        "value": round(cash_pct, 2),
+        "limit": thresholds["min_cash_pct"],
+        "message": f"现金占比 {cash_pct:.1f}%",
+    })
+
+    latest_pnl = pnl_rows[0] if pnl_rows else {}
+    daily_loss_pct = (
+        abs(_safe_float(latest_pnl.get("total_pnl"))) / _safe_float(latest_pnl.get("total_assets")) * 100
+        if _safe_float(latest_pnl.get("total_pnl")) < 0 and _safe_float(latest_pnl.get("total_assets")) else 0
+    )
+    checks.append({
+        "key": "daily_loss",
+        "label": "单日亏损线",
+        "status": "warning" if daily_loss_pct > thresholds["daily_loss_pct"] else "ok",
+        "value": round(daily_loss_pct, 2),
+        "limit": thresholds["daily_loss_pct"],
+        "message": f"{latest_pnl.get('date') or '最近'} 单日亏损 {daily_loss_pct:.1f}%",
+    })
+
+    oversize_orders = []
+    for row in pending_rows:
+        amount = _safe_float(row.get("shares")) * _safe_float(row.get("target_price"))
+        if amount > thresholds["max_pending_order_amount"]:
+            oversize_orders.append({**row, "amount": round(amount, 2)})
+    checks.append({
+        "key": "pending_order_amount",
+        "label": "待执行计划金额",
+        "status": "warning" if oversize_orders else "ok",
+        "value": len(oversize_orders),
+        "limit": thresholds["max_pending_order_amount"],
+        "message": f"{len(oversize_orders)} 个待执行计划超过单笔金额上限",
+        "details": oversize_orders[:5],
+    })
+
+    checks.append({
+        "key": "quote_freshness",
+        "label": "持仓价格新鲜度",
+        "status": "warning" if stale_rows else "ok",
+        "value": len(stale_rows),
+        "limit": thresholds["quote_stale_hours"],
+        "message": f"{len(stale_rows)} 只持仓超过 {thresholds['quote_stale_hours']} 小时未更新",
+        "details": stale_rows,
+    })
+
+    warnings = [item["message"] for item in checks if item["status"] != "ok"]
+    score = round(sum(1 for item in checks if item["status"] == "ok") / len(checks) * 100) if checks else 100
+    return {
+        "score": score,
+        "ok": not warnings,
+        "thresholds": thresholds,
+        "summary": {
+            "total_assets": round(total_assets, 2),
+            "market_value": round(market_value, 2),
+            "cash": round(cash, 2),
+            "cash_pct": round(cash_pct, 2),
+            "position_count": len(risk.get("positions", [])),
+            "pending_order_count": len(pending_rows),
+        },
+        "checks": checks,
+        "warnings": warnings,
+        "exposure": risk,
+    }
+
+
+async def portfolio_professional_summary():
+    risk = await risk_exposure()
+    account_rows = await _fetchall(
+        """
+        SELECT a.id, a.name, a.broker,
+               COUNT(p.code) AS position_count,
+               COALESCE(SUM(CASE WHEN p.total_shares > 0 THEN p.market_value ELSE 0 END), 0) AS market_value,
+               COALESCE(SUM(CASE WHEN p.total_shares > 0 THEN p.unrealized_pnl ELSE 0 END), 0) AS unrealized_pnl
+        FROM accounts a
+        LEFT JOIN portfolio p ON p.account_id = a.id
+        GROUP BY a.id, a.name, a.broker
+        ORDER BY market_value DESC
+        """
+    )
+    strategy_rows = await _fetchall(
+        """
+        SELECT COALESCE(w.strategy_state, 'watch') AS strategy_state,
+               COUNT(*) AS watch_count,
+               COALESCE(SUM(CASE WHEN p.total_shares > 0 THEN p.market_value ELSE 0 END), 0) AS market_value
+        FROM watchlist w
+        LEFT JOIN portfolio p ON p.code = w.code
+        GROUP BY COALESCE(w.strategy_state, 'watch')
+        ORDER BY market_value DESC, watch_count DESC
+        """
+    )
+    trade_rows = await _fetchall(
+        """
+        SELECT code, name,
+               COUNT(*) AS trade_count,
+               COALESCE(SUM(CASE WHEN direction = 'buy' THEN amount ELSE -amount END), 0) AS net_amount,
+               MAX(trade_time) AS last_trade_at
+        FROM trades
+        GROUP BY code, name
+        ORDER BY last_trade_at DESC
+        LIMIT 12
+        """
+    )
+    total = _safe_float(risk.get("total_market_value"))
+    risk_accounts = {item.get("id"): item for item in risk.get("accounts", [])}
+    for row in account_rows:
+        if row.get("id") in risk_accounts:
+            row["market_value"] = round(_safe_float(risk_accounts[row["id"]].get("market_value")), 2)
+            row["position_count"] = risk_accounts[row["id"]].get("positions", row.get("position_count", 0))
+        row["weight_pct"] = round(_safe_float(row.get("market_value")) / total * 100, 2) if total else 0
+    return {
+        "total_market_value": risk.get("total_market_value", 0),
+        "accounts": account_rows,
+        "strategy_exposure": strategy_rows,
+        "top_positions": (risk.get("positions") or [])[:10],
+        "buckets": risk.get("buckets", []),
+        "recent_trade_activity": trade_rows,
+    }
+
+
+async def notification_digest():
+    settings = _settings()
+    recent = settings_service.poll_notifications().get("notifications", [])
+    rows = await _fetchall(
+        """
+        SELECT type, COUNT(*) AS count
+        FROM (
+          SELECT 'order_trigger' AS type FROM conditional_orders WHERE status = 'triggered' AND triggered_at > datetime('now', '-1 day')
+          UNION ALL
+          SELECT 'analysis_done' AS type FROM analysis_reports WHERE created_at > datetime('now', '-1 day')
+          UNION ALL
+          SELECT 'strategy_change' AS type FROM watchlist WHERE strategy_state_updated_at IS NOT NULL AND strategy_state_updated_at > datetime('now', '-1 day')
+          UNION ALL
+          SELECT 'anomaly' AS type FROM anomaly_logs WHERE created_at > datetime('now', '-1 day')
+        )
+        GROUP BY type
+        """
+    )
+    by_type = {row["type"]: row["count"] for row in rows}
+    enabled = {
+        "browser": settings.get("browser_notify_enabled") == "true",
+        "digest": settings.get("notification_digest_enabled", "true") == "true",
+        "strategy_change": settings.get("notify_strategy_change", "true") == "true",
+        "order_trigger": settings.get("notify_order_trigger", "true") == "true",
+        "anomaly": settings.get("notify_anomaly", "true") == "true",
+        "analysis_done": settings.get("notify_analysis_done", "true") == "true",
+    }
+    missing = [key for key, value in enabled.items() if key != "browser" and not value]
+    return {
+        "enabled": enabled,
+        "disabled_channels": missing,
+        "recent": recent[:8],
+        "by_type_24h": by_type,
+        "count_24h": sum(by_type.values()),
+    }
+
+
+async def data_freshness():
+    rows = await _fetchall(
+        """
+        SELECT
+          (SELECT MAX(updated_at) FROM portfolio WHERE total_shares > 0) AS portfolio_updated_at,
+          (SELECT MAX(trade_time) FROM trades) AS last_trade_at,
+          (SELECT MAX(created_at) FROM analysis_reports) AS last_report_at,
+          (SELECT MAX(cached_at) FROM news_cache) AS last_news_at,
+          (SELECT MAX(created_at) FROM anomaly_logs) AS last_anomaly_at
+        """
+    )
+    data = rows[0] if rows else {}
+    now = datetime.now()
+    items = []
+    labels = {
+        "portfolio_updated_at": ("持仓估值", 24),
+        "last_trade_at": ("交易流水", 14 * 24),
+        "last_report_at": ("AI报告", 7 * 24),
+        "last_news_at": ("新闻缓存", 24),
+        "last_anomaly_at": ("异动日志", 24),
+    }
+    for key, (label, max_hours) in labels.items():
+        raw = data.get(key)
+        age_hours = None
+        status = "warning"
+        if raw:
+            parsed = None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    parsed = datetime.strptime(str(raw).split(".")[0], fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed:
+                age_hours = round((now - parsed).total_seconds() / 3600, 1)
+                status = "ok" if age_hours <= max_hours else "warning"
+        items.append({"key": key, "label": label, "time": raw, "age_hours": age_hours, "status": status, "max_hours": max_hours})
+    return {"items": items, "ok": all(item["status"] == "ok" for item in items)}
+
+
+async def operations_dashboard():
+    audit, risk, portfolio, quality, backup, diagnostics, freshness, notifications, event_data = await asyncio.gather(
+        data_audit(),
+        risk_center(),
+        portfolio_professional_summary(),
+        ai_report_service.get_quality_summary(limit=80),
+        asyncio.to_thread(settings_service.migration_status),
+        system_diagnostics(),
+        data_freshness(),
+        notification_digest(),
+        events(),
+    )
+    scores = [
+        _safe_float(audit.get("score")),
+        _safe_float(risk.get("score")),
+        100 if freshness.get("ok") else 70,
+        100 if backup.get("migrations", {}).get("up_to_date") else 70,
+        100 if diagnostics.get("summary", {}).get("warning_count", 0) == 0 else 75,
+    ]
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "score": round(sum(scores) / len(scores)) if scores else 0,
+        "data_trust": {"audit": audit, "freshness": freshness},
+        "portfolio": portfolio,
+        "risk": risk,
+        "ai_quality": quality,
+        "release_ops": backup,
+        "notifications": notifications,
+        "events": event_data,
+        "diagnostics": diagnostics,
+    }
+
+
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    haystack = (text or "").lower()
+    return any(keyword.lower() in haystack for keyword in keywords)
+
+
+def _hotspot_taxonomy():
+    return [
+        {"name": "AI算力", "keywords": ["ai", "人工智能", "算力", "大模型", "芯片", "服务器", "gpu", "英伟达", "机器人"]},
+        {"name": "半导体", "keywords": ["半导体", "芯片", "晶圆", "封测", "光刻", "存储", "先进封装"]},
+        {"name": "新能源", "keywords": ["新能源", "光伏", "储能", "电池", "锂电", "风电", "氢能"]},
+        {"name": "智能汽车", "keywords": ["汽车", "智驾", "无人驾驶", "车联网", "整车", "零部件"]},
+        {"name": "医药健康", "keywords": ["医药", "创新药", "医疗", "器械", "cro", "生物", "疫苗"]},
+        {"name": "消费复苏", "keywords": ["消费", "食品", "白酒", "旅游", "酒店", "零售", "家电"]},
+        {"name": "金融地产", "keywords": ["银行", "券商", "保险", "地产", "房地产", "物业"]},
+        {"name": "高端制造", "keywords": ["制造", "工业母机", "军工", "航天", "机器人", "设备"]},
+    ]
+
+
+def _phase_status(now_time: time, start: time, end: time) -> str:
+    if start <= now_time <= end:
+        return "active"
+    if now_time > end:
+        return "done"
+    return "upcoming"
+
+
+def _topic_seed(name: str):
+    return {
+        "name": name,
+        "heat_score": 0.0,
+        "trend_direction": "flat",
+        "reason_parts": [],
+        "news_count": 0,
+        "stock_count": 0,
+        "related_stocks": [],
+        "signals": [],
+        "source_tags": [],
+        "score_components": {},
+        "updated_at": None,
+        "market_metrics": {},
+    }
+
+
+def _add_stock_once(topic: dict, stock: dict):
+    code = stock.get("code") or stock.get("stock_code") or ""
+    name = stock.get("name") or stock.get("stock_name") or code
+    if not code and not name:
+        return
+    existing = {(item.get("code"), item.get("name")) for item in topic["related_stocks"]}
+    key = (code, name)
+    if key in existing:
+        return
+    topic["related_stocks"].append({
+        "code": code,
+        "name": name,
+        "strategy_state": stock.get("strategy_state") or stock.get("reason") or "market",
+        "holding": bool(stock.get("holding")),
+        "unrealized_pnl_pct": stock.get("unrealized_pnl_pct"),
+        "has_anomaly": bool(stock.get("has_anomaly")),
+        "change_pct": stock.get("change_pct"),
+        "source": stock.get("source", ""),
+    })
+
+
+def _score_topic(topic: dict, amount: float, component: str, source: str, reason: str | None = None):
+    topic["heat_score"] += amount
+    topic["score_components"][component] = round(topic["score_components"].get(component, 0) + amount, 2)
+    if source and source not in topic["source_tags"]:
+        topic["source_tags"].append(source)
+    if reason and reason not in topic["reason_parts"]:
+        topic["reason_parts"].append(reason)
+
+
+async def market_regime():
+    risk, freshness, tasks, indices, sentiment, industries = await asyncio.gather(
+        risk_center(),
+        data_freshness(),
+        task_metrics(),
+        _safe_live(quote_service.get_indices(), {}, timeout=3),
+        _safe_live(get_market_sentiment(), {"breadth": {}, "northbound": {}}, timeout=3),
+        _safe_live(get_industry_ranking(), [], timeout=3),
+    )
+    pnl_rows = await _fetchall(
+        """
+        SELECT date, total_pnl_pct, total_pnl, total_assets
+        FROM daily_pnl
+        WHERE code6 = '' OR code6 IS NULL
+        ORDER BY date DESC
+        LIMIT 5
+        """
+    )
+    latest = pnl_rows[0] if pnl_rows else {}
+    pnl_values = [_safe_float(row.get("total_pnl_pct")) for row in pnl_rows if row.get("total_pnl_pct") is not None]
+    avg_pnl = sum(pnl_values) / len(pnl_values) if pnl_values else 0
+    risk_score = _safe_float(risk.get("score"), 70)
+    freshness_score = 100 if freshness.get("ok") else 70
+    task_penalty = min(12, _safe_int(tasks.get("by_status", {}).get("failed"), 0) * 3)
+    index_items = [item for item in (indices or {}).values() if isinstance(item, dict) and item.get("change_pct") is not None]
+    avg_index_pct = sum(_safe_float(item.get("change_pct")) for item in index_items) / len(index_items) if index_items else 0
+    positive_index_ratio = sum(1 for item in index_items if _safe_float(item.get("change_pct")) >= 0) / len(index_items) if index_items else 0.5
+    raw_breadth = (sentiment or {}).get("breadth") or {}
+    breadth_valid = _breadth_usable(raw_breadth)
+    breadth = raw_breadth if breadth_valid else {}
+    total = _safe_int(breadth.get("total"))
+    up = _safe_int(breadth.get("up"))
+    down = _safe_int(breadth.get("down"))
+    limit_up = _safe_int(breadth.get("limit_up"))
+    limit_down = _safe_int(breadth.get("limit_down"))
+    breadth_balance = (up - down) / total if total else 0
+    limit_balance = (limit_up - limit_down) / total if total else 0
+    northbound = (sentiment or {}).get("northbound") or {}
+    north_net = _safe_float(northbound.get("total_net"))
+    industry_sample = [row for row in (industries or [])[:10] if isinstance(row, dict)]
+    industry_avg = sum(_safe_float(row.get("change_pct")) for row in industry_sample) / len(industry_sample) if industry_sample else 0
+    industry_positive_ratio = sum(1 for row in industry_sample if _safe_float(row.get("change_pct")) >= 0) / len(industry_sample) if industry_sample else 0.5
+    live_source_count = sum([bool(index_items), breadth_valid, bool(northbound), bool(industry_sample)])
+    score = round(_clamp(
+        50
+        + avg_index_pct * 5
+        + (positive_index_ratio - 0.5) * 12
+        + breadth_balance * 26
+        + limit_balance * 80
+        + _clamp(north_net / 10, -8, 8)
+        + industry_avg * 3
+        + (industry_positive_ratio - 0.5) * 8
+        + avg_pnl * 2
+        + (risk_score - 70) * 0.18
+        + (freshness_score - 70) * 0.08
+        - task_penalty,
+        0,
+        100,
+    ))
+    if score >= 72:
+        regime = "risk_on"
+        label = "进攻"
+        action_bias = "可围绕主线分批推进，仍需控制单票集中度。"
+    elif score >= 48:
+        regime = "balanced"
+        label = "均衡"
+        action_bias = "维持观察和小步试错，优先等待确认信号。"
+    else:
+        regime = "risk_off"
+        label = "防守"
+        action_bias = "降低追高动作，优先复核仓位、现金和止损纪律。"
+    notes = []
+    if index_items:
+        notes.append(f"主要指数平均涨跌幅 {avg_index_pct:.2f}% ，上涨指数占比 {positive_index_ratio * 100:.0f}%。")
+    if total:
+        notes.append(f"全市场上涨 {up} 家、下跌 {down} 家，涨停 {limit_up} 家、跌停 {limit_down} 家。")
+    elif raw_breadth:
+        notes.append("市场宽度源返回样本不完整，本次未纳入市场状态评分。")
+    if northbound:
+        notes.append(f"北向资金净流入 {north_net:.2f} 亿元。")
+    if industry_sample:
+        top = industry_sample[0]
+        notes.append(f"行业领涨：{top.get('name') or '--'} {round(_safe_float(top.get('change_pct')), 2)}%。")
+    notes.extend(risk.get("warnings", [])[:3])
+    if not freshness.get("ok"):
+        notes.append("部分核心数据超过新鲜度阈值，盘中决策前建议先刷新。")
+    if tasks.get("recent_failures"):
+        notes.append("最近 AI 任务存在失败记录，报告结论需要复核。")
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "regime": regime,
+        "label": label,
+        "score": score,
+        "action_bias": action_bias,
+        "position_guidance": {
+            "cash_pct": risk.get("summary", {}).get("cash_pct", 0),
+            "position_count": risk.get("summary", {}).get("position_count", 0),
+            "risk_score": risk_score,
+        },
+        "latest_pnl": latest,
+        "market_breadth": breadth,
+        "raw_market_breadth": raw_breadth,
+        "northbound": northbound,
+        "indices": indices,
+        "top_industries": industry_sample[:6],
+        "source_summary": {
+            "mode": "live_market_plus_local_risk" if live_source_count else "local_risk_fallback",
+            "live_source_count": live_source_count,
+            "sources": [
+                {"name": "腾讯指数行情", "status": "ok" if index_items else "fallback"},
+                {"name": "新浪/东方财富涨跌家数", "status": "ok" if breadth_valid else "invalid" if raw_breadth else "fallback"},
+                {"name": "东方财富北向资金", "status": "ok" if northbound else "fallback"},
+                {"name": "东方财富行业板块", "status": "ok" if industry_sample else "fallback"},
+                {"name": "本地风控与组合数据", "status": "ok"},
+            ],
+            "reliability": round(55 + live_source_count * 10 + (10 if freshness.get("ok") else 0)),
+        },
+        "notes": notes[:5],
+    }
+
+
+async def market_hotspots(limit: int = 12):
+    news_rows, watch_rows, anomaly_rows, live_hot_rows, industry_rows, sentiment = await asyncio.gather(
+        _fetchall(
+            """
+            SELECT code6, source, title, content, sentiment, published_at, cached_at
+            FROM news_cache
+            ORDER BY COALESCE(published_at, cached_at) DESC
+            LIMIT 120
+            """
+        ),
+        _fetchall(
+            """
+            SELECT w.code, w.name, w.group_name, w.strategy_state,
+                   COALESCE(p.total_shares, 0) AS total_shares,
+                   COALESCE(p.unrealized_pnl_pct, 0) AS unrealized_pnl_pct
+            FROM watchlist w
+            LEFT JOIN portfolio p ON p.code = w.code
+            ORDER BY w.sort_order ASC, w.added_at DESC
+            LIMIT 200
+            """
+        ),
+        _fetchall(
+            """
+            SELECT code, name, anomaly_type, severity, created_at
+            FROM anomaly_logs
+            WHERE created_at > datetime('now', '-7 days')
+            ORDER BY created_at DESC
+            LIMIT 120
+            """
+        ),
+        _safe_live(get_hot_reasons(), [], timeout=3),
+        _safe_live(get_industry_ranking(), [], timeout=3),
+        _safe_live(get_market_sentiment(), {"breadth": {}, "northbound": {}}, timeout=3),
+    )
+    topic_map: dict[str, dict] = {}
+    def topic_for(name: str):
+        key = name or "未分类热点"
+        if key not in topic_map:
+            topic_map[key] = _topic_seed(key)
+        return topic_map[key]
+
+    anomaly_codes = {row.get("code") for row in anomaly_rows if row.get("code")}
+    for row in (industry_rows or [])[:18]:
+        name = row.get("name") or row.get("code") or ""
+        if not name:
+            continue
+        change = _safe_float(row.get("change_pct"))
+        up_count = _safe_int(row.get("up_count"))
+        down_count = _safe_int(row.get("down_count"))
+        lead_change = _safe_float(row.get("lead_change_pct"))
+        topic = topic_for(name)
+        score = 34 + max(0, change) * 5 + max(0, lead_change) * 0.6 + max(0, up_count - down_count) * 0.08
+        _score_topic(topic, score, "industry_strength", "东方财富行业板块", f"{name} 板块涨跌幅 {change:.2f}%")
+        topic["trend_direction"] = "up" if change > 0 else "down" if change < 0 else "flat"
+        topic["market_metrics"] = {
+            "change_pct": round(change, 2),
+            "up_count": up_count,
+            "down_count": down_count,
+            "lead_stock": row.get("lead_stock") or "",
+            "lead_change_pct": round(lead_change, 2),
+        }
+        if row.get("lead_stock"):
+            _add_stock_once(topic, {
+                "name": row.get("lead_stock"),
+                "code": "",
+                "change_pct": lead_change,
+                "source": "industry_lead_stock",
+            })
+
+    if live_hot_rows:
+        hot_topic = topic_for("实时热榜")
+        for idx, row in enumerate(live_hot_rows[:20]):
+            hot_value = _safe_float(row.get("hot_value"))
+            change = _safe_float(row.get("change_pct"))
+            score = max(4, 22 - idx) + _clamp(hot_value / 100000, 0, 12) + max(0, change) * 0.8
+            _score_topic(hot_topic, score, "hot_rank", "同花顺/东方财富热榜", f"{row.get('name') or row.get('code')} 热度排名 {idx + 1}")
+            _add_stock_once(hot_topic, {
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "change_pct": change,
+                "source": "hot_rank",
+            })
+        hot_topic["trend_direction"] = "up" if sum(1 for row in live_hot_rows[:20] if _safe_float(row.get("change_pct")) > 0) >= 10 else "flat"
+
+    for spec in _hotspot_taxonomy():
+        topic = topic_for(spec["name"])
+        related_news = []
+        related_codes = set()
+        for row in news_rows:
+            text = f"{row.get('title') or ''} {row.get('content') or ''}"
+            if _contains_any(text, spec["keywords"]):
+                related_news.append(row)
+                if row.get("code6"):
+                    related_codes.add(row["code6"])
+        related_stocks = []
+        for row in watch_rows:
+            stock_text = f"{row.get('name') or ''} {row.get('group_name') or ''}"
+            code = row.get("code")
+            if code in related_codes or _contains_any(stock_text, spec["keywords"]):
+                related_stocks.append({
+                    "code": code,
+                    "name": row.get("name") or code,
+                    "strategy_state": row.get("strategy_state") or "watch",
+                    "holding": _safe_int(row.get("total_shares")) > 0,
+                    "unrealized_pnl_pct": round(_safe_float(row.get("unrealized_pnl_pct")), 2),
+                    "has_anomaly": code in anomaly_codes,
+                    "source": "local_watchlist",
+                })
+        sentiment_boost = sum(1 for row in related_news if row.get("sentiment") == "positive") - sum(1 for row in related_news if row.get("sentiment") == "negative")
+        anomaly_boost = sum(1 for row in related_stocks if row.get("has_anomaly"))
+        heat_score = len(related_news) * 9 + len(related_stocks) * 7 + max(0, sentiment_boost) * 5 + anomaly_boost * 8
+        if heat_score <= 0 and not topic["source_tags"]:
+            continue
+        if heat_score > 0:
+            _score_topic(topic, heat_score, "local_news_watchlist", "本地新闻/自选/异动", f"{len(related_news)} 条相关新闻，{len(related_stocks)} 只自选/持仓关联标的")
+            topic["news_count"] += len(related_news)
+            topic["signals"].extend([row.get("title") for row in related_news[:4] if row.get("title")])
+            for stock in related_stocks:
+                _add_stock_once(topic, stock)
+            topic["updated_at"] = (related_news[0].get("published_at") or related_news[0].get("cached_at")) if related_news else topic["updated_at"]
+        trend_direction = "up" if sentiment_boost > 0 or anomaly_boost else "flat"
+        if sentiment_boost < 0:
+            trend_direction = "down"
+        if topic["trend_direction"] == "flat":
+            topic["trend_direction"] = trend_direction
+
+    if not topic_map and watch_rows:
+        grouped: dict[str, list[dict]] = {}
+        for row in watch_rows:
+            group = row.get("group_name") or "自选观察"
+            grouped.setdefault(group, []).append(row)
+        for group, rows in grouped.items():
+            topic = topic_for(group)
+            _score_topic(topic, min(70, 20 + len(rows) * 6), "local_watchlist_fallback", "本地自选分组", f"来自自选分组，{len(rows)} 只股票待跟踪")
+            for row in rows[:8]:
+                _add_stock_once(topic, {"code": row.get("code"), "name": row.get("name") or row.get("code"), "strategy_state": row.get("strategy_state") or "watch", "source": "watchlist_fallback"})
+    topics = []
+    for topic in topic_map.values():
+        if topic["heat_score"] <= 0:
+            continue
+        topic["related_stocks"] = topic["related_stocks"][:8]
+        topic["stock_count"] = len(topic["related_stocks"])
+        topic["signals"] = topic["signals"][:5]
+        topic["heat_score"] = round(min(100, topic["heat_score"]), 1)
+        topic["reason"] = topic["reason_parts"][0] if topic["reason_parts"] else "实时市场和本地研究数据共同触发"
+        topic["source_count"] = len(topic["source_tags"])
+        topic["reliability"] = round(min(95, 42 + topic["source_count"] * 14 + min(20, topic["news_count"] * 2) + (10 if topic["market_metrics"] else 0)))
+        topics.append(topic)
+    topics.sort(key=lambda item: (item["heat_score"], item["news_count"], item["stock_count"]), reverse=True)
+    raw_breadth = (sentiment or {}).get("breadth") or {}
+    breadth_valid = _breadth_usable(raw_breadth)
+    breadth = raw_breadth if breadth_valid else {}
+    live_source_count = sum([bool(industry_rows), bool(live_hot_rows), breadth_valid])
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "count": len(topics),
+        "topics": topics[: max(1, min(limit, 30))],
+        "source_summary": {
+            "mode": "live_market_plus_local_research" if live_source_count else "local_research_fallback",
+            "live_source_count": live_source_count,
+            "sources": [
+                {"name": "东方财富行业板块", "status": "ok" if industry_rows else "fallback"},
+                {"name": "同花顺/东方财富热榜", "status": "ok" if live_hot_rows else "fallback"},
+                {"name": "新浪/东方财富市场宽度", "status": "ok" if breadth_valid else "invalid" if raw_breadth else "fallback"},
+                {"name": "本地新闻缓存", "status": "ok" if news_rows else "empty"},
+                {"name": "本地自选/持仓/异动", "status": "ok" if watch_rows or anomaly_rows else "empty"},
+            ],
+            "reliability": round(50 + live_source_count * 12 + (8 if news_rows else 0) + (8 if watch_rows or anomaly_rows else 0)),
+        },
+        "market_context": {"breadth": breadth, "raw_breadth": raw_breadth, "northbound": (sentiment or {}).get("northbound") or {}},
+    }
+
+
+async def hotspot_detail(topic_name: str):
+    hotspots = await market_hotspots(limit=30)
+    topic = next((item for item in hotspots.get("topics", []) if item.get("name") == topic_name), None)
+    if not topic:
+        raise HTTPException(404, "热点主题不存在")
+    spec = next((item for item in _hotspot_taxonomy() if item["name"] == topic_name), {"keywords": [topic_name]})
+    news_rows = await _fetchall(
+        """
+        SELECT code6, source, title, content, url, sentiment, published_at, cached_at
+        FROM news_cache
+        ORDER BY COALESCE(published_at, cached_at) DESC
+        LIMIT 80
+        """
+    )
+    related_news = [
+        row for row in news_rows
+        if _contains_any(f"{row.get('title') or ''} {row.get('content') or ''}", spec["keywords"])
+    ][:12]
+    trend_rows = await _fetchall(
+        """
+        SELECT date(cached_at) AS day, COUNT(*) AS count
+        FROM news_cache
+        WHERE cached_at > datetime('now', '-14 days')
+        GROUP BY date(cached_at)
+        ORDER BY day ASC
+        """
+    )
+    return {
+        "topic": topic,
+        "related_news": related_news,
+        "trend": trend_rows,
+        "playbook": [
+            "先确认主题是否同时有新闻催化、异动和持仓/自选关联。",
+            "只把高热度作为候选池，不直接替代买卖纪律。",
+            "若主题升温但风控分下降，优先降低单票仓位和条件单金额。",
+        ],
+    }
+
+
+def research_pulse():
+    now = datetime.now()
+    current = now.time()
+    phases = [
+        {"key": "pre_market", "label": "盘前准备", "time": "09:00-09:25", "status": _phase_status(current, time(9, 0), time(9, 25)), "focus": "热点预热、隔夜消息、条件单复核"},
+        {"key": "morning", "label": "早盘确认", "time": "09:30-11:30", "status": _phase_status(current, time(9, 30), time(11, 30)), "focus": "量价确认、异动股票、主线强弱"},
+        {"key": "midday", "label": "午间复盘", "time": "11:30-13:00", "status": _phase_status(current, time(11, 30), time(13, 0)), "focus": "更新 AI 报告、复核风险、梳理下午计划"},
+        {"key": "afternoon", "label": "尾盘执行", "time": "13:00-15:00", "status": _phase_status(current, time(13, 0), time(15, 0)), "focus": "条件单确认、仓位微调、收盘前纪律"},
+        {"key": "post_market", "label": "收盘归档", "time": "15:00-17:30", "status": _phase_status(current, time(15, 0), time(17, 30)), "focus": "记录交易、生成复盘、更新策略生命周期"},
+    ]
+    active = next((item for item in phases if item["status"] == "active"), phases[-1] if current > time(17, 30) else phases[0])
+    return {"generated_at": now.isoformat(timespec="seconds"), "active": active, "phases": phases}
+
+
+async def strategy_lifecycle():
+    portfolio_rows, watch_rows, plan_rows, order_rows, signal_rows = await asyncio.gather(
+        _fetchall(
+            """
+            SELECT code, name, total_shares, market_value, unrealized_pnl_pct, updated_at
+            FROM portfolio
+            WHERE total_shares > 0
+            ORDER BY market_value DESC
+            LIMIT 80
+            """
+        ),
+        _fetchall(
+            """
+            SELECT w.code, w.name, w.strategy_state, w.group_name, w.strategy_state_updated_at, p.code AS holding_code
+            FROM watchlist w
+            LEFT JOIN portfolio p ON p.code = w.code AND p.total_shares > 0
+            WHERE p.code IS NULL
+            ORDER BY w.sort_order ASC, w.added_at DESC
+            LIMIT 80
+            """
+        ),
+        _fetchall(
+            """
+            SELECT code, name, direction, plan_type, target_price, plan_shares, status, reason, created_at, expires_at
+            FROM trading_plans
+            ORDER BY created_at DESC
+            LIMIT 80
+            """
+        ),
+        _fetchall(
+            """
+            SELECT code, name, action, condition_type, target_price, shares, status, created_at, expires_at
+            FROM conditional_orders
+            ORDER BY created_at DESC
+            LIMIT 80
+            """
+        ),
+        _fetchall(
+            """
+            SELECT code, name, signal, entry_price, exit_price, pnl_pct, status, signal_date, exit_date, updated_at
+            FROM signal_tracking
+            ORDER BY updated_at DESC
+            LIMIT 80
+            """
+        ),
+    )
+    columns = {
+        "watching": {"label": "观察池", "items": []},
+        "planned": {"label": "待执行", "items": []},
+        "holding": {"label": "持仓中", "items": []},
+        "weakening": {"label": "走弱复核", "items": []},
+        "invalidated": {"label": "失效归档", "items": []},
+        "exited": {"label": "已退出", "items": []},
+    }
+    for row in watch_rows[:20]:
+        columns["watching"]["items"].append({
+            "code": row.get("code"),
+            "name": row.get("name") or row.get("code"),
+            "source": row.get("group_name") or "watchlist",
+            "detail": f"策略状态：{row.get('strategy_state') or 'watch'}",
+            "updated_at": row.get("strategy_state_updated_at"),
+        })
+    for row in plan_rows:
+        item = {
+            "code": row.get("code"),
+            "name": row.get("name") or row.get("code"),
+            "source": "trading_plan",
+            "detail": f"{row.get('direction')} {row.get('plan_shares') or 0} 股，目标 {row.get('target_price') or '--'}",
+            "updated_at": row.get("created_at"),
+        }
+        if row.get("status") in ("cancelled", "expired"):
+            columns["invalidated"]["items"].append(item)
+        elif row.get("status") in ("filled", "triggered"):
+            columns["holding"]["items"].append(item)
+        else:
+            columns["planned"]["items"].append(item)
+    for row in order_rows:
+        item = {
+            "code": row.get("code"),
+            "name": row.get("name") or row.get("code"),
+            "source": "conditional_order",
+            "detail": f"{row.get('action')} 条件 {row.get('condition_type')} {row.get('target_price')}",
+            "updated_at": row.get("created_at"),
+        }
+        if row.get("status") in ("cancelled", "expired"):
+            columns["invalidated"]["items"].append(item)
+        elif row.get("status") == "triggered":
+            columns["holding"]["items"].append(item)
+        else:
+            columns["planned"]["items"].append(item)
+    for row in portfolio_rows:
+        item = {
+            "code": row.get("code"),
+            "name": row.get("name") or row.get("code"),
+            "source": "portfolio",
+            "detail": f"{row.get('total_shares') or 0} 股，浮盈亏 {round(_safe_float(row.get('unrealized_pnl_pct')), 2)}%",
+            "updated_at": row.get("updated_at"),
+        }
+        if _safe_float(row.get("unrealized_pnl_pct")) <= -5:
+            columns["weakening"]["items"].append(item)
+        else:
+            columns["holding"]["items"].append(item)
+    for row in signal_rows:
+        item = {
+            "code": row.get("code"),
+            "name": row.get("name") or row.get("code"),
+            "source": "signal_tracking",
+            "detail": f"{row.get('signal')} · 后验收益 {round(_safe_float(row.get('pnl_pct')), 2)}%",
+            "updated_at": row.get("updated_at") or row.get("exit_date") or row.get("signal_date"),
+        }
+        if row.get("status") == "closed":
+            columns["exited"]["items"].append(item)
+        elif row.get("status") == "invalidated":
+            columns["invalidated"]["items"].append(item)
+    result = []
+    for key, data in columns.items():
+        items = data["items"][:12]
+        result.append({"key": key, "label": data["label"], "count": len(data["items"]), "items": items})
+    return {"generated_at": datetime.now().isoformat(timespec="seconds"), "columns": result}
+
+
+async def research_progress():
+    tasks, stages = await asyncio.gather(
+        _fetchall(
+            """
+            SELECT task_id, code, name, status, queue_status, depth, stages, error, elapsed, created_at, updated_at
+            FROM analysis_tasks
+            ORDER BY updated_at DESC
+            LIMIT 8
+            """
+        ),
+        _fetchall(
+            """
+            SELECT task_id, code, stage_id, completed_at
+            FROM analysis_progress
+            ORDER BY completed_at DESC
+            LIMIT 80
+            """
+        ),
+    )
+    by_task: dict[str, list[dict]] = {}
+    for row in stages:
+        by_task.setdefault(row.get("task_id"), []).append(row)
+    items = []
+    for row in tasks:
+        stage_rows = by_task.get(row.get("task_id"), [])
+        stage_payload = _loads(row.get("stages"), {})
+        total = len(stage_payload) if isinstance(stage_payload, dict) and stage_payload else max(len(stage_rows), 0)
+        completed = len(stage_rows) if stage_rows else sum(1 for item in (stage_payload or {}).values() if isinstance(item, dict) and item.get("status") == "done")
+        items.append({
+            "task_id": row.get("task_id"),
+            "code": row.get("code"),
+            "name": row.get("name") or row.get("code"),
+            "status": row.get("queue_status") or row.get("status"),
+            "depth": row.get("depth") or "standard",
+            "completed": completed,
+            "total": total,
+            "progress_pct": round(completed / total * 100) if total else 0,
+            "elapsed": row.get("elapsed"),
+            "error": row.get("error"),
+            "updated_at": row.get("updated_at"),
+            "latest_stage": stage_rows[0].get("stage_id") if stage_rows else None,
+        })
+    active = [item for item in items if item.get("status") in ("queued", "running", "pending")]
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "active_count": len(active),
+        "items": items,
+        "stream_endpoint_pattern": "/api/ai/analyze/{task_id}/stream",
     }
 
 

@@ -51,18 +51,18 @@ const MANDATORY_STAGES = new Set(['market', 'fundamentals', 'quality_gate', 'tra
 const ALL_ANALYSTS = ['market','social','news','fundamentals','policy','hot_money','lockup'];
 const ALL_PIPELINE = ['quality_gate','debate','trader','risk','pm'];
 const STAGE_META = {
-    market: { n: '技术', code: 'TA', c: 'sky' },
-    social: { n: '情绪', code: 'SN', c: 'purple' },
-    news: { n: '新闻', code: 'NW', c: 'gold' },
-    fundamentals: { n: '基本面', code: 'FA', c: 'green' },
-    policy: { n: '政策', code: 'PL', c: 'rose' },
-    hot_money: { n: '游资', code: 'FM', c: 'orange' },
-    lockup: { n: '解禁', code: 'LU', c: 'cyan' },
-    quality_gate: { n: '门控', code: 'QA', c: 'mint' },
-    debate: { n: '多空', code: 'DB', c: 'indigo' },
-    trader: { n: '交易', code: 'TR', c: 'coral' },
-    risk: { n: '风控', code: 'RK', c: 'slate' },
-    pm: { n: '决策', code: 'PM', c: 'gold' }
+    market: { n: '技术', code: '技', c: 'sky' },
+    social: { n: '情绪', code: '情', c: 'purple' },
+    news: { n: '新闻', code: '新', c: 'gold' },
+    fundamentals: { n: '基本面', code: '基', c: 'green' },
+    policy: { n: '政策', code: '政', c: 'rose' },
+    hot_money: { n: '资金流', code: '资', c: 'orange' },
+    lockup: { n: '解禁', code: '解', c: 'cyan' },
+    quality_gate: { n: '质量门控', code: '审', c: 'mint' },
+    debate: { n: '多空辩论', code: '辩', c: 'indigo' },
+    trader: { n: '交易计划', code: '交', c: 'coral' },
+    risk: { n: '风控复核', code: '风', c: 'slate' },
+    pm: { n: '最终决策', code: '决', c: 'gold' }
 };
 const REPORT_STAGE_LABELS = {
     market: '技术分析',
@@ -76,7 +76,7 @@ const REPORT_STAGE_LABELS = {
 const FACT_CHECK_STAGE_ORDER = ['market','social','news','fundamentals','policy','hot_money','lockup'];
 
 function renderStageAvatar(id, state = 'idle', suffix = '') {
-    const meta = STAGE_META[id] || { n: id, code: id.slice(0, 2).toUpperCase(), c: 'slate' };
+    const meta = STAGE_META[id] || { n: id, code: '项', c: 'slate' };
     return `<div class="avatar-card ${state}" data-color="${meta.c}" id="stage-${id}">
         <div class="avatar-mark">${meta.code}</div>
         <div class="avatar-name">${meta.n}${suffix}</div>
@@ -714,7 +714,7 @@ function switchReportTab(btn, target) {
         renderDashboard(r, c);
         html = c.innerHTML;
         // 七层分析师折叠卡片
-        const ai = Object.entries(REPORT_STAGE_LABELS).map(([k, n]) => ({ k, i: STAGE_META[k]?.code || 'ST', n }));
+        const ai = Object.entries(REPORT_STAGE_LABELS).map(([k, n]) => ({ k, i: STAGE_META[k]?.code || '项', n }));
         for (const a of ai) {
             const txt = s[a.k];
             if (txt && txt !== '暂无') {
@@ -732,7 +732,7 @@ function switchReportTab(btn, target) {
     // 七层分析师 tab — 带指标网格的折叠卡片
     if (REPORT_STAGE_LABELS[target]) {
         const txt = s[target] || '暂无';
-        let html = renderStageCard(STAGE_META[target]?.code || 'ST', REPORT_STAGE_LABELS[target], txt, true);
+        let html = renderStageCard(STAGE_META[target]?.code || '项', REPORT_STAGE_LABELS[target], txt, true);
         // 基本面tab额外显示指标网格
         if (target === 'fundamentals' && txt !== '暂无') {
             html += renderMetricsGrid(txt);
@@ -780,7 +780,7 @@ function switchReportTab(btn, target) {
     // 决策 tab
     if (target==='pm') {
         const pmText = r.reasoning||s.pm||'暂无';
-        c.innerHTML=`<div class="report-section-title">决策</div>${renderStageCard('PM','PM决策',pmText,true)}`;
+        c.innerHTML=`<div class="report-section-title">决策</div>${renderStageCard('决','最终决策',pmText,true)}`;
         return;
     }
 

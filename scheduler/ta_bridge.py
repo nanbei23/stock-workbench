@@ -719,6 +719,12 @@ def _save_report_to_db(task: AnalysisTask):
         task.result['_reportId'] = report_id
         logger.info("报告已保存: id=%d, code=%s", report_id, task.code)
 
+        try:
+            from services.shadow_portfolio_service import sync_report_from_sqlite
+            sync_report_from_sqlite(db, report_id)
+        except Exception as e:
+            logger.warning("AI影子盘同步失败: %s", e)
+
         # 自动创建信号跟踪
         signal = result.get("signal")
         if signal:

@@ -4072,7 +4072,7 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
     margin-left: auto;
 }
 
-.notify-badge span {
+.notify-badge #bellBadge {
     background: white;
     color: var(--color-accent);
     border-radius: 50%;
@@ -4083,6 +4083,13 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
     justify-content: center;
     font-weight: 700;
     font-size: 0.7rem;
+}
+
+.notify-badge .notify-label {
+    color: currentColor;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
 }
 
 .notify-badge .ui-glyph {
@@ -5055,14 +5062,10 @@ body.dense-watch-mode .portfolio-container {
     --left-w: 250px;
   }
 
-  .banner .logo span:not(.logo-mark),
-  .tab-btn {
-    font-size: 0;
-  }
-
   .tab-btn {
     padding: 6px 8px;
-    gap: 0;
+    gap: 4px;
+    font-size: 0.72rem;
   }
 
   .tab-btn .ui-glyph {
@@ -5546,7 +5549,9 @@ body.dense-watch-mode .portfolio-container {
 }
 
 .model-mode-btn .mode-icon {
-  font-size: 1.2rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .model-mode-btn .mode-name {

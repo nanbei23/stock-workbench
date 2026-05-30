@@ -1,0 +1,620 @@
+{% extends "base.html" %}
+{% block title %}AI绩效 — 炒股小牛马{% endblock %}
+
+{% block head_extras %}
+<style>
+.shadow-page {
+  width: min(1380px, calc(100vw - 40px));
+  margin: 0 auto;
+  padding: 22px 0 36px;
+}
+.shadow-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.shadow-title h1 {
+  margin: 0;
+  font-size: 1.45rem;
+  letter-spacing: 0;
+}
+.shadow-title p {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-width: 780px;
+}
+.shadow-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.shadow-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.shadow-filters select {
+  min-width: 112px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  padding: 7px 10px;
+  font-size: .78rem;
+}
+.performance-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.performance-tabs button {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  padding: 7px 14px;
+  font-size: .78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.performance-tabs button.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+[data-performance-panel][hidden] {
+  display: none !important;
+}
+.shadow-kpis {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.shadow-kpi,
+.shadow-panel {
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+.shadow-kpi {
+  padding: 14px;
+  min-height: 92px;
+}
+.shadow-kpi span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: .78rem;
+  margin-bottom: 8px;
+}
+.shadow-kpi strong {
+  display: block;
+  font-size: 1.35rem;
+  color: var(--text-primary);
+}
+.shadow-kpi small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+.shadow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, .95fr);
+  gap: 12px;
+}
+.shadow-calibration {
+  margin-bottom: 12px;
+}
+.shadow-performance {
+  margin-bottom: 12px;
+}
+.shadow-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+.shadow-panel header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+.shadow-panel h2 {
+  margin: 0;
+  font-size: .98rem;
+}
+.shadow-panel p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: .76rem;
+}
+.shadow-table-wrap {
+  overflow-x: auto;
+}
+.shadow-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+}
+.shadow-table th,
+.shadow-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  text-align: left;
+  font-size: .8rem;
+  white-space: nowrap;
+}
+.shadow-table th {
+  color: var(--text-secondary);
+  font-weight: 700;
+  background: var(--bg-secondary);
+}
+.shadow-table td {
+  color: var(--text-primary);
+}
+.shadow-table .muted {
+  color: var(--text-muted);
+}
+.shadow-signal {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 700;
+  background: rgba(91,155,213,.12);
+  color: var(--color-accent);
+}
+.shadow-signal.sell {
+  color: var(--color-down);
+  background: rgba(82,183,136,.12);
+}
+.shadow-signal.buy {
+  color: var(--color-up);
+  background: rgba(224,122,95,.12);
+}
+.shadow-empty {
+  padding: 28px 16px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: .85rem;
+}
+.shadow-calibration-body {
+  display: grid;
+  grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+.shadow-calibration-card {
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+.shadow-calibration-card h3 {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+  font-size: .86rem;
+}
+.shadow-calibration-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.shadow-calibration-summary div {
+  min-height: 58px;
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+}
+.shadow-calibration-summary span,
+.shadow-stat-row small {
+  display: block;
+  color: var(--text-muted);
+  font-size: .72rem;
+}
+.shadow-calibration-summary strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+.shadow-stat-row {
+  display: grid;
+  grid-template-columns: minmax(92px, .7fr) minmax(0, 1fr) minmax(66px, auto);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.shadow-stat-row:last-child {
+  border-bottom: 0;
+}
+.shadow-stat-row b {
+  color: var(--text-primary);
+  font-size: .8rem;
+}
+.shadow-meter {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(128, 148, 174, .18);
+  overflow: hidden;
+}
+.shadow-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-up));
+}
+.shadow-insight-list {
+  display: grid;
+  gap: 8px;
+}
+.shadow-insight {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-size: .78rem;
+}
+.shadow-performance-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, .72fr) minmax(0, 1.28fr);
+  gap: 12px;
+  padding: 14px 16px 0;
+}
+.shadow-performance-list {
+  display: grid;
+  gap: 8px;
+}
+.shadow-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+.shadow-deviation-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+.shadow-deviation-card {
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 12px;
+}
+.shadow-deviation-card span {
+  display: block;
+  color: var(--text-secondary);
+  font-size: .74rem;
+}
+.shadow-deviation-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+.shadow-deviation-card small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+.shadow-filter-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 0;
+  flex-wrap: wrap;
+}
+.shadow-filter-row button {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  font-size: .76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.shadow-filter-row button.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+@media (max-width: 980px) {
+  .shadow-page {
+    width: min(100%, calc(100vw - 20px));
+  }
+  .shadow-hero,
+  .shadow-grid {
+    grid-template-columns: 1fr;
+  }
+  .shadow-actions {
+    justify-content: flex-start;
+  }
+  .shadow-filters {
+    justify-content: flex-start;
+  }
+  .shadow-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shadow-calibration-body {
+    grid-template-columns: 1fr;
+  }
+  .shadow-performance-grid {
+    grid-template-columns: 1fr;
+  }
+  .shadow-model-grid,
+  .shadow-deviation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="shadow-page">
+  <section class="shadow-hero">
+    <div class="shadow-title">
+      <h1>AI绩效</h1>
+      <p>这里合并信号绩效和 AI 影子盘：信号绩效验证 AI 判断准不准，影子盘验证如果完全照 AI 执行会和实盘产生什么差异。</p>
+    </div>
+    <div class="shadow-actions">
+      <button class="btn btn-sm btn-primary" onclick="syncShadowReports()">同步AI报告</button>
+      <button class="btn btn-sm" onclick="markShadowToMarket()">刷新估值</button>
+      <div class="shadow-filters">
+        <select id="performanceWindow" onchange="setPerformanceFilter('window', this.value)">
+          <option value="30">近30天</option>
+          <option value="7">近7天</option>
+          <option value="90">近90天</option>
+          <option value="all">全部</option>
+        </select>
+        <select id="performanceModel" onchange="setPerformanceFilter('model_mode', this.value)">
+          <option value="all">全部模型</option>
+        </select>
+        <select id="performanceDepth" onchange="setPerformanceFilter('depth', this.value)">
+          <option value="all">全部深度</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="shadow-kpis" id="shadowKpis">
+    <div class="shadow-kpi"><span>影子委托</span><strong>--</strong><small>等待同步</small></div>
+    <div class="shadow-kpi"><span>影子持仓</span><strong>--</strong><small>等待估值</small></div>
+    <div class="shadow-kpi"><span>影子市值</span><strong>--</strong><small>按当前行情估算</small></div>
+    <div class="shadow-kpi"><span>影子浮盈</span><strong>--</strong><small>未实现收益</small></div>
+    <div class="shadow-kpi"><span>实盘差异</span><strong>--</strong><small>影子盘 - 实盘</small></div>
+  </section>
+
+  <nav class="performance-tabs" id="performanceTabs">
+    <button class="active" data-tab="signal" onclick="setPerformanceTab('signal')">信号验证</button>
+    <button data-tab="shadow" onclick="setPerformanceTab('shadow')">AI影子盘</button>
+    <button data-tab="deviation" onclick="setPerformanceTab('deviation')">执行差异</button>
+    <button data-tab="model" onclick="setPerformanceTab('model')">模型校准</button>
+  </nav>
+
+  <section class="shadow-panel shadow-performance" data-performance-panel="signal">
+    <header>
+      <div>
+        <h2>信号绩效</h2>
+        <p>验证 AI 信号本身的前向表现，避免和影子盘执行结果混在一起。</p>
+      </div>
+    </header>
+    <div class="shadow-performance-grid">
+      <div class="shadow-calibration-card">
+        <h3>总体表现</h3>
+        <div class="shadow-calibration-summary" id="signalPerformanceSummary">
+          <div><span>总跟踪</span><strong>--</strong></div>
+          <div><span>已闭环</span><strong>--</strong></div>
+          <div><span>胜率</span><strong>--</strong></div>
+          <div><span>平均收益</span><strong>--</strong></div>
+          <div><span>超额收益</span><strong>--</strong></div>
+          <div><span>基准样本</span><strong>--</strong></div>
+        </div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>每档信号绩效</h3>
+        <div class="shadow-performance-list" id="signalPerformanceBars">
+          <div class="shadow-empty">暂无信号绩效样本</div>
+        </div>
+      </div>
+    </div>
+    <div class="shadow-filter-row" id="signalTrackingFilters">
+      <button class="active" data-filter="open" onclick="setSignalTrackingFilter('open')">持仓中</button>
+      <button data-filter="closed" onclick="setSignalTrackingFilter('closed')">已闭环</button>
+      <button data-filter="all" onclick="setSignalTrackingFilter('all')">全部</button>
+    </div>
+    <div class="shadow-table-wrap" style="padding-top:10px;">
+      <table class="shadow-table">
+        <thead>
+          <tr>
+            <th>股票</th>
+            <th>信号</th>
+            <th>入场</th>
+            <th>现价/出场</th>
+            <th>收益</th>
+            <th>持有</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="signalTrackingBody">
+          <tr><td colspan="8"><div class="shadow-empty">正在读取信号绩效...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="shadow-panel shadow-calibration" data-performance-panel="shadow" hidden>
+    <header>
+      <div>
+        <h2>AI校准复盘</h2>
+        <p>只评估“完全按 AI 执行”这一套模拟组合，不再重复信号绩效口径。</p>
+      </div>
+    </header>
+    <div class="shadow-calibration-body">
+      <div class="shadow-calibration-card">
+        <h3>总体样本</h3>
+        <div class="shadow-calibration-summary" id="shadowCalibrationSummary">
+          <div><span>可评估样本</span><strong>--</strong></div>
+          <div><span>方向命中率</span><strong>--</strong></div>
+          <div><span>平均后验收益</span><strong>--</strong></div>
+          <div><span>Brier Score</span><strong>--</strong></div>
+          <div><span>正负样本</span><strong>--</strong></div>
+        </div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>置信度与建议</h3>
+        <div id="shadowConfidenceBuckets">
+          <div class="shadow-empty">暂无置信度样本</div>
+        </div>
+        <div class="shadow-insight-list" id="shadowCalibrationTips" style="margin-top:10px;"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="shadow-grid" data-performance-panel="shadow" hidden>
+    <div class="shadow-panel">
+      <header>
+        <div>
+          <h2>实盘与AI影子盘对比</h2>
+          <p>同一只股票下，比较 AI 完全执行后的仓位和你的真实持仓。</p>
+        </div>
+      </header>
+      <div class="shadow-table-wrap">
+        <table class="shadow-table">
+          <thead>
+            <tr>
+              <th>股票</th>
+              <th>现价</th>
+              <th>影子股数</th>
+              <th>实盘股数</th>
+              <th>仓位差</th>
+              <th>影子浮盈</th>
+              <th>实盘浮盈</th>
+              <th>盈亏差</th>
+            </tr>
+          </thead>
+          <tbody id="shadowComparisonBody">
+            <tr><td colspan="8"><div class="shadow-empty">正在读取对比数据...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="shadow-panel">
+      <header>
+        <div>
+          <h2>AI影子持仓</h2>
+          <p>只由 AI 建议驱动，不受实盘手工操作影响。</p>
+        </div>
+      </header>
+      <div class="shadow-table-wrap">
+        <table class="shadow-table" style="min-width:560px;">
+          <thead>
+            <tr>
+              <th>股票</th>
+              <th>股数</th>
+              <th>均价</th>
+              <th>现价</th>
+              <th>浮盈</th>
+            </tr>
+          </thead>
+          <tbody id="shadowPositionsBody">
+            <tr><td colspan="5"><div class="shadow-empty">暂无影子持仓</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="shadow-panel" data-performance-panel="shadow" hidden style="margin-top:12px;">
+    <header>
+      <div>
+        <h2>AI影子委托流水</h2>
+        <p>每一笔影子委托都可回溯到来源 AI 报告。</p>
+      </div>
+    </header>
+    <div class="shadow-table-wrap">
+      <table class="shadow-table">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>报告</th>
+            <th>股票</th>
+            <th>动作</th>
+            <th>信号</th>
+            <th>数量</th>
+            <th>成交价</th>
+            <th>目标价</th>
+            <th>后验收益</th>
+            <th>状态</th>
+            <th>来源摘要</th>
+          </tr>
+        </thead>
+        <tbody id="shadowOrdersBody">
+          <tr><td colspan="11"><div class="shadow-empty">暂无影子委托</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="shadow-panel" data-performance-panel="deviation" hidden>
+    <header>
+      <div>
+        <h2>执行偏差分析</h2>
+        <p>拆分 AI 影子盘和实盘仓位差异，定位收益差来自 AI 判断还是人工执行。</p>
+      </div>
+    </header>
+    <div class="shadow-deviation-grid" id="shadowDeviationGrid">
+      <div class="shadow-empty">暂无执行偏差数据</div>
+    </div>
+  </section>
+
+  <section class="shadow-panel" data-performance-panel="model" hidden>
+    <header>
+      <div>
+        <h2>模型与置信度校准</h2>
+        <p>按模型模式、分析深度和置信度分桶看 AI 是否稳定。</p>
+      </div>
+    </header>
+    <div class="shadow-model-grid">
+      <div class="shadow-calibration-card">
+        <h3>模型模式</h3>
+        <div id="modelModeBreakdown"><div class="shadow-empty">暂无模型样本</div></div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>分析深度</h3>
+        <div id="depthBreakdown"><div class="shadow-empty">暂无深度样本</div></div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>置信度分桶</h3>
+        <div id="confidenceModelBuckets"><div class="shadow-empty">暂无置信度样本</div></div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>校准提示</h3>
+        <div class="shadow-insight-list" id="modelCalibrationTips"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="/static/js/shadow.js?v=2.7.0"></script>
+{% endblock %}

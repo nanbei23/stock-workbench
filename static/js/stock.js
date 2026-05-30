@@ -116,7 +116,7 @@ async function loadWatchlist() {
     const stocks = data.stocks || [];
 
     if (stocks.length === 0) {
-      listEl.innerHTML = panelState('暂无自选股', 'WL');
+      listEl.innerHTML = panelState('暂无自选股', '选');
       return;
     }
 
@@ -1361,7 +1361,7 @@ async function loadStockAnomalies(code) {
     const anomalies = data.anomalies || [];
     if (!anomalies.length) {
       list.innerHTML = `<div class="anomaly-empty">
-        <div class="anomaly-empty-icon ui-glyph" data-icon="AL"></div>
+        <div class="anomaly-empty-icon ui-glyph" data-icon="警"></div>
         <div class="anomaly-empty-title">暂无异动记录</div>
         <div class="anomaly-empty-desc">点击上方按钮检测当前股票异动</div>
       </div>`;

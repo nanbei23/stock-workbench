@@ -28,9 +28,17 @@ async def add_tracking(req: TrackRequest):
 
 @router.get("/tracking")
 async def list_tracking(status: Optional[str] = None, signal: Optional[str] = None,
-                        code: Optional[str] = None):
+                        code: Optional[str] = None, window: str = "all",
+                        model_mode: Optional[str] = None, depth: Optional[str] = None):
     """获取跟踪列表"""
-    return signal_tracking_service.list_tracking(status=status, signal=signal, code=code)
+    return signal_tracking_service.list_tracking(
+        status=status,
+        signal=signal,
+        code=code,
+        window=window,
+        model_mode=model_mode,
+        depth=depth,
+    )
 
 
 @router.post("/tracking/{tracking_id}/close")
@@ -40,9 +48,9 @@ async def close_tracking(tracking_id: int, req: CloseRequest):
 
 
 @router.get("/stats")
-async def get_stats():
+async def get_stats(window: str = "all", model_mode: Optional[str] = None, depth: Optional[str] = None):
     """获取绩效统计"""
-    return signal_tracking_service.get_stats()
+    return signal_tracking_service.get_stats(window=window, model_mode=model_mode, depth=depth)
 
 
 @router.get("/signals/latest")

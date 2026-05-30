@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_metadata import APP_NAME, APP_VERSION
 from models.database import init_db, get_db
@@ -53,9 +53,21 @@ async def page_portfolio(request: Request):
 async def page_ai(request: Request):
     return templates.TemplateResponse(request=request, name="ai.html")
 
+@app.get("/hotspots", response_class=HTMLResponse)
+async def page_hotspots(request: Request):
+    return templates.TemplateResponse(request=request, name="hotspots.html")
+
 @app.get("/hermes", response_class=HTMLResponse)
 async def page_hermes(request: Request):
     return templates.TemplateResponse(request=request, name="hermes.html")
+
+@app.get("/ops", response_class=HTMLResponse)
+async def page_ops(request: Request):
+    return templates.TemplateResponse(request=request, name="ops.html")
+
+@app.get("/shadow", response_class=HTMLResponse)
+async def page_shadow(request: Request):
+    return templates.TemplateResponse(request=request, name="shadow.html")
 
 @app.get("/settings", response_class=HTMLResponse)
 async def page_settings(request: Request):
@@ -78,6 +90,8 @@ from api.pdf_export import router as pdf_router
 from api.signal_api import router as signal_router
 from api.enhancement_api import router as enhancement_router
 from api.hermes_api import router as hermes_router
+from api.shadow_api import router as shadow_router
+from api.performance_api import router as performance_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -90,6 +104,8 @@ app.include_router(pdf_router, prefix="/api")
 app.include_router(signal_router, prefix="/api")
 app.include_router(enhancement_router, prefix="/api")
 app.include_router(hermes_router, prefix="/api")
+app.include_router(shadow_router, prefix="/api")
+app.include_router(performance_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")
@@ -132,8 +148,8 @@ async def websocket_quotes(ws: WebSocket):
 
 @app.get("/performance", response_class=HTMLResponse)
 async def performance_page(request: Request):
-    """信号绩效独立页面"""
-    return templates.TemplateResponse(request=request, name="performance.html")
+    """Merged into the AI shadow performance center."""
+    return RedirectResponse(url="/shadow", status_code=307)
 
 
 if __name__ == "__main__":

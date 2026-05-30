@@ -1,6 +1,6 @@
 # 炒股小牛马 Stock Workbench
 
-本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.4.0`。
+本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.7.0`。
 
 本项目面向个人研究和交易工作流辅助，不构成投资建议。所有写库操作都应由用户确认后执行。
 
@@ -11,9 +11,12 @@
 | 自选股 | 腾讯行情、K 线分时、异动监控、新闻/公告/研报聚合、AI 报告入口 |
 | 持仓 | 多账户资产看板、合并视图、交易记录、盈亏统计、交易计划、条件单 |
 | AI 分析台 | TradingAgents-astock 分析任务、队列状态、历史任务、失败原因、重试/取消、报告质量和信号跟踪 |
+| 热点主线 | 市场状态、热点主题、研究节奏、策略生命周期、实时研究进度 |
 | Hermes 对话台 | 自然语言意图识别、Hermes session 历史、多步任务计划、写库草稿、分步确认/跳过、审计记录 |
+| AI 绩效 | 信号验证、AI 影子盘、执行偏差、模型校准、置信度 Brier Score 和实盘对比 |
+| 运营中心 | 数据可信、全局风控、投资组合专业化、AI质量闭环、备份升级、通知和诊断总控 |
 | 设置 | OpenAI 兼容模型供应商、Base URL 获取模型、快速/深度/旁观者模型、迁移状态、备份恢复 |
-| 前端 | Vite + TypeScript 渐进式构建、Vanilla JS 页面、三套主题、竖屏盯盘优化 |
+| 前端 | Vite + TypeScript 渐进式构建、Vanilla JS 页面、四套主题、竖屏盯盘优化、全局 Hermes 侧栏 |
 
 ## 快速开始
 
@@ -62,8 +65,11 @@ http://127.0.0.1:8000
 - `/` 自选股
 - `/portfolio` 持仓
 - `/ai` AI 分析台
+- `/hotspots` 热点主线
 - `/hermes` Hermes 对话台
-- `/performance` 信号绩效
+- `/shadow` AI 绩效
+- `/performance` 兼容跳转到 AI 绩效
+- `/ops` 运营中心
 - `/settings` 设置
 
 ### Intel macOS 自动部署
@@ -136,6 +142,7 @@ stock-workbench-local/
 python -m compileall app.py api models repositories scheduler services schemas tests
 python -m unittest discover tests
 node --check static/js/hermes.js
+node --check static/js/shadow.js
 npm run typecheck
 npm run build
 ```
