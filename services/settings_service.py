@@ -50,7 +50,28 @@ DEFAULTS = {
     "stamp_tax_rate": "0.0005",
     "transfer_fee_rate": "0.00001",
     "stop_loss_pct": "8",
+    "onboarding_completed": "false",
+    "onboarding_dismissed_at": "",
+    "hermes_tool_policy": json.dumps(
+        {
+            "add_watchlist": "draft",
+            "record_trade": "draft",
+            "set_position": "draft",
+            "create_conditional_order": "draft",
+        },
+        ensure_ascii=False,
+    ),
 }
+
+
+def _loads(value, fallback):
+    if not value:
+        return fallback
+    try:
+        data = json.loads(value) if isinstance(value, str) else value
+        return data if data is not None else fallback
+    except (TypeError, ValueError):
+        return fallback
 
 
 def ensure_settings_table():
@@ -86,6 +107,72 @@ def get_setting(key: str):
 def update_setting(key: str, value):
     repo.upsert_settings({key: value})
     return {"status": "ok", "key": key, "value": value}
+
+
+def onboarding_status():
+    settings = get_all_settings()
+    conn = repo.open_connection()
+    try:
+        counts = {
+            "accounts": conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0],
+            "watchlist": conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0],
+            "portfolio": conn.execute("SELECT COUNT(*) FROM portfolio WHERE total_shares > 0").fetchone()[0],
+        }
+    finally:
+        conn.close()
+
+    has_models = bool(_loads(settings.get("llm_model_options"), [])) and bool(
+        settings.get("quick_think_model") or settings.get("deep_think_model")
+    )
+    has_api = bool(settings.get("api_key") and settings.get("custom_endpoint"))
+    has_cash = any(key.startswith("cash_balance_") or key == "cash_balance" for key in settings)
+    steps = [
+        {
+            "key": "account",
+            "label": "账户",
+            "status": "ok" if counts["accounts"] else "pending",
+            "message": "已创建账户" if counts["accounts"] else "先创建默认账户或券商账户",
+        },
+        {
+            "key": "cash",
+            "label": "现金",
+            "status": "ok" if has_cash else "pending",
+            "message": "已设置现金余额" if has_cash else "建议在持仓页录入账户现金，资产看板才完整",
+        },
+        {
+            "key": "models",
+            "label": "AI模型",
+            "status": "ok" if has_api and has_models else "pending",
+            "message": "AI 引擎已配置" if has_api and has_models else "在设置页填写 Base URL/API Key 并获取模型列表",
+        },
+        {
+            "key": "watchlist",
+            "label": "自选股",
+            "status": "ok" if counts["watchlist"] else "pending",
+            "message": "已有自选股" if counts["watchlist"] else "添加常看的股票，盯盘和分析入口会更顺手",
+        },
+        {
+            "key": "hermes",
+            "label": "Hermes",
+            "status": "ok" if _loads(settings.get("hermes_tool_policy"), {}) else "pending",
+            "message": "已启用受控写库草稿策略",
+        },
+    ]
+    pending = [step for step in steps if step["status"] != "ok"]
+    completed = settings.get("onboarding_completed") == "true" or not pending
+    return {
+        "completed": completed,
+        "dismissed_at": settings.get("onboarding_dismissed_at") or "",
+        "counts": counts,
+        "steps": steps,
+        "pending_count": len(pending),
+    }
+
+
+def complete_onboarding():
+    value = datetime.now().isoformat(timespec="seconds")
+    repo.upsert_settings({"onboarding_completed": "true", "onboarding_dismissed_at": value})
+    return {"status": "ok", "completed": True, "completed_at": value}
 
 
 def set_model_mode(value):

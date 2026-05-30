@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from services import hermes_console_service
+from services import hermes_tool_registry
 
 
 router = APIRouter(tags=["hermes-console"])
@@ -21,6 +22,10 @@ class HermesConfirmRequest(BaseModel):
 
 class HermesStepRequest(HermesConfirmRequest):
     step_id: str
+
+
+class HermesToolPolicyRequest(BaseModel):
+    policy: dict[str, str]
 
 
 @router.post("/hermes/message")
@@ -59,6 +64,27 @@ async def list_hermes_tasks(
     status: str | None = Query(default=None),
 ):
     return await hermes_console_service.list_tasks(limit=limit, status=status)
+
+
+@router.get("/hermes/tool-policy")
+async def get_hermes_tool_policy():
+    policy = hermes_tool_registry.tool_policy()
+    return {
+        "policy": policy,
+        "tools": [
+            {
+                "tool": spec["tool"],
+                "description": spec["description"],
+                "mode": policy.get(spec["tool"], "disabled"),
+            }
+            for spec in hermes_tool_registry.tool_specs()
+        ],
+    }
+
+
+@router.post("/hermes/tool-policy")
+async def update_hermes_tool_policy(req: HermesToolPolicyRequest):
+    return {"status": "ok", "policy": hermes_tool_registry.update_tool_policy(req.policy)}
 
 
 @router.get("/hermes/session/{session_id}")

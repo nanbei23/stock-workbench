@@ -1,6 +1,21 @@
 # Changelog
 
-## 2.2.0 - Unreleased
+## 2.3.0 - 2026-05-30
+
+### Added
+
+- Added first-start onboarding status API and global setup guide for account, cash, AI model, watchlist, and Hermes readiness.
+- Expanded data-health checks with portfolio/trade consistency, invalid account references, cash-ledger gaps, and a health score.
+- Added Hermes tool policy API with per-tool disable support and risk grading on operation drafts.
+- Added Settings UI for Hermes write-tool permissions and richer data-health issue details.
+
+### Changed
+
+- Data-health repair now expires stale orders, normalizes invalid account references, and recalculates portfolio rows from trade records.
+- Hermes drafts now surface visible low/medium/high risk badges in the confirmation panel.
+- Updated release metadata to `2.3.0`.
+
+## 2.2.0 - 2026-05-30
 
 ### Added
 

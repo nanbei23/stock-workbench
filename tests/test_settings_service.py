@@ -70,6 +70,18 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["notifications"][0]["type"], "anomaly")
 
+    def test_onboarding_status_tracks_pending_steps_and_completion(self):
+        result = settings_service.onboarding_status()
+
+        self.assertFalse(result["completed"])
+        self.assertGreaterEqual(result["pending_count"], 1)
+
+        completed = settings_service.complete_onboarding()
+        result = settings_service.onboarding_status()
+
+        self.assertTrue(completed["completed"])
+        self.assertTrue(result["completed"])
+
 
 class SettingsApiTests(unittest.TestCase):
     def setUp(self):

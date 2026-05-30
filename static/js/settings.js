@@ -648,10 +648,25 @@ async function loadDataHealth() {
               <span>${escapeHtml(item.label)}</span>
               <strong class="${item.status === 'ok' ? 'up' : 'down'}">${item.status === 'ok' ? '正常' : '需处理'}</strong>
               <small>${escapeHtml(item.message || '')}</small>
+              ${renderDataHealthDetails(item.details)}
             </div>`).join('')}</div>`;
     } catch (e) {
         el.innerHTML = `<div class="empty-state"><p>数据健康检查失败：${escapeHtml(e.message)}</p></div>`;
     }
+}
+
+function renderDataHealthDetails(details) {
+    if (!Array.isArray(details) || !details.length) return '';
+    return `<ul class="data-health-details">${details.slice(0, 4).map(item => {
+        const parts = [];
+        if (item.table_name) parts.push(item.table_name);
+        if (item.account_id !== undefined) parts.push(`账户 ${item.account_id || '空'}`);
+        if (item.code) parts.push(`${item.name || item.code} ${item.code}`);
+        if (item.expected_shares !== undefined) parts.push(`应为 ${item.expected_shares} 股，当前 ${item.actual_shares} 股`);
+        if (item.configured_cash !== undefined) parts.push(`设置 ${item.configured_cash}，流水 ${item.ledger_cash ?? '缺失'}`);
+        if (item.count !== undefined) parts.push(`${item.count} 条`);
+        return `<li>${escapeHtml(parts.join(' · ') || JSON.stringify(item))}</li>`;
+    }).join('')}</ul>`;
 }
 
 async function loadSystemDiagnostics() {
@@ -680,10 +695,61 @@ async function fixDataHealth() {
         const resp = await fetch(`${API_BASE}/data-health/fix`, {method: 'POST'});
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || '修复失败');
-        toast('success', `已修复过期条件单 ${data.expired_orders || 0} 个`);
+        toast('success', `已修复：过期单 ${data.expired_orders || 0} 个，账户引用 ${data.account_refs_fixed || 0} 条，重算持仓 ${data.portfolio_recalculated || 0} 只`);
         loadDataHealth();
     } catch (e) {
         toast('error', '修复失败: ' + e.message);
+    }
+}
+
+async function loadHermesToolPolicy() {
+    const el = document.getElementById('hermesToolPolicyPanel');
+    if (!el) return;
+    try {
+        const resp = await fetch(`${API_BASE}/hermes/tool-policy`);
+        const data = await resp.json();
+        const tools = data.tools || [];
+        el.innerHTML = tools.map(item => `<div class="quality-report-row hermes-policy-row">
+            <div>
+              <b>${escapeHtml(hermesToolLabel(item.tool))}</b>
+              <small>${escapeHtml(item.description || item.tool)}</small>
+            </div>
+            <select class="setting-select hermes-tool-policy" data-tool="${escapeAttr(item.tool)}">
+              <option value="draft" ${item.mode === 'draft' ? 'selected' : ''}>草稿确认</option>
+              <option value="disabled" ${item.mode === 'disabled' ? 'selected' : ''}>禁用</option>
+            </select>
+        </div>`).join('') || '<div class="empty-state"><p>暂无 Hermes 工具</p></div>';
+    } catch (e) {
+        el.innerHTML = `<div class="empty-state"><p>工具权限加载失败：${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+function hermesToolLabel(tool) {
+    return {
+        add_watchlist: '添加自选股',
+        record_trade: '记录交易',
+        set_position: '校准持仓',
+        create_conditional_order: '创建条件单',
+    }[tool] || tool;
+}
+
+async function saveHermesToolPolicy() {
+    const policy = {};
+    document.querySelectorAll('.hermes-tool-policy').forEach(el => {
+        policy[el.dataset.tool] = el.value;
+    });
+    try {
+        const resp = await fetch(`${API_BASE}/hermes/tool-policy`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({policy}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '保存失败');
+        toast('success', 'Hermes 工具权限已保存');
+        loadHermesToolPolicy();
+    } catch (e) {
+        toast('error', '保存失败: ' + e.message);
     }
 }
 
@@ -821,6 +887,7 @@ loadSettings();
 loadAccountList();
 loadBackupStatus();
 loadModelProviders();
+loadHermesToolPolicy();
 loadDataHealth();
 loadSystemDiagnostics();
 loadWorkspaceTemplates();
@@ -898,6 +965,8 @@ Object.assign(window, {
     refreshModelProvider,
     testModelProvider,
     deleteModelProvider,
+    loadHermesToolPolicy,
+    saveHermesToolPolicy,
     loadDataHealth,
     loadSystemDiagnostics,
     fixDataHealth,

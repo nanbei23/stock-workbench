@@ -2348,6 +2348,9 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 }
 
 .hermes-draft-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -2472,6 +2475,40 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 .hermes-draft-actions {
   justify-content: flex-end;
   margin-top: 10px;
+}
+
+.hermes-risk-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 0.68rem;
+  font-weight: 800;
+  background: rgba(91,155,213,0.10);
+  color: var(--color-accent);
+  border: 1px solid rgba(91,155,213,0.22);
+}
+
+.hermes-risk-badge.medium {
+  background: rgba(244,162,97,0.10);
+  color: #f2b84b;
+  border-color: rgba(244,162,97,0.30);
+}
+
+.hermes-risk-badge.high {
+  background: rgba(224,122,95,0.10);
+  color: #E07A5F;
+  border-color: rgba(224,122,95,0.32);
+}
+
+.hermes-risk-badge.compact {
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 0.64rem;
+  vertical-align: middle;
 }
 
 .hermes-plan-steps {
@@ -3844,6 +3881,18 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 
 .quality-report-row small {
   color: var(--text-muted);
+}
+
+.quality-report-row.hermes-policy-row {
+  grid-template-columns: 1fr auto;
+}
+
+.data-health-details {
+  margin: 8px 0 0;
+  padding-left: 14px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 
 .ai-readiness-panel {

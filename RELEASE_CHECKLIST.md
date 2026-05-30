@@ -61,6 +61,6 @@ Check these APIs:
 
 ```bash
 git add .
-git commit -m "Release v2.2.0"
-git tag v2.2.0
+git commit -m "Release v2.3.0"
+git tag v2.3.0
 ```

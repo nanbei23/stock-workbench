@@ -314,10 +314,11 @@ function renderHermesDraft(draft) {
     const completions = (draft.completion_sources || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
     const payloadRows = formatHermesDraftRows(draft);
     const parserLabel = (draft.parser || 'rules') === 'llm' ? '模型理解' : '本地兜底';
+    const riskBadge = renderHermesRiskBadge(draft.risk_level);
     const toolRows = formatHermesToolRows(draft.tool_call);
     const impact = renderHermesImpactPreview(draft.impact_preview);
     el.innerHTML = `<div class="hermes-draft-head">
-            <span>${escapeHtml(draft.label || '操作草稿')}</span>
+            <span>${escapeHtml(draft.label || '操作草稿')}${riskBadge}</span>
             <strong>${escapeHtml(draft.executable ? '等你确认' : '需要补充')}</strong>
         </div>
         <div class="hermes-draft-summary">${escapeHtml(draft.summary || '')}</div>
@@ -368,6 +369,7 @@ function renderHermesPlanStep(step) {
     const toolRows = step.tool_call ? formatHermesToolRows(step.tool_call) : '';
     const impact = renderHermesImpactPreview(step.impact_preview, true);
     const actions = renderHermesPlanStepActions(step);
+    const riskBadge = renderHermesRiskBadge(step.risk_level, true);
     const result = step.kind === 'read' && step.result?.answer
         ? `<div class="hermes-plan-result">${escapeHtml(step.result.answer)}</div>`
         : '';
@@ -379,7 +381,7 @@ function renderHermesPlanStep(step) {
         <div class="hermes-plan-step-head">
             <span>${escapeHtml(String(step.index || ''))}</span>
             <div>
-                <b>${escapeHtml(step.title || step.label || step.summary || '任务步骤')}</b>
+                <b>${escapeHtml(step.title || step.label || step.summary || '任务步骤')}${riskBadge}</b>
                 <small>${escapeHtml(meta)}</small>
             </div>
         </div>
@@ -391,6 +393,12 @@ function renderHermesPlanStep(step) {
         ${blockers ? `<div class="hermes-draft-note blocked"><b>阻塞项</b><ul>${blockers}</ul></div>` : ''}
         ${actions}
     </div>`;
+}
+
+function renderHermesRiskBadge(level, compact = false) {
+    if (!level) return '';
+    const labels = {low: '低风险', medium: '中风险', high: '高风险'};
+    return `<em class="hermes-risk-badge ${escapeAttr(level)} ${compact ? 'compact' : ''}">${escapeHtml(labels[level] || level)}</em>`;
 }
 
 function renderHermesPlanStepActions(step) {

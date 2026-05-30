@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import models.database as database
 from api.hermes_api import router as hermes_router
+from repositories import settings_repository
 from services import hermes_console_service
 
 
@@ -17,7 +18,9 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmp.name) / "workbench.db"
         self.original_db_path = database.DB_PATH
+        self.original_settings_path = settings_repository.DB_PATH
         database.DB_PATH = self.db_path
+        settings_repository.DB_PATH = self.db_path
         with sqlite3.connect(self.db_path) as db:
             db.executescript(database.SCHEMA)
             db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
@@ -25,6 +28,7 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         database.DB_PATH = self.original_db_path
+        settings_repository.DB_PATH = self.original_settings_path
         hermes_console_service._DRAFTS.clear()
         self.tmp.cleanup()
 
@@ -123,6 +127,7 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(draft["payload"]["shares"], 200)
         self.assertEqual(draft["payload"]["price"], 10.5)
+        self.assertEqual(draft["risk_level"], "medium")
         self.assertEqual(draft["impact_preview"]["status"], "ready")
         self.assertIn("增加到 200 股", draft["impact_preview"]["summary"])
         await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
@@ -131,6 +136,20 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             row = db.execute("SELECT total_shares, avg_cost FROM portfolio WHERE code='000001'").fetchone()
         self.assertEqual(row[0], 200)
         self.assertEqual(row[1], 10.5)
+
+    async def test_disabled_hermes_tool_blocks_draft_execution(self):
+        settings_repository.upsert_settings({"hermes_tool_policy": '{"record_trade":"disabled"}'})
+
+        parsed = await hermes_console_service.handle_message("买入 000001 平安银行 2手 成交价 10.5")
+        draft = parsed["draft"]
+
+        self.assertFalse(draft["executable"])
+        self.assertIn("record_trade", " ".join(draft["blockers"]))
+
+        with self.assertRaises(HTTPException) as ctx:
+            await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
+
+        self.assertEqual(ctx.exception.status_code, 400)
 
     async def test_confirm_recovers_unexecuted_draft_from_history_after_restart(self):
         parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")

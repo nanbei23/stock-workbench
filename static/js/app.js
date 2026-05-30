@@ -105,6 +105,7 @@ async function loadAccounts() {
 }
 
 document.addEventListener('DOMContentLoaded', loadAccounts);
+document.addEventListener('DOMContentLoaded', loadOnboardingStatus);
 
 function showToast(msg, type='info') {
     let container = document.getElementById('toast-container');
@@ -120,4 +121,96 @@ function showToast(msg, type='info') {
     container.appendChild(t);
     requestAnimationFrame(() => { t.style.opacity = '1'; t.style.transform = 'translateX(0)'; });
     setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(20px)'; setTimeout(() => t.remove(), 250); }, 3000);
+}
+
+async function loadOnboardingStatus() {
+    if (sessionStorage.getItem('onboarding_hidden') === '1') return;
+    try {
+        const data = await API.get('/api/settings/onboarding');
+        if (!data || data.completed || !data.pending_count) return;
+        renderOnboardingPanel(data);
+    } catch (e) {
+        console.warn('首次配置引导加载失败', e);
+    }
+}
+
+function renderOnboardingPanel(data) {
+    if (document.getElementById('onboardingPanel')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'onboardingPanel';
+    overlay.innerHTML = `
+      <div class="onboarding-backdrop"></div>
+      <section class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+        <header class="onboarding-head">
+          <div>
+            <div class="onboarding-kicker">首次配置</div>
+            <h2 id="onboardingTitle">把工作台配置完整</h2>
+          </div>
+          <button class="onboarding-icon-btn" type="button" aria-label="关闭" data-action="hide">×</button>
+        </header>
+        <div class="onboarding-progress">
+          <span style="width:${Math.max(0, Math.min(100, 100 - data.pending_count * 20))}%"></span>
+        </div>
+        <div class="onboarding-steps">
+          ${(data.steps || []).map(step => `
+            <div class="onboarding-step ${step.status === 'ok' ? 'done' : 'pending'}">
+              <span class="onboarding-dot"></span>
+              <div>
+                <strong>${escapeHtml(step.label)}</strong>
+                <p>${escapeHtml(step.message || '')}</p>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <footer class="onboarding-actions">
+          <a class="btn-secondary" href="/portfolio">持仓现金</a>
+          <a class="btn-secondary" href="/settings">打开设置</a>
+          <button class="btn-secondary" type="button" data-action="hide">稍后</button>
+          <button class="btn-primary" type="button" data-action="complete">完成向导</button>
+        </footer>
+      </section>
+    `;
+    const style = document.createElement('style');
+    style.id = 'onboardingStyles';
+    style.textContent = `
+      #onboardingPanel{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;}
+      .onboarding-backdrop{position:absolute;inset:0;background:rgba(3,8,17,.62);backdrop-filter:blur(10px);}
+      .onboarding-card{position:relative;width:min(560px,100%);border:1px solid rgba(111,168,220,.24);background:#0d1623;border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.42);padding:22px;color:#e9eef7;}
+      .onboarding-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;}
+      .onboarding-kicker{font-size:.78rem;color:#6fa8dc;margin-bottom:6px;}
+      .onboarding-head h2{font-size:1.35rem;margin:0;letter-spacing:0;}
+      .onboarding-icon-btn{width:32px;height:32px;border:1px solid rgba(255,255,255,.12);background:#111d2b;color:#b8c3d7;border-radius:8px;font-size:1.1rem;cursor:pointer;}
+      .onboarding-progress{height:6px;background:#111d2b;border-radius:999px;overflow:hidden;margin-bottom:16px;}
+      .onboarding-progress span{display:block;height:100%;background:#6fa8dc;border-radius:999px;}
+      .onboarding-steps{display:grid;gap:10px;}
+      .onboarding-step{display:flex;gap:12px;align-items:flex-start;padding:11px 12px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:#0a111c;}
+      .onboarding-dot{width:10px;height:10px;border-radius:50%;margin-top:5px;background:#f2b84b;flex:0 0 auto;}
+      .onboarding-step.done .onboarding-dot{background:#52b788;}
+      .onboarding-step strong{display:block;font-size:.92rem;margin-bottom:3px;}
+      .onboarding-step p{margin:0;color:#8794aa;font-size:.82rem;line-height:1.5;}
+      .onboarding-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:18px;}
+      .onboarding-actions a,.onboarding-actions button{height:36px;padding:0 14px;border-radius:8px;border:1px solid rgba(255,255,255,.12);display:inline-flex;align-items:center;text-decoration:none;font-size:.86rem;cursor:pointer;}
+      .onboarding-actions .btn-secondary{background:#101a28;color:#b8c3d7;}
+      .onboarding-actions .btn-primary{background:#6fa8dc;color:#06101d;border-color:#6fa8dc;font-weight:700;}
+      @media (max-width:640px){#onboardingPanel{align-items:flex-end;padding:12px}.onboarding-card{padding:18px}.onboarding-actions{justify-content:stretch}.onboarding-actions a,.onboarding-actions button{flex:1;justify-content:center;}}
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', async event => {
+        const action = event.target?.dataset?.action;
+        if (!action) return;
+        if (action === 'hide') {
+            sessionStorage.setItem('onboarding_hidden', '1');
+            overlay.remove();
+        }
+        if (action === 'complete') {
+            try {
+                await API.post('/api/settings/onboarding/complete', {});
+                overlay.remove();
+                showToast('首次配置向导已完成', 'success');
+            } catch (e) {
+                showToast(e.message || '保存失败', 'error');
+            }
+        }
+    });
 }

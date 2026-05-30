@@ -1234,6 +1234,8 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
     risks = ["写库操作会改变本地 SQLite 数据，确认前请核对代码、数量和价格。"]
     if completion_sources:
         risks.append("部分信息由 AI/行情自动补全，请确认无误后再写入。")
+    risk_level = hermes_tool_registry.risk_level_for_tool(tool_call["tool"], tool_call.get("args") or {}) if tool_call else "high"
+    risks.append(f"本次操作风险等级：{hermes_tool_registry.risk_label(risk_level)}。")
     executable = bool(payload.get("code"))
     blockers = []
     if not payload.get("code"):
@@ -1257,6 +1259,9 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
         risks.extend(item for item in tool_validation.warnings if item not in risks)
     if not tool_call:
         blockers.append(f"不支持的操作：{action}")
+        executable = False
+    elif hermes_tool_registry.tool_permission(tool_call["tool"]) == "disabled":
+        blockers.append(f"Hermes 工具已在设置中禁用：{tool_call['tool']}")
         executable = False
 
     impact_preview = (
@@ -1282,6 +1287,7 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
         "parser": intent.get("parser", "rules"),
         "completion_sources": completion_sources,
         "risks": risks,
+        "risk_level": risk_level,
         "blockers": blockers,
         "executable": executable and not blockers,
         "requires_confirmation": True,
@@ -1344,6 +1350,7 @@ async def _make_plan_draft(session_id: str, source_text: str, intent: dict[str, 
                 "executable": step_draft.get("executable", False),
                 "blockers": step_blockers,
                 "risks": step_draft.get("risks") or [],
+                "risk_level": step_draft.get("risk_level"),
             }
         )
         blockers.extend(f"第 {index} 步：{item}" for item in step_blockers)

@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from models.database import get_db
+from repositories import settings_repository
 from schemas.hermes_tools import HermesToolCall, HermesToolValidation
 from services import portfolio_service
 
@@ -25,6 +26,17 @@ ALLOWED_TOOLS = {"add_watchlist", "record_trade", "set_position", "create_condit
 CONDITION_TYPES = {"price_lte", "price_gte", "change_pct_gte", "change_pct_lte"}
 TRADE_DIRECTIONS = {"buy", "sell"}
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_TOOL_POLICY = {
+    "add_watchlist": "draft",
+    "record_trade": "draft",
+    "set_position": "draft",
+    "create_conditional_order": "draft",
+}
+TOOL_RISK_LABELS = {
+    "low": "低风险",
+    "medium": "中风险",
+    "high": "高风险",
+}
 
 
 def tool_specs() -> list[dict[str, Any]]:
@@ -72,6 +84,55 @@ def tool_specs() -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+def tool_policy() -> dict[str, str]:
+    row = settings_repository.fetch_setting("hermes_tool_policy")
+    raw = row["value"] if row else ""
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        parsed = {}
+    policy = dict(DEFAULT_TOOL_POLICY)
+    for tool, mode in parsed.items():
+        if tool in ALLOWED_TOOLS and mode in {"draft", "disabled"}:
+            policy[tool] = mode
+    return policy
+
+
+def update_tool_policy(policy: dict[str, Any]) -> dict[str, str]:
+    current = tool_policy()
+    for tool, mode in (policy or {}).items():
+        if tool in ALLOWED_TOOLS and mode in {"draft", "disabled"}:
+            current[tool] = mode
+    settings_repository.upsert_settings({"hermes_tool_policy": json.dumps(current, ensure_ascii=False)})
+    return current
+
+
+def tool_permission(tool: str) -> str:
+    return tool_policy().get(tool, "disabled")
+
+
+def risk_level_for_tool(tool: str, args: dict[str, Any] | None = None) -> str:
+    payload = args or {}
+    if tool == "add_watchlist":
+        return "low"
+    if tool == "create_conditional_order":
+        return "medium"
+    if tool == "set_position":
+        return "high"
+    if tool == "record_trade":
+        direction = str(payload.get("direction") or "").strip()
+        shares = _coerce_non_negative_int(payload.get("shares")) or 0
+        price = _coerce_positive_float(payload.get("price")) or 0
+        if direction == "sell" or shares * price >= 100000:
+            return "high"
+        return "medium"
+    return "high"
+
+
+def risk_label(level: str) -> str:
+    return TOOL_RISK_LABELS.get(level, level)
 
 
 @lru_cache(maxsize=1)
@@ -224,6 +285,8 @@ def validate_tool_call(call: HermesToolCall) -> HermesToolValidation:
 
 
 async def execute_tool(tool: str, args: dict[str, Any], source_text: str = "") -> dict[str, Any]:
+    if tool_permission(tool) == "disabled":
+        raise HTTPException(status_code=403, detail=f"Hermes 工具已禁用：{tool}")
     call = HermesToolCall(tool=tool, args=args)
     validation = validate_tool_call(call)
     if not validation.valid:

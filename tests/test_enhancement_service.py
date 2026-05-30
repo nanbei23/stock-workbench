@@ -95,6 +95,35 @@ class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
         ai_check = next(item for item in result["checks"] if item["key"] == "ai_models")
         self.assertEqual(ai_check["status"], "warning")
 
+    async def test_data_health_detects_and_fixes_portfolio_mismatch(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
+            db.execute(
+                """
+                INSERT INTO trades (code, name, direction, price, shares, amount, total_cost)
+                VALUES ('000001', '平安银行', 'buy', 10, 100, 1000, 1000)
+                """
+            )
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost)
+                VALUES ('000001', '平安银行', 50, 50, 8)
+                """
+            )
+            db.commit()
+
+        before = await enhancement_service.data_health()
+        mismatch = next(item for item in before["checks"] if item["key"] == "portfolio_consistency")
+
+        self.assertEqual(mismatch["status"], "warning")
+
+        fixed = await enhancement_service.fix_data_health()
+        after = await enhancement_service.data_health()
+        mismatch_after = next(item for item in after["checks"] if item["key"] == "portfolio_consistency")
+
+        self.assertEqual(fixed["portfolio_recalculated"], 1)
+        self.assertEqual(mismatch_after["status"], "ok")
+
     async def test_system_diagnostics_aggregates_panels(self):
         result = await enhancement_service.system_diagnostics()
 

@@ -61,6 +61,18 @@ async def reset_settings():
     return settings_service.reset_settings()
 
 
+@router.get("/settings/onboarding")
+async def get_onboarding_status():
+    """获取首次使用引导状态"""
+    return settings_service.onboarding_status()
+
+
+@router.post("/settings/onboarding/complete")
+async def complete_onboarding():
+    """标记首次使用引导已完成"""
+    return settings_service.complete_onboarding()
+
+
 # ── 测试API连接 ──
 
 @router.post("/settings/test-llm")

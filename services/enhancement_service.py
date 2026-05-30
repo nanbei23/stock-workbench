@@ -9,6 +9,7 @@ import httpx
 from fastapi import HTTPException
 
 from models.database import get_db
+from repositories import portfolio_repository
 from repositories import settings_repository
 
 
@@ -28,6 +29,13 @@ def _loads(value, fallback):
 
 def _dumps(value):
     return json.dumps(value, ensure_ascii=False)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _settings():
@@ -386,7 +394,36 @@ async def data_health():
     no_fact = await _fetchall("SELECT COUNT(*) AS c FROM analysis_reports WHERE fact_check IS NULL OR fact_check = ''")
     no_fact_count = int(no_fact[0]["c"] if no_fact else 0)
     checks.append({"key": "report_fact_check", "label": "报告事实核对", "status": "warning" if no_fact_count else "ok", "message": f"{no_fact_count} 份报告尚未事实核对"})
-    return {"checks": checks, "ok": all(item["status"] == "ok" for item in checks)}
+    mismatches = await _portfolio_mismatches()
+    checks.append({
+        "key": "portfolio_consistency",
+        "label": "持仓一致性",
+        "status": "warning" if mismatches else "ok",
+        "message": f"{len(mismatches)} 只持仓与交易流水不一致",
+        "details": mismatches[:8],
+        "fixable": bool(mismatches),
+    })
+    invalid_accounts = await _invalid_account_refs()
+    checks.append({
+        "key": "account_refs",
+        "label": "账户引用",
+        "status": "warning" if invalid_accounts else "ok",
+        "message": f"{len(invalid_accounts)} 处账户引用不存在",
+        "details": invalid_accounts[:8],
+        "fixable": bool(invalid_accounts),
+    })
+    cash_gaps = await _cash_ledger_gaps(settings)
+    checks.append({
+        "key": "cash_ledger",
+        "label": "现金流水",
+        "status": "warning" if cash_gaps else "ok",
+        "message": f"{len(cash_gaps)} 个账户现金缺少流水或余额不一致",
+        "details": cash_gaps[:8],
+        "fixable": bool(cash_gaps),
+    })
+    ok_count = sum(1 for item in checks if item["status"] == "ok")
+    score = round(ok_count / len(checks) * 100) if checks else 100
+    return {"checks": checks, "ok": ok_count == len(checks), "score": score}
 
 
 async def fix_data_health():
@@ -395,10 +432,127 @@ async def fix_data_health():
         cursor = await db.execute(
             "UPDATE conditional_orders SET status='expired' WHERE status='pending' AND expires_at IS NOT NULL AND expires_at < datetime('now')"
         )
+        expired_orders = cursor.rowcount
+        account_fixes = 0
+        for table in ("portfolio", "trades", "conditional_orders"):
+            cursor = await db.execute(
+                f"""
+                UPDATE {table}
+                SET account_id = 'default'
+                WHERE account_id IS NULL
+                   OR account_id = ''
+                   OR account_id NOT IN (SELECT id FROM accounts)
+                """
+            )
+            account_fixes += cursor.rowcount
+        trade_codes = await db.execute_fetchall("SELECT DISTINCT code FROM trades")
+        recalculated = 0
+        for row in trade_codes:
+            await portfolio_repository.recalc_portfolio(db, row["code"])
+            recalculated += 1
         await db.commit()
-        return {"status": "ok", "expired_orders": cursor.rowcount}
+        return {
+            "status": "ok",
+            "expired_orders": expired_orders,
+            "account_refs_fixed": account_fixes,
+            "portfolio_recalculated": recalculated,
+        }
     finally:
         await db.close()
+
+
+async def _portfolio_mismatches():
+    trade_rows = await _fetchall(
+        """
+        SELECT code, name, direction, price, shares, amount, commission, stamp_tax, transfer_fee
+        FROM trades
+        ORDER BY trade_time ASC
+        """
+    )
+    expected: dict[str, dict] = {}
+    for row in trade_rows:
+        code = row["code"]
+        item = expected.setdefault(code, {"code": code, "name": row.get("name") or code, "shares": 0, "cost": 0.0})
+        shares = int(row.get("shares") or 0)
+        if row.get("direction") == "buy":
+            item["shares"] += shares
+            item["cost"] += float(row.get("amount") or 0) + float(row.get("commission") or 0) + float(row.get("stamp_tax") or 0) + float(row.get("transfer_fee") or 0)
+        elif row.get("direction") == "sell" and item["shares"] > 0:
+            avg_before = item["cost"] / item["shares"]
+            item["shares"] = max(0, item["shares"] - shares)
+            item["cost"] = avg_before * item["shares"]
+
+    portfolio_rows = await _fetchall("SELECT code, name, total_shares, avg_cost FROM portfolio")
+    actual = {row["code"]: row for row in portfolio_rows}
+    mismatches = []
+    for code, item in expected.items():
+        expected_shares = int(item["shares"])
+        expected_cost = round(item["cost"] / expected_shares, 4) if expected_shares else 0
+        row = actual.get(code)
+        actual_shares = int(row.get("total_shares") or 0) if row else 0
+        actual_cost = round(float(row.get("avg_cost") or 0), 4) if row else 0
+        if expected_shares != actual_shares or abs(expected_cost - actual_cost) > 0.01:
+            mismatches.append({
+                "code": code,
+                "name": item.get("name") or (row.get("name") if row else code),
+                "expected_shares": expected_shares,
+                "actual_shares": actual_shares,
+                "expected_avg_cost": expected_cost,
+                "actual_avg_cost": actual_cost,
+            })
+    for code, row in actual.items():
+        if code not in expected and int(row.get("total_shares") or 0) > 0:
+            mismatches.append({
+                "code": code,
+                "name": row.get("name") or code,
+                "expected_shares": 0,
+                "actual_shares": int(row.get("total_shares") or 0),
+                "expected_avg_cost": 0,
+                "actual_avg_cost": round(float(row.get("avg_cost") or 0), 4),
+            })
+    return mismatches
+
+
+async def _invalid_account_refs():
+    invalid = []
+    for table in ("portfolio", "trades", "conditional_orders"):
+        rows = await _fetchall(
+            f"""
+            SELECT '{table}' AS table_name, account_id, COUNT(*) AS count
+            FROM {table}
+            WHERE account_id IS NULL
+               OR account_id = ''
+               OR account_id NOT IN (SELECT id FROM accounts)
+            GROUP BY account_id
+            """
+        )
+        invalid.extend(rows)
+    return invalid
+
+
+async def _cash_ledger_gaps(settings: dict):
+    gaps = []
+    keys = [key for key in settings if key == "cash_balance" or key.startswith("cash_balance_")]
+    for key in keys:
+        account_id = key.replace("cash_balance_", "") if key.startswith("cash_balance_") else "default"
+        configured = _safe_float(settings.get(key))
+        rows = await _fetchall(
+            """
+            SELECT balance_after
+            FROM cash_ledger
+            WHERE account_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (account_id,),
+        )
+        if not rows:
+            gaps.append({"account_id": account_id, "configured_cash": configured, "ledger_cash": None})
+            continue
+        ledger_cash = _safe_float(rows[0].get("balance_after"))
+        if abs(configured - ledger_cash) > 0.01:
+            gaps.append({"account_id": account_id, "configured_cash": configured, "ledger_cash": ledger_cash})
+    return gaps
 
 
 def workspace_templates():
