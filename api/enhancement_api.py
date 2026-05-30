@@ -95,6 +95,11 @@ async def data_health():
     return await enhancement_service.data_health()
 
 
+@router.get("/data-audit")
+async def data_audit():
+    return await enhancement_service.data_audit()
+
+
 @router.post("/data-health/fix")
 async def fix_data_health():
     return await enhancement_service.fix_data_health()

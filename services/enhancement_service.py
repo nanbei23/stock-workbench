@@ -426,6 +426,67 @@ async def data_health():
     return {"checks": checks, "ok": ok_count == len(checks), "score": score}
 
 
+async def data_audit():
+    health = await data_health()
+    overview = await _fetchall(
+        """
+        SELECT
+          (SELECT COUNT(*) FROM accounts) AS account_count,
+          (SELECT COUNT(*) FROM watchlist) AS watchlist_count,
+          (SELECT COUNT(*) FROM portfolio WHERE total_shares > 0) AS position_count,
+          (SELECT COUNT(*) FROM trades) AS trade_count,
+          (SELECT COUNT(*) FROM conditional_orders WHERE status = 'pending') AS pending_order_count,
+          (SELECT COUNT(*) FROM cash_ledger) AS cash_ledger_count,
+          (SELECT COUNT(*) FROM analysis_reports) AS report_count,
+          (SELECT COUNT(*) FROM hermes_tool_runs WHERE status = 'ok') AS hermes_write_count
+        """
+    )
+    stale_reports = await _fetchall(
+        """
+        SELECT code, MAX(created_at) AS last_report_at
+        FROM analysis_reports
+        GROUP BY code
+        HAVING last_report_at < datetime('now', '-7 days')
+        ORDER BY last_report_at ASC
+        LIMIT 8
+        """
+    )
+    orphan_signals = await _fetchall(
+        """
+        SELECT COUNT(*) AS c
+        FROM signal_tracking st
+        LEFT JOIN analysis_reports ar ON ar.id = st.report_id
+        WHERE st.report_id IS NOT NULL AND st.report_id > 0 AND ar.id IS NULL
+        """
+    )
+    fixable = [
+        item for item in health.get("checks", [])
+        if item.get("fixable") and item.get("status") != "ok"
+    ]
+    warnings = [
+        item.get("message")
+        for item in health.get("checks", [])
+        if item.get("status") != "ok"
+    ]
+    if stale_reports:
+        warnings.append(f"{len(stale_reports)} 只股票的最近 AI 报告超过 7 天")
+    orphan_count = int(orphan_signals[0]["c"] if orphan_signals else 0)
+    if orphan_count:
+        warnings.append(f"{orphan_count} 条信号跟踪缺少来源报告")
+
+    return {
+        "score": health.get("score", 0),
+        "ok": health.get("ok", False) and not stale_reports and not orphan_count,
+        "summary": overview[0] if overview else {},
+        "fixable_count": len(fixable),
+        "warning_count": len(warnings),
+        "warnings": warnings,
+        "stale_reports": stale_reports,
+        "orphan_signal_tracking": orphan_count,
+        "checks": health.get("checks", []),
+    }
+
+
 async def fix_data_health():
     db = await get_db()
     try:

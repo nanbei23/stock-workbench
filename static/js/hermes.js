@@ -602,6 +602,23 @@ async function cancelHermesDraft() {
     }
 }
 
+async function undoLastHermesWrite() {
+    if (!hermesSessionId) {
+        showHermesToast('请先选择一个 Hermes 会话', 'warning');
+        return;
+    }
+    if (!confirm('撤销最近一次 Hermes 写库？撤销后会写入审计记录。')) return;
+    try {
+        const result = await hermesPost(`/api/hermes/session/${encodeURIComponent(hermesSessionId)}/undo-last`, {});
+        appendHermesMessage('tool', `已撤销：${result.summary || result.tool || '最近写库'}`);
+        await loadHermesSessions();
+        await loadHermesSession(hermesSessionId);
+        showHermesToast('最近写库已撤销', 'success');
+    } catch (e) {
+        showHermesToast('撤销失败: ' + e.message, 'error');
+    }
+}
+
 function startHermesSession() {
     hermesSessionId = '';
     hermesActiveDraft = null;
@@ -671,6 +688,7 @@ Object.assign(window, {
     confirmHermesPlanStep,
     skipHermesPlanStep,
     cancelHermesDraft,
+    undoLastHermesWrite,
     renderHermesDraft,
     startHermesSession,
     fillHermesExample,

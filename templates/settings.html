@@ -847,6 +847,9 @@
 
     <div class="setting-group">
       <div class="setting-group-title">数据健康检查</div>
+      <div id="dataAuditPanel" class="data-audit-panel">
+        <div class="empty-state"><p>正在生成数据审计...</p></div>
+      </div>
       <div id="systemDiagnosticsPanel" class="system-diagnostics-panel">
         <div class="empty-state"><p>正在生成系统诊断...</p></div>
       </div>
@@ -854,6 +857,7 @@
         <div class="empty-state"><p>正在检查数据...</p></div>
       </div>
       <div class="data-actions">
+        <button class="btn-secondary" onclick="loadDataAudit()">数据审计</button>
         <button class="btn-secondary" onclick="loadSystemDiagnostics()">系统诊断</button>
         <button class="btn-secondary" onclick="loadDataHealth()">重新检查</button>
         <button class="btn-secondary" onclick="fixDataHealth()">一键修复可修复项</button>
@@ -899,5 +903,5 @@
   </div>
 </div>
 
-<script src="/static/js/settings.js?v=2.3.0"></script>
+<script src="/static/js/settings.js?v=2.4.0"></script>
 {% endblock %}

@@ -95,3 +95,8 @@ async def list_hermes_session(session_id: str, limit: int = Query(default=30, ge
 @router.get("/hermes/session/{session_id}/tool-runs")
 async def list_hermes_tool_runs(session_id: str, limit: int = Query(default=30, ge=1, le=100)):
     return await hermes_console_service.list_tool_runs(session_id, limit=limit)
+
+
+@router.post("/hermes/session/{session_id}/undo-last")
+async def undo_last_hermes_tool_run(session_id: str):
+    return await hermes_console_service.undo_last_tool_run(session_id)

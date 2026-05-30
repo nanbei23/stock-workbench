@@ -132,6 +132,19 @@ class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tasks", result)
         self.assertGreaterEqual(result["summary"]["warning_count"], 1)
 
+    async def test_data_audit_summarizes_health_and_counts(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
+            db.execute("INSERT INTO watchlist (code, name) VALUES ('000001', '平安银行')")
+            db.commit()
+
+        result = await enhancement_service.data_audit()
+
+        self.assertIn("summary", result)
+        self.assertIn("score", result)
+        self.assertEqual(result["summary"]["watchlist_count"], 1)
+        self.assertGreaterEqual(result["warning_count"], 1)
+
     async def test_ai_readiness_blocks_missing_model_config(self):
         result = enhancement_service.ai_readiness()
 

@@ -15,7 +15,7 @@ import httpx
 from fastapi import HTTPException
 
 from models.database import get_db
-from services import hermes_tool_registry, quote_service
+from services import hermes_tool_registry, portfolio_service, quote_service
 
 
 _DRAFTS: dict[str, dict[str, Any]] = {}
@@ -349,6 +349,107 @@ async def list_tool_runs(session_id: str, limit: int = 30) -> dict[str, Any]:
         return {"session_id": session_id, "runs": list(reversed(runs)), "count": len(runs)}
     finally:
         await db.close()
+
+
+async def undo_last_tool_run(session_id: str) -> dict[str, Any]:
+    db = await get_db()
+    try:
+        row = await (
+            await db.execute(
+                """
+                SELECT id, draft_id, tool, args_json, result_json, created_at
+                FROM hermes_tool_runs r
+                WHERE r.session_id = ?
+                  AND r.status = 'ok'
+                  AND r.tool IN ('add_watchlist', 'record_trade', 'set_position', 'create_conditional_order')
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM hermes_tool_runs u
+                    WHERE u.session_id = r.session_id
+                      AND u.status = 'undone'
+                      AND u.draft_id = r.draft_id
+                  )
+                ORDER BY r.id DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="没有可撤销的 Hermes 写库记录")
+
+    run = dict(row)
+    args = _loads(run.get("args_json")) or {}
+    result = _loads(run.get("result_json")) or {}
+    tool = run.get("tool")
+    undo_result = await _undo_tool_effect(tool, args, result)
+
+    undo_draft = {
+        "id": run.get("draft_id"),
+        "session_id": session_id,
+        "action": f"undo_{tool}",
+        "label": "撤销 Hermes 写库",
+        "summary": undo_result.get("summary") or f"已撤销 {tool}",
+        "tool_call": {"tool": tool, "args": args},
+    }
+    await _log_tool_run(session_id, undo_draft, "undone", result=undo_result)
+    await _log_event(session_id, "tool", f"undone {run.get('draft_id')}", draft=undo_draft, result=undo_result)
+    return {"status": "ok", "undone_run_id": run["id"], "tool": tool, **undo_result}
+
+
+async def _undo_tool_effect(tool: str, args: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    if tool == "add_watchlist":
+        code = args.get("code")
+        if not code:
+            raise HTTPException(status_code=400, detail="撤销自选失败：缺少股票代码")
+        data = await portfolio_service.remove_from_watchlist(code)
+        return {"summary": f"已从自选股移除 {code}", "data": data}
+
+    if tool == "create_conditional_order":
+        order_id = (((result.get("data") or {}).get("data") or {}).get("id") or (result.get("data") or {}).get("id") or result.get("id"))
+        if not order_id:
+            raise HTTPException(status_code=400, detail="撤销条件单失败：缺少条件单 ID")
+        data = await portfolio_service.cancel_conditional_order(int(order_id))
+        return {"summary": f"已取消条件单 #{order_id}", "data": data}
+
+    if tool in {"record_trade", "set_position"}:
+        trade_id = await _find_last_hermes_trade(args)
+        if not trade_id:
+            raise HTTPException(status_code=404, detail="未找到可撤销的 Hermes 交易记录")
+        data = await portfolio_service.delete_trade(trade_id)
+        return {"summary": f"已撤销交易记录 #{trade_id} 并重算持仓", "data": data}
+
+    raise HTTPException(status_code=400, detail=f"暂不支持撤销工具：{tool}")
+
+
+async def _find_last_hermes_trade(args: dict[str, Any]) -> int | None:
+    code = args.get("code")
+    db = await get_db()
+    try:
+        params: list[Any] = [code]
+        filters = ["code = ?", "notes LIKE 'Hermes 对话台记录：%'"]
+        if args.get("direction"):
+            filters.append("direction = ?")
+            params.append(args.get("direction"))
+        if args.get("shares"):
+            filters.append("shares = ?")
+            params.append(int(args.get("shares")))
+        if args.get("price"):
+            filters.append("ABS(price - ?) < 0.0001")
+            params.append(float(args.get("price")))
+        row = await (
+            await db.execute(
+                f"SELECT id FROM trades WHERE {' AND '.join(filters)} ORDER BY id DESC LIMIT 1",
+                tuple(params),
+            )
+        ).fetchone()
+        if row:
+            return int(row["id"])
+    finally:
+        await db.close()
+    return None
 
 
 async def list_tasks(limit: int = 30, status: str | None = None) -> dict[str, Any]:

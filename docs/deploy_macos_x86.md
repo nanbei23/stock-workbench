@@ -33,6 +33,22 @@ scripts/deploy_macos_x86.sh
 http://127.0.0.1:8000
 ```
 
+## 页面式安装包
+
+v2.4 起可以生成一个带步骤页面的安装包：
+
+```bash
+scripts/build_macos_x86_installer.sh
+```
+
+输出位置：
+
+```text
+dist/stock-workbench-v2.4.0-macos-x86.tar.gz
+```
+
+解压后先打开 `安装向导.html`，再双击 `安装.command`。安装包内还包含 `升级.command`，用于后续复用现有升级流程。
+
 ## 常用参数
 
 ```bash

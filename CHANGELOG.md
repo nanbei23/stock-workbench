@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.4.0 - 2026-05-30
+
+### Added
+
+- Added a page-style Intel macOS installer package generator with `安装向导.html`, `安装.command`, and `升级.command`.
+- Added Hermes Agent v2 undo support for the most recent audited write operation in a session.
+- Added a data audit API and Settings data-audit panel with counts, score, fixable items, and warnings.
+- Added AI report review rollups by model mode and signal after-return.
+- Added a global 15.6-inch portrait dense watch mode toggle.
+
+### Changed
+
+- AI report quality UI now surfaces best model mode and signal posterior performance.
+- Hermes write-audit UI now exposes a guarded undo action.
+- Updated release metadata to `2.4.0`.
+
 ## 2.3.0 - 2026-05-30
 
 ### Added

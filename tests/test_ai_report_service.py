@@ -62,6 +62,15 @@ class AiReportServiceTests(unittest.IsolatedAsyncioTestCase):
                 """,
                 ("600519", "贵州茅台", "price_surge", "快速上涨", "warning"),
             )
+            db.execute(
+                """
+                INSERT INTO signal_tracking (
+                    report_id, code, name, signal, signal_date, entry_price, exit_price, pnl_pct,
+                    excess_return, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (1, "600519", "贵州茅台", "BUY", "2026-05-30", 100, 108, 8.0, 2.0, "closed"),
+            )
             db.commit()
 
     async def test_list_reports_adds_name_and_hides_raw_state(self):
@@ -118,6 +127,13 @@ class AiReportServiceTests(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(self.db_path) as db:
             rows = db.execute("SELECT code FROM anomaly_logs ORDER BY code").fetchall()
         self.assertEqual([row[0] for row in rows], ["000002", "600519"])
+
+    async def test_quality_summary_groups_by_model_and_signal(self):
+        result = await ai_report_service.get_quality_summary(limit=10)
+
+        self.assertEqual(result["best_model_mode"]["model_mode"], "balanced")
+        self.assertEqual(result["by_signal"][0]["signal"], "BUY")
+        self.assertEqual(result["by_signal"][0]["avg_pnl_pct"], 8.0)
 
 
 class AiReportApiTests(unittest.TestCase):

@@ -655,6 +655,27 @@ async function loadDataHealth() {
     }
 }
 
+async function loadDataAudit() {
+    const el = document.getElementById('dataAuditPanel');
+    if (!el) return;
+    try {
+        const resp = await fetch(`${API_BASE}/data-audit`);
+        const data = await resp.json();
+        const s = data.summary || {};
+        const warnings = data.warnings || [];
+        el.innerHTML = `<div class="quality-subtitle">数据审计中心</div>
+        <div class="backup-status-grid">
+            <div><span>审计分</span><strong class="${data.ok ? 'up' : 'down'}">${data.score || 0}</strong><small>${data.ok ? '数据可信' : '存在待处理项'}</small></div>
+            <div><span>可修复项</span><strong class="${data.fixable_count ? 'down' : 'up'}">${data.fixable_count || 0}</strong><small>可使用一键修复</small></div>
+            <div><span>持仓/交易</span><strong>${s.position_count || 0}/${s.trade_count || 0}</strong><small>持仓股票 / 交易流水</small></div>
+            <div><span>AI/Hermes</span><strong>${s.report_count || 0}/${s.hermes_write_count || 0}</strong><small>报告 / Hermes写库</small></div>
+        </div>
+        ${warnings.length ? `<div class="quality-subtitle">审计提示</div>${warnings.slice(0, 6).map(item => `<div class="ai-task-error">${escapeHtml(item)}</div>`).join('')}` : '<div class="empty-state"><p>暂无审计提示</p></div>'}`;
+    } catch (e) {
+        el.innerHTML = `<div class="empty-state"><p>数据审计失败：${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
 function renderDataHealthDetails(details) {
     if (!Array.isArray(details) || !details.length) return '';
     return `<ul class="data-health-details">${details.slice(0, 4).map(item => {
@@ -888,6 +909,7 @@ loadAccountList();
 loadBackupStatus();
 loadModelProviders();
 loadHermesToolPolicy();
+loadDataAudit();
 loadDataHealth();
 loadSystemDiagnostics();
 loadWorkspaceTemplates();
@@ -967,6 +989,7 @@ Object.assign(window, {
     deleteModelProvider,
     loadHermesToolPolicy,
     saveHermesToolPolicy,
+    loadDataAudit,
     loadDataHealth,
     loadSystemDiagnostics,
     fixDataHealth,

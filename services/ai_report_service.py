@@ -157,6 +157,7 @@ async def get_quality_summary(limit: int = 50):
     accuracies = []
     hallucinations = 0
     verified = 0
+    by_model: dict[str, dict] = {}
     for row in rows:
         raw_state = _loads(row.get("raw_state")) or {}
         fact_check = _loads(row.get("fact_check"))
@@ -167,6 +168,13 @@ async def get_quality_summary(limit: int = 50):
             verified += 1
         h_count = _hallucination_count(fact_check, bystander)
         hallucinations += h_count
+        model_mode = row.get("model_mode") or "unknown"
+        bucket = by_model.setdefault(model_mode, {"model_mode": model_mode, "reports": 0, "verified": 0, "accuracy_sum": 0.0, "hallucinations": 0})
+        bucket["reports"] += 1
+        bucket["hallucinations"] += h_count
+        if accuracy is not None:
+            bucket["verified"] += 1
+            bucket["accuracy_sum"] += accuracy
         reports.append({
             "id": row["id"],
             "code": row["code"],
@@ -176,6 +184,8 @@ async def get_quality_summary(limit: int = 50):
             "fact_accuracy": accuracy,
             "hallucinations": h_count,
             "bystander_score": bystander.get("overall_score") if isinstance(bystander, dict) else None,
+            "model_mode": model_mode,
+            "depth": row.get("depth"),
             "created_at": row.get("created_at"),
         })
 
@@ -183,6 +193,40 @@ async def get_quality_summary(limit: int = 50):
     avg_pnl = sum(float(row.get("pnl_pct") or 0) for row in closed) / len(closed) if closed else 0
     avg_excess = sum(float(row.get("excess_return") or 0) for row in closed) / len(closed) if closed else 0
     wins = sum(1 for row in closed if float(row.get("pnl_pct") or 0) > 0)
+    by_signal: dict[str, dict] = {}
+    for row in tracking_rows:
+        signal = row.get("signal") or "UNKNOWN"
+        item = by_signal.setdefault(signal, {"signal": signal, "tracked": 0, "closed": 0, "wins": 0, "pnl_sum": 0.0, "excess_sum": 0.0})
+        item["tracked"] += 1
+        if row.get("pnl_pct") is not None:
+            item["closed"] += 1
+            pnl = float(row.get("pnl_pct") or 0)
+            item["pnl_sum"] += pnl
+            item["excess_sum"] += float(row.get("excess_return") or 0)
+            if pnl > 0:
+                item["wins"] += 1
+    signal_stats = []
+    for item in by_signal.values():
+        closed_count = item["closed"]
+        signal_stats.append({
+            "signal": item["signal"],
+            "tracked": item["tracked"],
+            "closed": closed_count,
+            "win_rate": round(item["wins"] / closed_count * 100, 2) if closed_count else 0,
+            "avg_pnl_pct": round(item["pnl_sum"] / closed_count, 2) if closed_count else 0,
+            "avg_excess_return": round(item["excess_sum"] / closed_count, 2) if closed_count else 0,
+        })
+    model_stats = []
+    for item in by_model.values():
+        verified_count = item["verified"]
+        model_stats.append({
+            "model_mode": item["model_mode"],
+            "reports": item["reports"],
+            "verified": verified_count,
+            "fact_check_pass_rate": round(item["accuracy_sum"] / verified_count, 2) if verified_count else 0,
+            "hallucinations": item["hallucinations"],
+        })
+    best_model = max(model_stats, key=lambda item: (item["fact_check_pass_rate"], -item["hallucinations"], item["reports"]), default=None)
     return {
         "report_count": len(rows),
         "verified_count": verified,
@@ -195,5 +239,8 @@ async def get_quality_summary(limit: int = 50):
             "avg_pnl_pct": round(avg_pnl, 2),
             "avg_excess_return": round(avg_excess, 2),
         },
+        "by_signal": sorted(signal_stats, key=lambda item: item["tracked"], reverse=True),
+        "by_model_mode": sorted(model_stats, key=lambda item: item["reports"], reverse=True),
+        "best_model_mode": best_model,
         "reports": reports,
     }

@@ -137,6 +137,23 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row[0], 200)
         self.assertEqual(row[1], 10.5)
 
+    async def test_undo_last_tool_run_reverts_recent_trade(self):
+        parsed = await hermes_console_service.handle_message("买入 000001 平安银行 2手 成交价 10.5")
+        draft = parsed["draft"]
+        await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
+
+        result = await hermes_console_service.undo_last_tool_run(parsed["session_id"])
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["tool"], "record_trade")
+        with sqlite3.connect(self.db_path) as db:
+            trade_count = db.execute("SELECT COUNT(*) FROM trades WHERE code='000001'").fetchone()[0]
+            position = db.execute("SELECT total_shares FROM portfolio WHERE code='000001'").fetchone()
+            undo_run = db.execute("SELECT status FROM hermes_tool_runs WHERE status='undone'").fetchone()
+        self.assertEqual(trade_count, 0)
+        self.assertIsNone(position)
+        self.assertEqual(undo_run[0], "undone")
+
     async def test_disabled_hermes_tool_blocks_draft_execution(self):
         settings_repository.upsert_settings({"hermes_tool_policy": '{"record_trade":"disabled"}'})
 

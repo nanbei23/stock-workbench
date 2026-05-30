@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}炒股小牛马{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.3.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.4.0">
     <!-- 赛博朋克主题 -->
     <link rel="stylesheet" href="/static/css/cyberpunk.css">
     <!-- 午夜主题 -->
@@ -14,7 +14,7 @@
     <!-- Orbitron字体（赛博朋克主题用） -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <script src="/static/js/app.js?v=2.3.0"></script>
+    <script src="/static/js/app.js?v=2.4.0"></script>
     <!-- marked.js — markdown渲染 -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     {% block head_extras %}{% endblock %}
@@ -74,6 +74,10 @@
             <button class="theme-switcher" id="themeSwitcher" title="切换主题">
                 <span class="theme-icon ui-glyph" id="themeIcon" data-icon="CY"></span>
                 <span class="theme-name" id="themeName">赛博</span>
+            </button>
+            <button class="theme-switcher dense-switcher" id="denseModeSwitcher" title="15.6寸竖屏盯盘模式" onclick="toggleDenseMode()">
+                <span class="theme-icon ui-glyph" data-icon="VP"></span>
+                <span class="theme-name" id="denseModeName">标准</span>
             </button>
         </header>
         <main class="main-content">

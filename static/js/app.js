@@ -84,6 +84,23 @@ function toggleSearch() {
 
 function refreshAll() { location.reload(); }
 
+function applyDenseMode(enabled) {
+  document.body.classList.toggle('dense-watch-mode', !!enabled);
+  const label = document.getElementById('denseModeName');
+  if (label) label.textContent = enabled ? '竖屏' : '标准';
+}
+
+function toggleDenseMode() {
+  const next = localStorage.getItem('dense_watch_mode') !== 'true';
+  localStorage.setItem('dense_watch_mode', next ? 'true' : 'false');
+  applyDenseMode(next);
+}
+
+window.toggleDenseMode = toggleDenseMode;
+document.addEventListener('DOMContentLoaded', () => {
+  applyDenseMode(localStorage.getItem('dense_watch_mode') === 'true');
+});
+
 // ── Account Management ──────────────────────────────────────
 let currentAccountId = localStorage.getItem('accountId') || 'default';
 

@@ -1214,12 +1214,26 @@ async function loadReportQuality() {
         const q = await aiGet('/api/ai/report-quality');
         const sr = q.signal_after_return || {};
         const reports = (q.reports || []).slice(0, 4);
+        const bestModel = q.best_model_mode || {};
+        const signalRows = (q.by_signal || []).slice(0, 3);
         el.innerHTML = `<div class="quality-stats">
             <div><span>事实通过率</span><strong>${(q.fact_check_pass_rate||0).toFixed(1)}%</strong></div>
             <div><span>幻觉项</span><strong class="${q.hallucination_count ? 'down' : 'up'}">${q.hallucination_count||0}</strong></div>
             <div><span>后验收益</span><strong class="${(sr.avg_pnl_pct||0)>=0?'up':'down'}">${(sr.avg_pnl_pct||0)>=0?'+':''}${(sr.avg_pnl_pct||0).toFixed(2)}%</strong></div>
             <div><span>胜率</span><strong>${(sr.win_rate||0).toFixed(1)}%</strong></div>
         </div>
+        <div class="quality-subtitle">模型复盘</div>
+        <div class="quality-report-row">
+            <span>${escapeHtml(bestModel.model_mode || '暂无')}</span>
+            <b>${bestModel.fact_check_pass_rate == null ? '--' : Number(bestModel.fact_check_pass_rate).toFixed(1) + '%'}</b>
+            <small>${Number(bestModel.reports || 0)}份 · ${Number(bestModel.hallucinations || 0)}项</small>
+        </div>
+        <div class="quality-subtitle">信号后验</div>
+        ${signalRows.length ? signalRows.map(r => `<div class="quality-report-row">
+            <span>${escapeHtml(SIG_LABEL[(r.signal || '').toUpperCase()] || r.signal || 'UNKNOWN')}</span>
+            <b class="${(r.avg_pnl_pct || 0) >= 0 ? 'up' : 'down'}">${(r.avg_pnl_pct || 0) >= 0 ? '+' : ''}${Number(r.avg_pnl_pct || 0).toFixed(2)}%</b>
+            <small>${Number(r.closed || 0)}/${Number(r.tracked || 0)}笔 · 胜率${Number(r.win_rate || 0).toFixed(1)}%</small>
+        </div>`).join('') : '<div class="empty-row">暂无信号跟踪样本</div>'}
         <div class="quality-subtitle">最近报告</div>
         ${reports.length ? reports.map(r => `<div class="quality-report-row" onclick="viewReport(${Number(r.id)})">
             <span>${escapeHtml(r.name||r.code)} ${escapeHtml(r.code)}</span>

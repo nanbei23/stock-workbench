@@ -25,7 +25,7 @@ async def list_quality_reports(db, limit=50):
     rows = await db.execute_fetchall(
         """
         SELECT id, task_id, code, signal, confidence, risk_score, raw_state,
-               fact_check, bystander_verify, created_at
+               fact_check, bystander_verify, created_at, depth, model_mode
         FROM analysis_reports
         ORDER BY created_at DESC
         LIMIT ?

@@ -4244,6 +4244,75 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
   padding: 16px 20px;
 }
 
+body.dense-watch-mode {
+  --topbar-h: 42px;
+  --left-w: 255px;
+}
+
+body.dense-watch-mode .banner {
+  min-height: 42px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+body.dense-watch-mode .tab-btn,
+body.dense-watch-mode .theme-switcher {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+body.dense-watch-mode .stock-list-header,
+body.dense-watch-mode .ai-left-header,
+body.dense-watch-mode .hermes-sidebar,
+body.dense-watch-mode .portfolio-container,
+body.dense-watch-mode .settings-container {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+body.dense-watch-mode .stock-card,
+body.dense-watch-mode .ai-stock-card,
+body.dense-watch-mode .card,
+body.dense-watch-mode .overview-card,
+body.dense-watch-mode .hermes-side-card {
+  border-radius: 6px;
+}
+
+body.dense-watch-mode .stock-card-inner {
+  padding: 8px 9px;
+}
+
+body.dense-watch-mode .detail-area {
+  padding: 10px;
+}
+
+body.dense-watch-mode .chart-container {
+  min-height: 28vh;
+}
+
+body.dense-watch-mode .ai-container {
+  grid-template-columns: minmax(220px, 250px) minmax(0, 1fr) minmax(250px, 280px);
+}
+
+body.dense-watch-mode .hermes-page {
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+body.dense-watch-mode .portfolio-container {
+  max-width: 980px;
+}
+
+@media (orientation: portrait) and (min-width: 760px) and (max-width: 1100px) {
+  body.dense-watch-mode .main-content:has(.stock-list) {
+    display: grid;
+    grid-template-columns: var(--left-w) minmax(0, 1fr);
+  }
+
+  body.dense-watch-mode .overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* AI分析台 */
 
 /* 设置页 */

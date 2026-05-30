@@ -65,6 +65,7 @@
                 <div class="hermes-side-card">
                     <div class="section-header">
                         <h3>写库审计</h3>
+                        <button class="btn btn-sm" onclick="undoLastHermesWrite()">撤销最近写库</button>
                     </div>
                     <div id="hermesToolRunsPanel" class="hermes-tool-runs">
                         <div class="empty-row">暂无工具调用</div>
@@ -99,5 +100,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/hermes.js?v=2.3.0"></script>
+<script src="/static/js/hermes.js?v=2.4.0"></script>
 {% endblock %}
