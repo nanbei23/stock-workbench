@@ -75,6 +75,12 @@ class TradeEditRequest(BaseModel):
     direction: Optional[str] = None
 
 
+class CashBalanceRequest(BaseModel):
+    account_id: str = "default"
+    balance: float
+    notes: str = ""
+
+
 # ── Watchlist ─────────────────────────────────────────────
 @router.get("/watchlist")
 async def get_watchlist():
@@ -243,6 +249,26 @@ async def get_account_dashboard():
         return await portfolio_service.get_account_dashboard()
     except Exception as e:
         logger.error("get_account_dashboard error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/portfolio/cash-ledger")
+async def get_cash_ledger(account_id: Optional[str] = Query("default"), limit: int = Query(default=20, ge=1, le=100)):
+    """现金流水：解释资产现金数据从哪里来"""
+    try:
+        return await portfolio_service.get_cash_ledger(account_id, limit)
+    except Exception as e:
+        logger.error("get_cash_ledger error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/portfolio/cash-balance")
+async def set_cash_balance(req: CashBalanceRequest):
+    """设置账户现金余额，并记录现金流水"""
+    try:
+        return await portfolio_service.set_cash_balance(req.account_id, req.balance, req.notes)
+    except Exception as e:
+        logger.error("set_cash_balance error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

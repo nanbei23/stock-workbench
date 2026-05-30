@@ -163,6 +163,17 @@ CREATE TABLE IF NOT EXISTS daily_pnl (
     PRIMARY KEY (date, code6)
 );
 
+CREATE TABLE IF NOT EXISTS cash_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT DEFAULT 'default',
+    direction TEXT NOT NULL DEFAULT 'adjust',
+    amount REAL NOT NULL,
+    balance_after REAL NOT NULL,
+    source TEXT DEFAULT 'manual',
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT,
@@ -355,6 +366,8 @@ CREATE INDEX IF NOT EXISTS idx_hermes_tasks_session_updated
     ON hermes_tasks(session_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_hermes_task_steps_status
     ON hermes_task_steps(task_id, status);
+CREATE INDEX IF NOT EXISTS idx_cash_ledger_account_created
+    ON cash_ledger(account_id, created_at DESC);
 """
 
 MIGRATIONS = [
@@ -458,6 +471,24 @@ MIGRATIONS = [
             ON hermes_tasks(session_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_hermes_task_steps_status
             ON hermes_task_steps(task_id, status);
+        """,
+    ),
+    (
+        5,
+        "cash_ledger",
+        """
+        CREATE TABLE IF NOT EXISTS cash_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT DEFAULT 'default',
+            direction TEXT NOT NULL DEFAULT 'adjust',
+            amount REAL NOT NULL,
+            balance_after REAL NOT NULL,
+            source TEXT DEFAULT 'manual',
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_cash_ledger_account_created
+            ON cash_ledger(account_id, created_at DESC);
         """,
     ),
 ]

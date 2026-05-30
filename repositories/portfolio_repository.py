@@ -259,6 +259,7 @@ async def fetch_cash_and_fees(db, account_id=None):
         await db.execute("SELECT value FROM settings WHERE key = ?", (cash_key,))
     ).fetchone()
     cash = float(cash_row[0]) if cash_row else 0.0
+    cash_source = "manual" if cash_row else "unset"
     if account_id:
         fee_row = await (
             await db.execute(
@@ -283,9 +284,58 @@ async def fetch_cash_and_fees(db, account_id=None):
         ).fetchone()
     return {
         "cash": cash,
+        "cash_source": cash_source,
         "total_commission": float(fee_row["total_commission"]) if fee_row else 0,
         "total_stamp_tax": float(fee_row["total_stamp_tax"]) if fee_row else 0,
     }
+
+
+async def set_cash_balance(db, account_id: str | None, balance: float, notes: str = "", source: str = "manual"):
+    aid = account_id or "default"
+    key = f"cash_balance_{aid}"
+    current = await fetch_cash_and_fees(db, aid)
+    amount = round(float(balance) - float(current["cash"]), 2)
+    direction = "deposit" if amount > 0 else "withdraw" if amount < 0 else "adjust"
+    await db.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (key, str(round(float(balance), 2))),
+    )
+    await db.execute(
+        """
+        INSERT INTO cash_ledger (account_id, direction, amount, balance_after, source, notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (aid, direction, amount, round(float(balance), 2), source, notes),
+    )
+    await db.commit()
+    return {
+        "account_id": aid,
+        "cash": round(float(balance), 2),
+        "amount": amount,
+        "direction": direction,
+        "source": source,
+    }
+
+
+async def fetch_cash_ledger(db, account_id: str | None = None, limit: int = 20):
+    aid = account_id or "default"
+    rows = await db.execute_fetchall(
+        """
+        SELECT id, account_id, direction, amount, balance_after, source, notes, created_at
+        FROM cash_ledger
+        WHERE account_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (aid, limit),
+    )
+    return [dict(row) for row in rows]
 
 
 async def fetch_daily_pnl(db, year: int, month: int, code: str | None = None):

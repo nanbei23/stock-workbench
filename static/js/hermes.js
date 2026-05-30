@@ -5,6 +5,7 @@ let hermesSessions = [];
 document.addEventListener('DOMContentLoaded', async () => {
     bindHermesInputShortcuts();
     await loadHermesSessions();
+    await loadHermesTasks();
     if (hermesSessionId) {
         await loadHermesSession(hermesSessionId);
     } else {
@@ -25,6 +26,37 @@ async function hermesRequestJson(url, options = {}) {
     }
     if (!contentType.includes('application/json')) throw new Error(`接口返回非 JSON: ${url}`);
     return resp.json();
+}
+
+async function loadHermesTasks() {
+    const panel = document.getElementById('hermesTasksPanel');
+    if (!panel) return;
+    panel.innerHTML = '<div class="empty-row">读取任务...</div>';
+    try {
+        const data = await hermesRequestJson('/api/hermes/tasks?limit=12');
+        renderHermesTasks(data.tasks || []);
+    } catch (e) {
+        panel.innerHTML = `<div class="empty-row">任务读取失败：${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function renderHermesTasks(tasks) {
+    const panel = document.getElementById('hermesTasksPanel');
+    if (!panel) return;
+    if (!tasks.length) {
+        panel.innerHTML = '<div class="empty-row">暂无多步任务</div>';
+        return;
+    }
+    panel.innerHTML = tasks.map(task => {
+        const progress = `${task.write_done || 0}/${task.write_total || 0}`;
+        const steps = (task.steps || []).slice(0, 4).map(step => {
+            return `<span class="${escapeAttr(step.status || '')}">${escapeHtml(step.title || step.summary || step.step_id)}</span>`;
+        }).join('');
+        return `<button class="hermes-task-item ${escapeAttr(task.status || '')}" onclick="loadHermesSession('${escapeAttr(task.session_id)}')">
+            <span><b>${escapeHtml(task.title || task.summary || task.task_id)}</b><small>${escapeHtml(formatHermesTime(task.updated_at || task.created_at))} · ${escapeHtml(planStatusLabel(task.status || 'waiting_confirm'))} · ${progress}</small></span>
+            <div class="hermes-task-steps">${steps}</div>
+        </button>`;
+    }).join('');
 }
 
 function hermesPost(url, data = {}) {
@@ -471,6 +503,7 @@ async function sendHermesMessage(event) {
         appendHermesMessage('assistant', data.answer || '我处理好了。');
         renderHermesDraft(data.draft || null);
         await loadHermesSessions();
+        await loadHermesTasks();
         renderHermesSessions(hermesSessions);
         document.getElementById('hermesSessionTitle').textContent = hermesSessions.find(s => s.session_id === hermesSessionId)?.title || '当前会话';
     } catch (e) {
@@ -495,6 +528,7 @@ async function confirmHermesDraft() {
         appendHermesMessage('tool', `已执行：${result.summary || result.label || '操作成功'}`);
         renderHermesDraft(null);
         await loadHermesSessions();
+        await loadHermesTasks();
         await loadHermesSession(hermesSessionId);
         showHermesToast('Hermes 操作已写入', 'success');
     } catch (e) {
@@ -512,6 +546,7 @@ async function confirmHermesPlanStep(stepId) {
         });
         appendHermesMessage('tool', `已执行步骤：${result.summary || stepId}`);
         await loadHermesSessions();
+        await loadHermesTasks();
         await loadHermesSession(hermesSessionId);
         showHermesToast('步骤已执行', 'success');
     } catch (e) {
@@ -529,6 +564,7 @@ async function skipHermesPlanStep(stepId) {
         });
         appendHermesMessage('tool', `已跳过步骤：${result.summary || stepId}`);
         await loadHermesSessions();
+        await loadHermesTasks();
         await loadHermesSession(hermesSessionId);
         showHermesToast('步骤已跳过', 'success');
     } catch (e) {
@@ -550,6 +586,7 @@ async function cancelHermesDraft() {
         appendHermesMessage('tool', `已取消草稿：${result.summary || draft.summary || '操作草稿'}`);
         renderHermesDraft(null);
         await loadHermesSessions();
+        await loadHermesTasks();
         await loadHermesSession(hermesSessionId);
         showHermesToast('草稿已取消', 'success');
     } catch (e) {
@@ -617,6 +654,7 @@ function escapeAttr(str) {
 
 Object.assign(window, {
     loadHermesSessions,
+    loadHermesTasks,
     loadHermesSession,
     filterHermesSessions,
     loadHermesToolRuns,

@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.0 - Unreleased
+
+### Added
+
+- Added Hermes task center API and UI panel for persisted multi-step task status, progress, and recovery.
+- Added cash ledger persistence, cash-balance update API, and Portfolio cash-source display so asset data is traceable.
+- Added Intel macOS update script with pre-update backup and service redeploy flow.
+
+### Changed
+
+- Improved Portfolio vertical-screen ergonomics with a compact mode and inline cash controls.
+- Clarified the AI report action that converts traceable reports into conditional-order drafts.
+- Updated release metadata to `2.2.0`.
+
 ## 2.1.0 - 2026-05-30
 
 ### Added

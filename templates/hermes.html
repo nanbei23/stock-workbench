@@ -73,6 +73,16 @@
 
                 <div class="hermes-side-card">
                     <div class="section-header">
+                        <h3>任务中心</h3>
+                        <button class="btn btn-sm" onclick="loadHermesTasks()">刷新</button>
+                    </div>
+                    <div id="hermesTasksPanel" class="hermes-tasks-panel">
+                        <div class="empty-row">暂无多步任务</div>
+                    </div>
+                </div>
+
+                <div class="hermes-side-card">
+                    <div class="section-header">
                         <h3>示例表达</h3>
                     </div>
                     <div class="hermes-command-list">
@@ -89,5 +99,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/hermes.js?v=2.1.0"></script>
+<script src="/static/js/hermes.js?v=2.2.0"></script>
 {% endblock %}

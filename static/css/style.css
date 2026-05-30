@@ -2582,6 +2582,65 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
   flex-wrap: wrap;
 }
 
+.hermes-tasks-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hermes-task-item {
+  width: 100%;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hermes-task-item b {
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.hermes-task-item small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.hermes-task-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.hermes-task-steps span {
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(91,155,213,0.10);
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hermes-task-steps .ok {
+  background: rgba(82,183,136,0.14);
+  color: var(--color-down);
+}
+
+.hermes-task-steps .error {
+  background: rgba(224,122,95,0.14);
+  color: var(--color-up);
+}
+
 .hermes-impact-preview {
   margin-top: 8px;
   padding: 8px;
@@ -6001,6 +6060,77 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
   color: var(--text-secondary);
   font-size: 0.72rem;
   margin-top: 2px;
+}
+
+.portfolio-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.cash-source-line {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.cash-adjust-panel {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(180px, 1fr) auto auto;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+.cash-adjust-panel input {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.cash-ledger-list {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-light);
+  padding-top: 8px;
+}
+
+.cash-ledger-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr 0.7fr 1.6fr 0.9fr;
+  gap: 8px;
+  padding: 6px 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+
+.cash-ledger-row strong,
+.cash-ledger-row b {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.portfolio-compact .detail-area .card {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.portfolio-compact .data-table th,
+.portfolio-compact .data-table td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+@media (max-width: 980px) {
+  .cash-adjust-panel,
+  .cash-ledger-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 移动端适配 */

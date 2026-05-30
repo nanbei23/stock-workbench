@@ -45,6 +45,9 @@ function withAccount(url) {
 
 // ── 初始化 ────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  if (localStorage.getItem('portfolioCompact') === '1') {
+    document.body.classList.add('portfolio-compact');
+  }
   // 首次加载所有数据（holdings是默认tab，直接加载）
   await Promise.all([
     loadOverview(),
@@ -135,6 +138,13 @@ function formatPct(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
+function formatTime(value) {
+  if (!value) return '--';
+  const date = new Date(String(value).replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('zh-CN', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+}
+
 function priceClass(n) {
   if (n > 0) return 'up';
   if (n < 0) return 'down';
@@ -183,6 +193,14 @@ async function loadOverview() {
     document.getElementById('totalAssets').textContent = formatMoney(data.total_assets);
     document.getElementById('marketValue').textContent = formatMoney(data.market_value);
     document.getElementById('cash').textContent = formatMoney(data.cash);
+    const cashInput = document.getElementById('cashBalanceInput');
+    if (cashInput && document.activeElement !== cashInput) cashInput.value = data.cash ?? 0;
+    const cashSource = document.getElementById('cashSource');
+    if (cashSource) {
+      cashSource.textContent = data.cash_source === 'manual'
+        ? '现金来源：手动设置 / 现金流水'
+        : '现金来源：未设置，按 0 计算';
+    }
     
     const pnlEl = document.getElementById('totalPnl');
     pnlEl.textContent = formatMoney(data.unrealized_pnl) + ' (' + formatPct(data.unrealized_pnl_pct) + ')';
@@ -210,6 +228,62 @@ async function loadOverview() {
   } catch (e) {
     console.error('loadOverview error:', e);
   }
+}
+
+async function saveCashBalance() {
+  const input = document.getElementById('cashBalanceInput');
+  const note = document.getElementById('cashBalanceNote');
+  const balance = Number(input?.value || 0);
+  if (!Number.isFinite(balance) || balance < 0) {
+    showToast('请输入有效现金余额', 'error');
+    return;
+  }
+  try {
+    await portfolioPost('/api/portfolio/cash-balance', {
+      account_id: selectedAccountId(),
+      balance,
+      notes: note?.value || ''
+    });
+    if (note) note.value = '';
+    await Promise.all([loadOverview(), loadAccountDashboard(), loadCashLedger(true)]);
+    showToast('现金余额已更新', 'success');
+  } catch (e) {
+    showToast('现金保存失败: ' + e.message, 'error');
+  }
+}
+
+async function loadCashLedger(forceShow = false) {
+  const el = document.getElementById('cashLedgerList');
+  if (!el) return;
+  if (!forceShow && el.style.display !== 'none') {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  el.innerHTML = '<div class="empty-row">读取现金流水...</div>';
+  try {
+    const data = await portfolioGet(withAccount('/api/portfolio/cash-ledger'));
+    const rows = data.entries || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-row">暂无现金流水。保存现金余额后会记录来源。</div>';
+      return;
+    }
+    el.innerHTML = rows.map(row => `<div class="cash-ledger-row">
+      <span>${esc(formatTime(row.created_at))}</span>
+      <strong class="${priceClass(row.amount || 0)}">${formatMoney(row.amount || 0)}</strong>
+      <span>${esc(row.direction || 'adjust')}</span>
+      <span>${esc(row.notes || row.source || '')}</span>
+      <b>${formatMoney(row.balance_after || 0)}</b>
+    </div>`).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="empty-row">现金流水读取失败：${esc(e.message)}</div>`;
+  }
+}
+
+function togglePortfolioCompact() {
+  const enabled = !document.body.classList.contains('portfolio-compact');
+  document.body.classList.toggle('portfolio-compact', enabled);
+  localStorage.setItem('portfolioCompact', enabled ? '1' : '0');
 }
 
 async function loadAccountDashboard() {

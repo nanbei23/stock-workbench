@@ -53,6 +53,14 @@ async def list_hermes_sessions(limit: int = Query(default=50, ge=1, le=200)):
     return await hermes_console_service.list_sessions(limit=limit)
 
 
+@router.get("/hermes/tasks")
+async def list_hermes_tasks(
+    limit: int = Query(default=30, ge=1, le=100),
+    status: str | None = Query(default=None),
+):
+    return await hermes_console_service.list_tasks(limit=limit, status=status)
+
+
 @router.get("/hermes/session/{session_id}")
 async def list_hermes_session(session_id: str, limit: int = Query(default=30, ge=1, le=100)):
     return await hermes_console_service.list_session_events(session_id, limit=limit)

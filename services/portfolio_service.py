@@ -264,6 +264,7 @@ async def get_portfolio_overview(account_id=None):
         "total_assets": round(total_assets, 2),
         "market_value": round(total_market_value, 2),
         "cash": round(cash, 2),
+        "cash_source": cash_and_fees.get("cash_source") or "unset",
         "total_cost": round(total_cost, 2),
         "daily_pnl": round(total_daily_pnl, 2),
         "unrealized_pnl": round(total_unrealized_pnl, 2),
@@ -297,6 +298,21 @@ async def get_account_dashboard():
         "accounts": items,
         "dominant_account": max(items, key=lambda item: item.get("market_value", 0), default=None),
     }
+
+
+async def set_cash_balance(account_id=None, balance=0, notes=""):
+    async def _set(db):
+        return await repo.set_cash_balance(db, account_id or "default", float(balance), notes=notes, source="manual")
+
+    return await _with_db(_set)
+
+
+async def get_cash_ledger(account_id=None, limit=20):
+    async def _load(db):
+        return await repo.fetch_cash_ledger(db, account_id or "default", limit)
+
+    rows = await _with_db(_load)
+    return {"account_id": account_id or "default", "count": len(rows), "entries": rows}
 
 
 def _planned_total_cost(price, shares, explicit_total=None):

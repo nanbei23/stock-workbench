@@ -119,6 +119,18 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["cash"], 50000.0)
         self.assertEqual(result["total_assets"], 50000.0)
 
+    async def test_cash_balance_records_ledger_entry(self):
+        result = await portfolio_service.set_cash_balance("default", 12000, "初始入金")
+        ledger = await portfolio_service.get_cash_ledger("default")
+        overview = await portfolio_service.get_portfolio_overview("default")
+
+        self.assertEqual(result["cash"], 12000.0)
+        self.assertEqual(overview["cash"], 12000.0)
+        self.assertEqual(overview["cash_source"], "manual")
+        self.assertEqual(ledger["count"], 1)
+        self.assertEqual(ledger["entries"][0]["amount"], 12000.0)
+        self.assertEqual(ledger["entries"][0]["notes"], "初始入金")
+
 
 class PortfolioApiTests(unittest.TestCase):
     def setUp(self):

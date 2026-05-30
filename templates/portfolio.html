@@ -23,7 +23,13 @@
 <div class="detail-area">
   <!-- 资产概览 -->
   <div class="card">
-    <div class="card-title">资产概览</div>
+    <div class="card-header portfolio-card-header">
+      <div>
+        <div class="card-title">资产概览</div>
+        <div class="cash-source-line" id="cashSource">现金来源：未设置</div>
+      </div>
+      <button class="btn btn-sm btn-ghost" onclick="togglePortfolioCompact()">紧凑</button>
+    </div>
     <div class="grid grid-4" style="margin-top:8px;">
       <div>
         <div style="font-size:0.8rem;color:var(--text-secondary);">总资产</div>
@@ -56,6 +62,13 @@
         <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="winRateOverview">--</div>
       </div>
     </div>
+    <div class="cash-adjust-panel">
+      <input type="number" id="cashBalanceInput" step="0.01" placeholder="设置可用资金">
+      <input type="text" id="cashBalanceNote" placeholder="备注，例如 初始入金 / 银证转入">
+      <button class="btn btn-sm btn-primary" onclick="saveCashBalance()">保存现金</button>
+      <button class="btn btn-sm btn-ghost" onclick="loadCashLedger()">查看流水</button>
+    </div>
+    <div class="cash-ledger-list" id="cashLedgerList" style="display:none;"></div>
   </div>
 
   <div class="card account-dashboard-card">

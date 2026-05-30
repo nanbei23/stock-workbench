@@ -113,7 +113,7 @@
                     </div>
                     <div class="report-header-right">
                         <button class="btn btn-sm" onclick="saveToGbrain()">存入gbrain</button>
-                        <button class="btn btn-sm btn-primary" id="btnGenCondOrder" onclick="generateCondOrder()" style="display:none;">条件单</button>
+                        <button class="btn btn-sm btn-primary" id="btnGenCondOrder" onclick="generateCondOrder()" style="display:none;" title="从当前AI报告生成可回溯条件单草稿">报告转条件单</button>
                         <button class="btn btn-sm" onclick="downloadPdf()">下载</button>
                         <button class="btn btn-sm" onclick="closeReport()">关闭</button>
                     </div>
@@ -256,6 +256,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-task-client.js?v=2.1.0"></script>
-<script src="/static/js/ai.js?v=2.1.0"></script>
+<script src="/static/js/ai-task-client.js?v=2.2.0"></script>
+<script src="/static/js/ai.js?v=2.2.0"></script>
 {% endblock %}

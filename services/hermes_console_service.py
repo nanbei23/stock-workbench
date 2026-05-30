@@ -351,6 +351,49 @@ async def list_tool_runs(session_id: str, limit: int = 30) -> dict[str, Any]:
         await db.close()
 
 
+async def list_tasks(limit: int = 30, status: str | None = None) -> dict[str, Any]:
+    db = await get_db()
+    try:
+        where = "WHERE status = ?" if status else ""
+        params: list[Any] = [status] if status else []
+        params.append(limit)
+        rows = await db.execute_fetchall(
+            f"""
+            SELECT task_id, session_id, draft_id, title, status, summary,
+                   source_text, created_at, updated_at
+            FROM hermes_tasks
+            {where}
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        tasks = []
+        for row in rows:
+            item = dict(row)
+            steps = await db.execute_fetchall(
+                """
+                SELECT step_id, position, kind, action, title, summary, status,
+                       result_json, error, updated_at
+                FROM hermes_task_steps
+                WHERE task_id = ?
+                ORDER BY position ASC
+                """,
+                (item["task_id"],),
+            )
+            item["steps"] = []
+            for step in steps:
+                step_item = dict(step)
+                step_item["result"] = _loads(step_item.pop("result_json"))
+                item["steps"].append(step_item)
+            item["write_total"] = sum(1 for step in item["steps"] if step.get("kind") == "write")
+            item["write_done"] = sum(1 for step in item["steps"] if step.get("kind") == "write" and step.get("status") in {"ok", "skipped"})
+            tasks.append(item)
+        return {"count": len(tasks), "tasks": tasks}
+    finally:
+        await db.close()
+
+
 async def _load_active_draft(session_id: str, draft_id: str) -> dict[str, Any]:
     draft = _DRAFTS.get(draft_id) or await _load_draft_from_history(session_id, draft_id)
     if not draft or draft.get("session_id") != session_id:

@@ -52,6 +52,16 @@ scripts/deploy_macos_x86.sh --skip-tests
 scripts/deploy_macos_x86.sh --uninstall-service
 ```
 
+## 一键更新
+
+已安装过服务后，可以执行：
+
+```bash
+scripts/update_macos_x86.sh
+```
+
+更新脚本会先尝试创建数据备份，然后 `git pull --ff-only`，再复用部署脚本安装依赖、构建、迁移并重启 launchd 服务。
+
 ## launchd 服务
 
 服务标识：

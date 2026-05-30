@@ -458,6 +458,19 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_list_tasks_returns_persisted_task_with_steps(self):
+        parsed = await self._make_llm_multi_step_plan()
+        draft = parsed["draft"]
+
+        listing = await hermes_console_service.list_tasks(limit=10)
+        task = next(item for item in listing["tasks"] if item["task_id"] == draft["id"])
+
+        self.assertEqual(task["session_id"], parsed["session_id"])
+        self.assertEqual(task["status"], "waiting_confirm")
+        self.assertEqual(task["write_total"], 2)
+        self.assertEqual(task["write_done"], 0)
+        self.assertEqual([step["step_id"] for step in task["steps"]], ["step-1", "step-2", "step-3"])
+
     async def test_confirm_plan_step_keeps_plan_active_for_remaining_steps(self):
         parsed = await self._make_llm_multi_step_plan()
         draft = parsed["draft"]
