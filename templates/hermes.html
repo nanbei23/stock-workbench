@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Hermes 对话台 — 炒股小牛马{% endblock %}
+
+{% block content %}
+<div class="hermes-page">
+    <aside class="hermes-sidebar">
+        <div class="hermes-sidebar-head">
+            <div>
+                <h2>Hermes 对话台</h2>
+                <p>LLM 识别意图、本地草稿确认、历史可回溯</p>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="startHermesSession()">新会话</button>
+        </div>
+        <div class="hermes-session-summary" id="hermesSessionSummary">
+            <div><span>最近会话</span><strong>--</strong></div>
+            <div><span>已执行</span><strong>--</strong></div>
+        </div>
+        <div class="hermes-session-filter">
+            <input id="hermesSearchInput" class="form-input-sm" type="text" placeholder="搜索历史会话..." oninput="filterHermesSessions()">
+        </div>
+        <div class="hermes-session-list" id="hermesSessionList">
+            <div class="empty-row">加载会话...</div>
+        </div>
+    </aside>
+
+    <main class="hermes-workspace">
+        <div class="hermes-workspace-head">
+            <div>
+                <h1 id="hermesSessionTitle">新会话</h1>
+                <p id="hermesSessionMeta">优先使用设置页 AI 引擎识别自然语言，写库操作会先生成草稿。</p>
+            </div>
+            <div class="hermes-workspace-actions">
+                <button class="btn btn-sm" onclick="loadHermesSessions()">刷新历史</button>
+                <button class="btn btn-sm" onclick="startHermesSession()">清空当前</button>
+            </div>
+        </div>
+
+        <section class="hermes-main-grid">
+            <div class="hermes-chat-panel">
+                <div id="hermesMessages" class="hermes-page-messages">
+                    <div class="hermes-message assistant">
+                        <div class="hermes-bubble">可以用自然语言说完整需求，例如“帮我把平安银行今天买两手，十块五附近记到账上”。系统会优先用 LLM 识别，再生成可确认草稿。</div>
+                    </div>
+                </div>
+                <form class="hermes-page-input" onsubmit="sendHermesMessage(event)">
+                    <textarea id="hermesInput" rows="3" placeholder="输入自然语言操作，例如：把 600519 加入自选，或者查询 000001 持仓" maxlength="500"></textarea>
+                    <button class="btn btn-primary" id="hermesSendBtn" type="submit">发送</button>
+                </form>
+            </div>
+
+            <aside class="hermes-side-panel">
+                <div class="hermes-side-card">
+                    <div class="section-header">
+                        <h3>当前草稿</h3>
+                    </div>
+                    <div id="hermesDraftPanel" class="hermes-draft-panel hermes-page-draft">
+                        <div class="empty-row">暂无待确认草稿</div>
+                    </div>
+                </div>
+
+                <div class="hermes-side-card">
+                    <div class="section-header">
+                        <h3>示例表达</h3>
+                    </div>
+                    <div class="hermes-command-list">
+                        <button onclick="fillHermesExample('查询 000001 持仓')">查询 000001 持仓</button>
+                        <button onclick="fillHermesExample('新增 600519 贵州茅台 到自选')">新增 600519 贵州茅台 到自选</button>
+                        <button onclick="fillHermesExample('买入 000001 平安银行 2手 成交价 10.5')">买入 000001 平安银行 2手 成交价 10.5</button>
+                        <button onclick="fillHermesExample('为 600519 创建条件单，低于 1680 买入 100 股')">条件单草稿</button>
+                    </div>
+                </div>
+            </aside>
+        </section>
+    </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/hermes.js?v=hermes-page-20260530"></script>
+{% endblock %}

@@ -32,20 +32,32 @@ let _selectedStockCode = null;
 const _tabLoaded = {};
 let _stopLossPct = 8; // 默认值，将从API加载
 
+function selectedAccountId() {
+  return localStorage.getItem('accountId') || 'default';
+}
+
+function withAccount(url) {
+  const accountId = selectedAccountId();
+  if (!accountId || accountId === 'all') return url;
+  const join = url.includes('?') ? '&' : '?';
+  return `${url}${join}account_id=${encodeURIComponent(accountId)}`;
+}
+
 // ── 初始化 ────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   // 首次加载所有数据（holdings是默认tab，直接加载）
   await Promise.all([
     loadOverview(),
     loadPortfolio(),
-    loadHoldingsTable()
+    loadHoldingsTable(),
+    loadAccountDashboard()
   ]);
   // 标记 holdings tab 已加载
   _tabLoaded['holdings'] = true;
 
   // 从API加载止损百分比设置
   try {
-    const settings = await apiGet('/api/settings');
+    const settings = await portfolioGet('/api/settings');
     if (settings.stop_loss_pct) {
       _stopLossPct = parseInt(settings.stop_loss_pct);
       await loadHoldingsTable(); // 用正确的止损值重新渲染
@@ -74,18 +86,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       loadOverview();
       loadPortfolio();
       loadHoldingsTable();
+      loadAccountDashboard();
     }
   }, 30000);
 });
 
 // ── API 工具函数 ──────────────────────────────────────────
-async function apiGet(url) {
+async function portfolioGet(url) {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`API error: ${resp.status}`);
   return resp.json();
 }
 
-async function apiPost(url, data) {
+async function portfolioPost(url, data) {
   const resp = await fetch(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -128,6 +141,22 @@ function priceClass(n) {
   return 'flat';
 }
 
+function esc(value) {
+  return typeof escapeHtml === 'function'
+    ? escapeHtml(value)
+    : String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+}
+
+function escAttr(value) {
+  return typeof escapeAttr === 'function' ? escapeAttr(value) : esc(value);
+}
+
+function jsArg(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' ');
+}
+
 // ── Tab 切换（懒加载） ──────────────────────────────────
 function switchPTab(name) {
   document.querySelectorAll('[id^="ptab-"]').forEach(el => el.style.display = 'none');
@@ -150,7 +179,7 @@ function switchPTab(name) {
 // ── 资产概览 ──────────────────────────────────────────────
 async function loadOverview() {
   try {
-    const data = await apiGet('/api/portfolio/overview');
+    const data = await portfolioGet(withAccount('/api/portfolio/overview'));
     document.getElementById('totalAssets').textContent = formatMoney(data.total_assets);
     document.getElementById('marketValue').textContent = formatMoney(data.market_value);
     document.getElementById('cash').textContent = formatMoney(data.cash);
@@ -183,27 +212,67 @@ async function loadOverview() {
   }
 }
 
+async function loadAccountDashboard() {
+  const el = document.getElementById('accountDashboard');
+  if (!el) return;
+  try {
+    const data = await portfolioGet('/api/portfolio/accounts/overview');
+    const combined = data.combined || {};
+    const accounts = data.accounts || [];
+    const active = selectedAccountId();
+    const combinedRow = `<div class="account-dashboard-summary">
+      <div><span>合并总资产</span><strong>${formatMoney(combined.total_assets || 0)}</strong></div>
+      <div><span>持仓市值</span><strong>${formatMoney(combined.market_value || 0)}</strong></div>
+      <div><span>当日盈亏</span><strong class="${priceClass(combined.daily_pnl || 0)}">${formatMoney(combined.daily_pnl || 0)}</strong></div>
+      <div><span>浮动盈亏</span><strong class="${priceClass(combined.unrealized_pnl || 0)}">${formatMoney(combined.unrealized_pnl || 0)}</strong></div>
+    </div>`;
+    const rows = accounts.length ? accounts.map(a => {
+      const isActive = a.id === active;
+      const weight = combined.market_value ? (a.market_value / combined.market_value * 100).toFixed(1) : '0.0';
+      return `<button class="account-dashboard-row ${isActive ? 'active' : ''}" onclick="switchAccountFromDashboard('${jsArg(a.id)}')">
+        <span><b>${esc(a.name || a.id)}</b><small>${esc(a.broker || a.id)}</small></span>
+        <span>${formatMoney(a.total_assets || 0)}</span>
+        <span>${a.position_count || 0}只</span>
+        <span>${weight}%</span>
+        <strong class="${priceClass(a.unrealized_pnl || 0)}">${formatMoney(a.unrealized_pnl || 0)}</strong>
+      </button>`;
+    }).join('') : '<div class="empty-state"><p>暂无账户数据</p></div>';
+    el.innerHTML = `${combinedRow}<div class="account-dashboard-head"><span>账户</span><span>总资产</span><span>持仓</span><span>市值占比</span><span>浮动盈亏</span></div>${rows}`;
+  } catch (e) {
+    console.error('loadAccountDashboard error:', e);
+    el.innerHTML = '<div class="empty-state"><p>账户看板加载失败</p></div>';
+  }
+}
+
+function switchAccountFromDashboard(accountId) {
+  localStorage.setItem('accountId', accountId);
+  location.reload();
+}
+
 // ── 持仓列表（左侧） ────────────────────────────────────
 async function loadPortfolio() {
   try {
-    const data = await apiGet('/api/portfolio');
+    const data = await portfolioGet(withAccount('/api/portfolio'));
     const positions = data.positions || [];
     const listEl = document.getElementById('portfolioList');
     
     if (positions.length === 0) {
-      listEl.innerHTML = '<div class="empty-state" style="padding:32px 16px;"><div class="icon">💼</div><p>暂无持仓</p></div>';
+      listEl.innerHTML = '<div class="empty-state" style="padding:32px 16px;"><div class="icon ui-glyph">PF</div><p>暂无持仓</p></div>';
       return;
     }
     
     listEl.innerHTML = positions.map(p => {
       const cls = priceClass(p.unrealized_pnl);
+      const code = esc(p.code);
+      const name = esc(p.name);
+      const clickCode = jsArg(p.code);
       return `
-        <div class="stock-card" onclick="showPositionDetail('${p.code}')">
+        <div class="stock-card" onclick="showPositionDetail('${clickCode}')">
           <div class="stock-card-inner">
             <div class="sc-left">
               <div>
-                <div class="sc-name">${p.name}</div>
-                <div class="sc-code">${p.code}</div>
+                <div class="sc-name">${name}</div>
+                <div class="sc-code">${code}</div>
               </div>
               <div class="sc-price ${priceClass(p.change_pct)}">
                 ${p.price ? p.price.toFixed(2) : '--'}<span class="sc-price-unit">元</span>
@@ -239,7 +308,7 @@ function updateStopLoss() {
   if (select) {
     _stopLossPct = parseInt(select.value);
     // 保存到数据库
-    apiPost('/api/settings/bulk', { settings: { stop_loss_pct: _stopLossPct.toString() } });
+    portfolioPost('/api/settings/bulk', { settings: { stop_loss_pct: _stopLossPct.toString() } });
     loadHoldingsTable(); // 重新渲染持仓表
   }
 }
@@ -248,8 +317,8 @@ function updateStopLoss() {
 async function loadHoldingsTable() {
   try {
     const [portfolioData, overview] = await Promise.all([
-      apiGet('/api/portfolio'),
-      apiGet('/api/portfolio/overview')
+      portfolioGet(withAccount('/api/portfolio')),
+      portfolioGet(withAccount('/api/portfolio/overview'))
     ]);
     const positions = portfolioData.positions || [];
     const totalAssets = overview.total_assets || 1;
@@ -266,6 +335,9 @@ async function loadHoldingsTable() {
       const weight = (marketValue / totalAssets * 100).toFixed(1);
       const dailyPnl = p.daily_pnl != null ? p.daily_pnl : (p.price - (p.prev_close || p.avg_cost)) * p.total_shares;
       const dailyCls = priceClass(dailyPnl);
+      const code = esc(p.code);
+      const name = esc(p.name);
+      const clickCode = jsArg(p.code);
       
       // 止损距离计算（可配置百分比）
       const stopLossPrice = p.avg_cost * (1 - _stopLossPct / 100);
@@ -273,8 +345,8 @@ async function loadHoldingsTable() {
       const stopLossCls = stopLossDist === '--' ? 'flat' : (parseFloat(stopLossDist) > 5 ? 'up' : (parseFloat(stopLossDist) > 2 ? 'flat' : 'down'));
       
       return `
-        <tr style="cursor:pointer;" onclick="showPositionDetail('${p.code}')">
-          <td><strong>${p.name}</strong><br><small class="text-muted">${p.code}</small></td>
+        <tr style="cursor:pointer;" onclick="showPositionDetail('${clickCode}')">
+          <td><strong>${name}</strong><br><small class="text-muted">${code}</small></td>
           <td>${p.total_shares}</td>
           <td>${p.avg_cost.toFixed(2)}</td>
           <td class="${priceClass(p.change_pct)}">${p.price ? p.price.toFixed(2) : '--'}</td>
@@ -295,7 +367,7 @@ async function loadHoldingsTable() {
 // ── 交易计划（合并 待持仓 + 条件单） ─────────────────────
 async function loadTradingPlans() {
   try {
-    const data = await apiGet('/api/trading-plans');
+    const data = await portfolioGet(withAccount('/api/trading-plans'));
     const plans = data.plans || [];
 
     const countEl = document.getElementById('planCount');
@@ -303,7 +375,7 @@ async function loadTradingPlans() {
     if (countEl) countEl.textContent = plans.length;
 
     if (plans.length === 0) {
-      listEl.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>暂无交易计划</p><button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-top:8px;">+ 新建计划</button></div>';
+      listEl.innerHTML = '<div class="empty-state"><div class="icon ui-glyph">PL</div><p>暂无交易计划</p><button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-top:8px;">+ 新建计划</button></div>';
       return;
     }
 
@@ -315,6 +387,9 @@ async function loadTradingPlans() {
       const statusMap = {pending:'待触发', triggered:'已触发', filled:'已建仓', cancelled:'已取消'};
       const statusText = statusMap[p.status] || p.status;
       const statusClass = p.status === 'pending' ? 'up' : p.status === 'filled' ? 'down' : '';
+      const name = esc(p.name || p.code);
+      const code = esc(p.code);
+      const reason = esc(p.reason);
 
       const distance = p.distance_pct != null ? (p.distance_pct >= 0 ? '+' : '') + p.distance_pct.toFixed(2) + '%' : '--';
       const planCost = p.plan_total_cost ? formatMoney(p.plan_total_cost) : '--';
@@ -324,8 +399,8 @@ async function loadTradingPlans() {
           <div class="order-header" style="display:flex;align-items:center;gap:8px;">
             <span class="order-status ${statusClass}" style="font-size:0.75rem;padding:2px 6px;border-radius:4px;">${statusText}</span>
             <span class="${dirClass}" style="font-size:0.75rem;font-weight:600;">${dirText}</span>
-            <span class="order-stock" style="font-weight:600;">${p.name || p.code}</span>
-            <span class="order-code" style="color:var(--text-secondary);font-size:0.8rem;">${p.code}</span>
+            <span class="order-stock" style="font-weight:600;">${name}</span>
+            <span class="order-code" style="color:var(--text-secondary);font-size:0.8rem;">${code}</span>
             <span style="margin-left:auto;font-size:0.75rem;color:var(--text-secondary);">${typeText}</span>
           </div>
           <div class="order-body" style="display:flex;gap:16px;align-items:center;padding:8px 0;font-size:0.85rem;">
@@ -334,9 +409,9 @@ async function loadTradingPlans() {
             ${p.target_price ? `<span>距离: <strong class="${p.distance_pct != null && p.distance_pct <= 0 ? 'up' : 'down'}">${distance}</strong></span>` : ''}
             <span>计划: ${p.plan_shares || '--'}股</span>
             <span>金额: ${planCost}</span>
-            ${p.reason ? `<span style="color:var(--text-secondary);font-style:italic;">${p.reason}</span>` : ''}
+            ${p.reason ? `<span style="color:var(--text-secondary);font-style:italic;">${reason}</span>` : ''}
             <span style="margin-left:auto;">
-              <button class="btn btn-sm btn-ghost" onclick="deletePlan(${p.id})" style="font-size:0.75rem;">🗑</button>
+              <button class="btn btn-sm btn-ghost" onclick="deletePlan(${p.id})" style="font-size:0.75rem;" title="删除计划">删除</button>
             </span>
           </div>
         </div>
@@ -383,7 +458,7 @@ async function submitPlan(e) {
   }
 
   try {
-    await apiPost('/api/trading-plans', {
+    await portfolioPost('/api/trading-plans', {
       code, name, direction, plan_type, target_price, condition_type, plan_shares, reason, expires_at
     });
     closePlanModal();
@@ -411,7 +486,7 @@ let _allTrades = []; // cache for undo
 
 async function loadTrades() {
   try {
-    const data = await apiGet('/api/trades');
+    const data = await portfolioGet(withAccount('/api/trades'));
     const trades = data.trades || [];
     _allTrades = trades;
     const tbody = document.getElementById('tradesBody');
@@ -425,16 +500,18 @@ async function loadTrades() {
       const dirClass = t.direction === 'buy' ? 'up' : 'down';
       const dirText = t.direction === 'buy' ? '买入' : '卖出';
       const totalCost = t.commission + t.stamp_tax + t.transfer_fee;
+      const name = esc(t.name || t.code);
+      const tradeTime = esc(t.trade_time || '--');
       return `
         <tr>
-          <td>${t.trade_time || '--'}</td>
-          <td><strong>${t.name || t.code}</strong></td>
+          <td>${tradeTime}</td>
+          <td><strong>${name}</strong></td>
           <td class="${dirClass}">${dirText}</td>
           <td>${t.price.toFixed(2)}</td>
           <td>${t.shares}</td>
           <td>¥${t.amount.toLocaleString()}</td>
           <td>${totalCost > 0 ? '¥' + totalCost.toFixed(2) : '--'}</td>
-          <td><button class="btn btn-sm btn-ghost" onclick="deleteTrade(${t.id})" title="删除此笔">🗑</button></td>
+          <td><button class="btn btn-sm btn-ghost" onclick="deleteTrade(${t.id})" title="删除此笔">删除</button></td>
         </tr>
       `;
     }).join('');
@@ -446,7 +523,7 @@ async function loadTrades() {
 // ── 交易管理 ──────────────────────────────────────────────
 async function loadTradeStats(code) {
   try {
-    const data = await apiGet(`/api/trades/stats/${code}`);
+    const data = await portfolioGet(`/api/trades/stats/${code}`);
     document.getElementById('lowestBuyPrice').textContent = data.lowest_buy_price ? data.lowest_buy_price.toFixed(2) : '--';
     document.getElementById('latestBuyPrice').textContent = data.latest_buy_price ? data.latest_buy_price.toFixed(2) : '--';
   } catch (e) {
@@ -528,14 +605,15 @@ async function refreshAll() {
     loadOverview(),
     loadPortfolio(),
     loadHoldingsTable(),
-    loadTrades()
+    loadTrades(),
+    loadAccountDashboard()
   ]);
 }
 
 // ── 盈亏日历 ──────────────────────────────────────────────
 async function loadCalendar() {
   try {
-    const data = await apiGet(`/api/pnl/calendar?year=${calendarYear}&month=${calendarMonth}`);
+    const data = await portfolioGet(`/api/pnl/calendar?year=${calendarYear}&month=${calendarMonth}`);
     
     // 更新标题
     document.getElementById('calendarTitle').textContent = `${calendarYear}年${calendarMonth}月`;
@@ -658,7 +736,7 @@ function showDayDetail(day) {
 
 async function loadDayDetailData(dateStr, popup) {
   try {
-    const data = await apiGet(`/api/pnl/calendar/day/${dateStr}`);
+    const data = await portfolioGet(`/api/pnl/calendar/day/${dateStr}`);
     const dailyPnl = data.daily_pnl;
     const stockPnl = data.stock_pnl || [];
     const trades = data.trades || [];
@@ -670,7 +748,7 @@ async function loadDayDetailData(dateStr, popup) {
       <div class="day-detail-header">
         <strong>${dateStr}</strong>
         <span class="${priceClass(totalPnl)}" style="font-family:var(--font-mono);font-weight:700;">${totalPnlText}</span>
-        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('dayDetailPopup').remove()" style="margin-left:auto;">✕</button>
+        <button class="btn btn-sm btn-ghost" onclick="document.getElementById('dayDetailPopup').remove()" style="margin-left:auto;">关闭</button>
       </div>
     `;
 
@@ -680,7 +758,7 @@ async function loadDayDetailData(dateStr, popup) {
         const amt = s.amount || 0;
         const cls = priceClass(amt);
         html += `<div class="day-detail-row">
-          <span>${s.name || s.code}</span>
+          <span>${esc(s.name || s.code)}</span>
           <span class="${cls}" style="font-family:var(--font-mono);">${amt >= 0 ? '+' : ''}${amt.toFixed(2)}</span>
         </div>`;
       });
@@ -694,7 +772,7 @@ async function loadDayDetailData(dateStr, popup) {
         const cls = t.direction === 'buy' ? 'up' : 'down';
         html += `<div class="day-detail-row" style="font-size:0.8rem;">
           <span class="${cls}">${dir}</span>
-          <span>${t.name || t.code}</span>
+          <span>${esc(t.name || t.code)}</span>
           <span>${t.shares}股 × ${t.price.toFixed(2)}</span>
         </div>`;
       });
@@ -708,7 +786,7 @@ async function loadDayDetailData(dateStr, popup) {
     popup.innerHTML = html;
   } catch (e) {
     console.error('loadDayDetailData error:', e);
-    popup.innerHTML = '<div class="day-detail-header"><strong>' + dateStr + '</strong><button class="btn btn-sm btn-ghost" onclick="document.getElementById(\'dayDetailPopup\').remove()">✕</button></div><div style="text-align:center;color:var(--text-muted);padding:12px;">加载失败</div>';
+    popup.innerHTML = '<div class="day-detail-header"><strong>' + esc(dateStr) + '</strong><button class="btn btn-sm btn-ghost" onclick="document.getElementById(\'dayDetailPopup\').remove()">关闭</button></div><div style="text-align:center;color:var(--text-muted);padding:12px;">加载失败</div>';
   }
 }
 
@@ -755,7 +833,7 @@ async function submitTrade(e) {
   }
   
   try {
-    const result = await apiPost('/api/trades', {
+    const result = await portfolioPost('/api/trades', {
       code, name, direction, price, shares,
       commission, stamp_tax: stampTax, transfer_fee: transferFee
     });

@@ -2,7 +2,7 @@
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from scheduler.signal_tracker import update_prices
+from scheduler.signal_tracker import get_open_tracking_codes, update_prices
 from data.helpers import tencent_quote_batch
 
 logger = logging.getLogger(__name__)
@@ -13,16 +13,11 @@ scheduler = AsyncIOScheduler()
 async def update_signal_tracking_prices():
     """每日15:30更新信号跟踪价格"""
     try:
-        from scheduler.signal_tracker import _get_db
-        db = _get_db()
-        rows = db.execute("SELECT DISTINCT code FROM signal_tracking WHERE status='open'").fetchall()
-        db.close()
-
-        if not rows:
+        codes = get_open_tracking_codes()
+        if not codes:
             logger.info("无持仓中信号，跳过更新")
             return
 
-        codes = [r["code"] for r in rows]
         logger.info("更新信号跟踪价格: %s", codes)
 
         # 批量获取行情

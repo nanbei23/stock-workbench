@@ -1,0 +1,199 @@
+"""AI report and anomaly presentation helpers."""
+
+import json
+import logging
+from datetime import datetime
+
+from fastapi import HTTPException
+
+from models.database import get_db
+from repositories import ai_report_repository as repo
+
+logger = logging.getLogger(__name__)
+
+
+def _loads(value):
+    if not value:
+        return None
+    try:
+        return json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return None
+
+
+def _name_from_raw(raw_state):
+    raw = _loads(raw_state)
+    return raw.get("name", "") if isinstance(raw, dict) else ""
+
+
+async def list_reports(code=None, signal=None, limit=20):
+    db = await get_db()
+    try:
+        rows = await repo.list_reports(db, code=code, signal=signal, limit=limit)
+        names = await repo.watchlist_name_map(db)
+    finally:
+        await db.close()
+
+    reports = []
+    for row in rows:
+        row["name"] = _name_from_raw(row.get("raw_state")) or names.get(row.get("code", ""), "")
+        row.pop("raw_state", None)
+        reports.append(row)
+    return {"count": len(reports), "reports": reports}
+
+
+async def get_report(report_id: int):
+    db = await get_db()
+    try:
+        report = await repo.get_report(db, report_id)
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+
+        if not report.get("name"):
+            report["name"] = _name_from_raw(report.get("raw_state"))
+        if not report.get("name"):
+            report["name"] = await repo.get_watchlist_name(db, report.get("code", ""))
+    finally:
+        await db.close()
+
+    raw_state = _loads(report.get("raw_state"))
+    if raw_state is not None:
+        report["result"] = raw_state
+
+    for key in ("risk_debate", "investment_debate"):
+        parsed = _loads(report.get(key))
+        if parsed is not None:
+            report[key] = parsed
+
+    fact_check = _loads(report.get("fact_check"))
+    if fact_check is not None:
+        report["_fact_check"] = fact_check
+
+    bystander = _loads(report.get("bystander_verify"))
+    if bystander is not None:
+        report["_bystander_verify"] = bystander
+
+    return report
+
+
+def _format_anomaly(row):
+    return {
+        "code": row["code"],
+        "name": row.get("name") or row["code"],
+        "anomaly_type": row["anomaly_type"],
+        "message": row.get("description") or "",
+        "level": row.get("severity") or "info",
+        "time": row["created_at"],
+        "change_pct": 0,
+        "price": 0,
+    }
+
+
+def _memory_anomalies(memory_log, limit: int, code: str | None):
+    items = memory_log[-limit:]
+    if code:
+        code6 = code[:6]
+        items = [item for item in items if item.get("code", "").startswith(code6)]
+    return {"count": len(items), "anomalies": items}
+
+
+async def get_anomalies(limit: int, code: str | None, memory_log):
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        db = await get_db()
+        try:
+            rows = await repo.list_anomalies(db, today=today, limit=limit, code=code)
+        finally:
+            await db.close()
+        anomalies = [_format_anomaly(row) for row in rows]
+        if anomalies:
+            return {"count": len(anomalies), "anomalies": anomalies}
+    except Exception as e:
+        logger.warning("get_anomalies DB fallback: %s", e)
+    return _memory_anomalies(memory_log, limit, code)
+
+
+async def clear_anomalies_for_date(day: str | None = None) -> int:
+    target_day = day or datetime.now().strftime("%Y-%m-%d")
+    db = await get_db()
+    try:
+        return await repo.delete_anomalies_for_date(db, target_day)
+    finally:
+        await db.close()
+
+
+def _fact_accuracy(fact_check) -> float | None:
+    if not isinstance(fact_check, dict):
+        return None
+    value = fact_check.get("overall_accuracy", fact_check.get("accuracy"))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hallucination_count(fact_check, bystander) -> int:
+    total = 0
+    if isinstance(fact_check, dict):
+        total += int(fact_check.get("total_hallucinations") or fact_check.get("mismatched") or 0)
+        for stage in (fact_check.get("stages") or {}).values():
+            if isinstance(stage, dict):
+                total += int(stage.get("mismatched") or 0)
+    if isinstance(bystander, dict):
+        total += len(bystander.get("hallucinations") or [])
+    return total
+
+
+async def get_quality_summary(limit: int = 50):
+    db = await get_db()
+    try:
+        rows = await repo.list_quality_reports(db, limit=limit)
+        tracking_rows = await repo.signal_tracking_summary(db)
+        names = await repo.watchlist_name_map(db)
+    finally:
+        await db.close()
+
+    reports = []
+    accuracies = []
+    hallucinations = 0
+    verified = 0
+    for row in rows:
+        raw_state = _loads(row.get("raw_state")) or {}
+        fact_check = _loads(row.get("fact_check"))
+        bystander = _loads(row.get("bystander_verify"))
+        accuracy = _fact_accuracy(fact_check)
+        if accuracy is not None:
+            accuracies.append(accuracy)
+            verified += 1
+        h_count = _hallucination_count(fact_check, bystander)
+        hallucinations += h_count
+        reports.append({
+            "id": row["id"],
+            "code": row["code"],
+            "name": _name_from_raw(row.get("raw_state")) or names.get(row.get("code", ""), ""),
+            "signal": row.get("signal") or raw_state.get("signal") or "HOLD",
+            "confidence": row.get("confidence") or raw_state.get("confidence"),
+            "fact_accuracy": accuracy,
+            "hallucinations": h_count,
+            "bystander_score": bystander.get("overall_score") if isinstance(bystander, dict) else None,
+            "created_at": row.get("created_at"),
+        })
+
+    closed = [row for row in tracking_rows if row.get("pnl_pct") is not None]
+    avg_pnl = sum(float(row.get("pnl_pct") or 0) for row in closed) / len(closed) if closed else 0
+    avg_excess = sum(float(row.get("excess_return") or 0) for row in closed) / len(closed) if closed else 0
+    wins = sum(1 for row in closed if float(row.get("pnl_pct") or 0) > 0)
+    return {
+        "report_count": len(rows),
+        "verified_count": verified,
+        "fact_check_pass_rate": round(sum(accuracies) / len(accuracies), 2) if accuracies else 0,
+        "hallucination_count": hallucinations,
+        "signal_after_return": {
+            "tracked": len(tracking_rows),
+            "closed": len(closed),
+            "win_rate": round(wins / len(closed) * 100, 2) if closed else 0,
+            "avg_pnl_pct": round(avg_pnl, 2),
+            "avg_excess_return": round(avg_excess, 2),
+        },
+        "reports": reports,
+    }

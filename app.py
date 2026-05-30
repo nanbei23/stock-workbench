@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """启动时初始化数据库"""
     await init_db()
+    from tasks import mark_interrupted_tasks
+    await mark_interrupted_tasks()
     sched = setup_scheduler()
     print("✅ 数据库初始化完成")
     print("✅ 定时任务已启动")
@@ -50,6 +52,10 @@ async def page_portfolio(request: Request):
 async def page_ai(request: Request):
     return templates.TemplateResponse(request=request, name="ai.html")
 
+@app.get("/hermes", response_class=HTMLResponse)
+async def page_hermes(request: Request):
+    return templates.TemplateResponse(request=request, name="hermes.html")
+
 @app.get("/settings", response_class=HTMLResponse)
 async def page_settings(request: Request):
     return templates.TemplateResponse(request=request, name="settings.html")
@@ -69,6 +75,8 @@ from api.layer_api import router as layer_router
 from api.strategy_api import router as strategy_router
 from api.pdf_export import router as pdf_router
 from api.signal_api import router as signal_router
+from api.enhancement_api import router as enhancement_router
+from api.hermes_api import router as hermes_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -79,6 +87,8 @@ app.include_router(layer_router, prefix="/api")
 app.include_router(strategy_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
 app.include_router(signal_router, prefix="/api")
+app.include_router(enhancement_router, prefix="/api")
+app.include_router(hermes_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")
@@ -105,6 +115,11 @@ async def websocket_quotes(ws: WebSocket):
                     await ws.send_json({"type": "quotes", "data": {}})
 
                 await asyncio.sleep(5)
+            except (WebSocketDisconnect, RuntimeError):
+                logger.info("WebSocket quote client disconnected")
+                break
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning("WS quote push error: %s", e)
                 await asyncio.sleep(5)

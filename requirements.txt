@@ -3,10 +3,14 @@ uvicorn[standard]==0.30.0
 jinja2==3.1.4
 python-multipart==0.0.9
 aiosqlite==0.20.0
-httpx==0.27.0
-mootdx==0.9.0
-stockstats==0.6.2
-pandas>=2.0.0
+aiohttp==3.13.5
+httpx==0.25.2
+requests==2.34.2
+langchain-core==1.4.0
+mootdx==0.11.7
+stockstats==0.6.8
+pandas==2.3.3
 apscheduler==3.10.4
-tradingagents-astock
+streamlit==1.45.0
+tradingagents-astock @ git+https://github.com/simonlin1212/TradingAgents-astock.git@2ba585a48fcf0f139822c915aa72a2507dedf848
 fpdf2==2.8.3

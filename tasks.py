@@ -10,6 +10,9 @@ from collections import deque
 from datetime import datetime
 from typing import Optional
 
+from config import DB_PATH
+from repositories import analysis_task_repository as task_repository
+
 logger = logging.getLogger(__name__)
 
 # ── Queue configuration ──────────────────────────────────────
@@ -77,11 +80,49 @@ class AnalysisTask:
             "selected_analysts": self.selected_analysts,
             "debate_rounds": self.debate_rounds,
             "risk_rounds": self.risk_rounds,
+            "token_stats": self.token_stats,
         }
 
 
 # Global task registry (process-scoped)
 _tasks: dict[str, AnalysisTask] = {}
+
+
+async def persist_task(task: AnalysisTask, queue_status: Optional[str] = None):
+    """Persist the observable task snapshot without blocking the event loop."""
+    try:
+        await asyncio.to_thread(task_repository.persist_task_snapshot, task, queue_status, DB_PATH)
+    except Exception as e:
+        logger.warning("analysis task persistence failed: %s", e, exc_info=True)
+
+
+async def update_persisted_task_status(
+    task_id: str,
+    status: str,
+    error: Optional[str] = None,
+    queue_status: Optional[str] = None,
+):
+    """Update status for tasks that may no longer have a live in-memory object."""
+    try:
+        await asyncio.to_thread(
+            task_repository.update_task_status,
+            task_id,
+            status,
+            error,
+            DB_PATH,
+            None,
+            queue_status,
+        )
+    except Exception as e:
+        logger.warning("analysis task status persistence failed: %s", e)
+
+
+async def mark_interrupted_tasks():
+    """Mark unfinished persisted tasks as interrupted after process restart."""
+    try:
+        await asyncio.to_thread(task_repository.mark_interrupted, DB_PATH)
+    except Exception as e:
+        logger.warning("mark interrupted analysis tasks failed: %s", e)
 
 
 async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = 900):
@@ -103,16 +144,36 @@ async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = 900):
         if task_id in _tasks:
             _tasks[task_id].status = "failed"
             _tasks[task_id].error = "分析队列已满，请稍后再试"
+            _tasks[task_id].completed_at = datetime.now().isoformat()
+            await persist_task(_tasks[task_id], "queue_full")
+        else:
+            await update_persisted_task_status(task_id, "failed", "分析队列已满，请稍后再试")
+        _tasks_status[task_id] = {"status": "failed", "cancel": asyncio.Event()}
         return
 
     _queue.append(task_id)
     _tasks_status[task_id] = {"status": "queued", "cancel": asyncio.Event()}
+    if task_id in _tasks:
+        await persist_task(_tasks[task_id], "queued")
 
     try:
         async with _semaphore:
+            if _tasks_status[task_id]["cancel"].is_set():
+                _tasks_status[task_id]["status"] = "cancelled"
+                if task_id in _tasks:
+                    _tasks[task_id].status = "failed"
+                    _tasks[task_id].error = "分析已取消"
+                    _tasks[task_id].completed_at = datetime.now().isoformat()
+                    await persist_task(_tasks[task_id], "cancelled")
+                else:
+                    await update_persisted_task_status(task_id, "cancelled", "分析已取消", "cancelled")
+                return
             if task_id in _queue:
                 _queue.remove(task_id)
             _tasks_status[task_id]["status"] = "running"
+            if task_id in _tasks:
+                _tasks[task_id].status = "running"
+                await persist_task(_tasks[task_id], "running")
 
             # Check cancel flag
             if _tasks_status[task_id]["cancel"].is_set():
@@ -120,6 +181,10 @@ async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = 900):
                 if task_id in _tasks:
                     _tasks[task_id].status = "failed"
                     _tasks[task_id].error = "分析已取消"
+                    _tasks[task_id].completed_at = datetime.now().isoformat()
+                    await persist_task(_tasks[task_id], "cancelled")
+                else:
+                    await update_persisted_task_status(task_id, "cancelled", "分析已取消", "cancelled")
                 return
 
             # Run with timeout
@@ -130,22 +195,40 @@ async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = 900):
         if task_id in _tasks:
             _tasks[task_id].status = "failed"
             _tasks[task_id].error = "分析超时（15分钟）"
+            _tasks[task_id].completed_at = datetime.now().isoformat()
+            await persist_task(_tasks[task_id], "timeout")
+        else:
+            await update_persisted_task_status(task_id, "timeout", "分析超时（15分钟）")
         logger.error("分析超时: %s", task_id)
     except asyncio.CancelledError:
         _tasks_status[task_id]["status"] = "cancelled"
         if task_id in _tasks:
             _tasks[task_id].status = "failed"
             _tasks[task_id].error = "分析已取消"
+            _tasks[task_id].completed_at = datetime.now().isoformat()
+            await persist_task(_tasks[task_id], "cancelled")
+        else:
+            await update_persisted_task_status(task_id, "cancelled", "分析已取消")
     except Exception as e:
         _tasks_status[task_id]["status"] = "failed"
         if task_id in _tasks:
             _tasks[task_id].status = "failed"
             _tasks[task_id].error = str(e)
             _tasks[task_id].completed_at = datetime.now().isoformat()
+            await persist_task(_tasks[task_id], "failed")
+        else:
+            await update_persisted_task_status(task_id, "failed", str(e))
         logger.error("run_with_limits 失败: %s", e, exc_info=True)
     else:
         # 成功完成 — 更新状态
         _tasks_status[task_id]["status"] = "completed"
+        if task_id in _tasks:
+            if _tasks[task_id].status not in ("completed", "failed"):
+                _tasks[task_id].status = "completed"
+            _tasks[task_id].completed_at = _tasks[task_id].completed_at or datetime.now().isoformat()
+            await persist_task(_tasks[task_id], "completed")
+        else:
+            await update_persisted_task_status(task_id, "completed")
     finally:
         if task_id in _queue:
             try:

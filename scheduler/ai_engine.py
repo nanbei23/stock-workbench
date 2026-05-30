@@ -11,8 +11,9 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+
+from config import DB_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,7 @@ logger = logging.getLogger(__name__)
 
 def _get_db():
     """获取数据库连接"""
-    db_path = Path(__file__).parent.parent / "data" / "workbench.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -59,9 +59,20 @@ def apply_llm_config_to_ta_config(config: dict) -> dict:
     config["max_debate_rounds"] = int(cfg.get("debate_rounds", "1"))
     config["max_risk_discuss_rounds"] = int(cfg.get("risk_rounds", "1"))
 
-    # 模型模式：覆盖deep/quick think模型
+    # 用户在设置页从 Base URL 模型列表中选定模型后，应优先使用显式选择。
+    # 模型模式只作为旧配置或空配置下的兜底默认值。
     model_mode = cfg.get("model_mode", "balanced")
-    if model_mode == "economy":
+    selected_deep = cfg.get("deep_think_model", "")
+    selected_quick = cfg.get("quick_think_model", "")
+    try:
+        model_options = json.loads(cfg.get("llm_model_options", "[]") or "[]")
+    except json.JSONDecodeError:
+        model_options = []
+    has_base_url_models = bool(model_options or cfg.get("custom_endpoint", ""))
+    if has_base_url_models and (selected_deep or selected_quick):
+        config["deep_think_llm"] = selected_deep or selected_quick
+        config["quick_think_llm"] = selected_quick or selected_deep
+    elif model_mode == "economy":
         # 经济模式：全链路Flash
         config["deep_think_llm"] = "deepseek-v4-flash"
         config["quick_think_llm"] = "deepseek-v4-flash"
@@ -71,8 +82,8 @@ def apply_llm_config_to_ta_config(config: dict) -> dict:
         config["quick_think_llm"] = "deepseek-v4-pro"
     else:
         # 均衡模式（默认）：Flash分析 + Pro裁决
-        config["deep_think_llm"] = cfg.get("deep_think_model", "deepseek-v4-pro")
-        config["quick_think_llm"] = cfg.get("quick_think_model", "deepseek-v4-flash")
+        config["deep_think_llm"] = cfg.get("deep_think_model") or "deepseek-v4-pro"
+        config["quick_think_llm"] = cfg.get("quick_think_model") or "deepseek-v4-flash"
 
     # Inject API key and custom endpoint into environment
     import os

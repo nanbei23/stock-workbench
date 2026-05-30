@@ -1,0 +1,103 @@
+"""AI report and anomaly read queries."""
+
+
+async def list_reports(db, code=None, signal=None, limit=20):
+    query = """
+        SELECT id, task_id, code, signal, confidence, risk_score,
+               duration_seconds, created_at, depth, model_mode, raw_state
+        FROM analysis_reports
+        WHERE 1=1
+    """
+    params = []
+    if code:
+        query += " AND code = ?"
+        params.append(code)
+    if signal:
+        query += " AND signal = ?"
+        params.append(signal)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = await db.execute_fetchall(query, params)
+    return [dict(row) for row in rows]
+
+
+async def list_quality_reports(db, limit=50):
+    rows = await db.execute_fetchall(
+        """
+        SELECT id, task_id, code, signal, confidence, risk_score, raw_state,
+               fact_check, bystander_verify, created_at
+        FROM analysis_reports
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (max(1, min(limit, 200)),),
+    )
+    return [dict(row) for row in rows]
+
+
+async def signal_tracking_summary(db):
+    rows = await db.execute_fetchall(
+        """
+        SELECT signal, status, pnl_pct, excess_return
+        FROM signal_tracking
+        WHERE pnl_pct IS NOT NULL OR status = 'open'
+        """
+    )
+    return [dict(row) for row in rows]
+
+
+async def watchlist_name_map(db):
+    try:
+        rows = await db.execute_fetchall("SELECT code, name FROM watchlist")
+    except Exception:
+        return {}
+    return {row["code"]: row["name"] for row in rows}
+
+
+async def get_report(db, report_id: int):
+    row = await (
+        await db.execute("SELECT * FROM analysis_reports WHERE id = ?", (report_id,))
+    ).fetchone()
+    return dict(row) if row else None
+
+
+async def get_watchlist_name(db, code: str):
+    try:
+        row = await (
+            await db.execute("SELECT name FROM watchlist WHERE code = ?", (code,))
+        ).fetchone()
+    except Exception:
+        return ""
+    return row["name"] if row else ""
+
+
+async def list_anomalies(db, today: str, limit: int, code: str | None = None):
+    if code:
+        rows = await db.execute_fetchall(
+            """
+            SELECT code, name, anomaly_type, description, severity, created_at
+            FROM anomaly_logs
+            WHERE date(created_at, 'localtime') = ? AND code LIKE ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (today, f"%{code[:6]}%", limit),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            """
+            SELECT code, name, anomaly_type, description, severity, created_at
+            FROM anomaly_logs
+            WHERE date(created_at, 'localtime') = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (today, limit),
+        )
+    return [dict(row) for row in rows]
+
+
+async def delete_anomalies_for_date(db, day: str) -> int:
+    cursor = await db.execute("DELETE FROM anomaly_logs WHERE date(created_at) = ?", (day,))
+    await db.commit()
+    return cursor.rowcount

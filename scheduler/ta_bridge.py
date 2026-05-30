@@ -12,13 +12,15 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, date
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+import httpx
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 from scheduler.ai_engine import (
     _get_db,
+    get_llm_config,
     apply_llm_config_to_ta_config,
     strip_think,
     extract_signal,
@@ -26,12 +28,11 @@ from scheduler.ai_engine import (
     extract_confidence,
     extract_risk_score,
     parse_risk_debate,
-    get_stock_name,
 )
 from scheduler.gbrain_client import get_context, write_analysis_report
 from scheduler.data_snapshot import DataSnapshotCallback
 from scheduler.fact_checker import check_all_stages
-from tasks import AnalysisTask, _tasks, _tasks_status, MAX_CONCURRENT, MAX_QUEUE
+from tasks import AnalysisTask, _tasks
 
 
 class TokenTrackerCallback(BaseCallbackHandler):
@@ -505,7 +506,8 @@ def _extract_claims(text: str) -> list:
 
 def _run_bystander_verify(db, report_id, code, _unused):
     """报告生成后自动运行旁观者复核，结果存入DB"""
-    import subprocess, os, yaml
+    import os
+    import yaml
     row = db.execute("SELECT * FROM analysis_reports WHERE id=?", (report_id,)).fetchone()
     if not row: return
 
@@ -609,25 +611,31 @@ JSON输出：
 {{"hallucinations": [{{"claim": "具体问题", "issue": "说明", "severity": "high/medium/low"}}], "overall_score": 0-100, "summary": "评估结论"}}"""
 
     try:
-        result = subprocess.run([
-            "curl", "-s", "-X", "POST", api_url,
-            "-H", f"Authorization: Bearer {api_key}",
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps({"model": verify_model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 2000, "temperature": 0.3}),
-            "--max-time", "60",
-        ], capture_output=True, text=True, timeout=65)
-        if result.stdout:
-            data = json.loads(result.stdout)
-            if "choices" in data:
-                content = data["choices"][0]["message"]["content"]
-                # 提取JSON
-                import re as _re
-                m = _re.search(r'\{[\s\S]*\}', content)
-                verify_result = json.loads(m.group()) if m else {"summary": content, "overall_score": 50}
-                db.execute("UPDATE analysis_reports SET bystander_verify=? WHERE id=?",
-                           (json.dumps(verify_result, ensure_ascii=False), report_id))
-                db.commit()
-                logger.info("报告复核已存入: id=%d score=%s", report_id, verify_result.get("overall_score"))
+        resp = httpx.post(
+            api_url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": verify_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2000,
+                "temperature": 0.3,
+            },
+            timeout=60,
+        )
+        if resp.status_code >= 400 or not resp.text.strip():
+            logger.warning("报告复核请求失败: status=%s body=%s", resp.status_code, resp.text[:200])
+            return
+        data = resp.json()
+        if "choices" in data:
+            content = data["choices"][0]["message"]["content"]
+            # 提取JSON
+            import re as _re
+            m = _re.search(r'\{[\s\S]*\}', content)
+            verify_result = json.loads(m.group()) if m else {"summary": content, "overall_score": 50}
+            db.execute("UPDATE analysis_reports SET bystander_verify=? WHERE id=?",
+                       (json.dumps(verify_result, ensure_ascii=False), report_id))
+            db.commit()
+            logger.info("报告复核已存入: id=%d score=%s", report_id, verify_result.get("overall_score"))
     except Exception as e:
         logger.warning("报告复核调用失败: %s", e)
 
@@ -667,13 +675,9 @@ def _save_report_to_db(task: AnalysisTask):
         # 模型模式
         model_mode = "balanced"
         try:
-            from api.settings_api import _conn, DEFAULTS
-            sdb = _conn()
-            row = sdb.execute("SELECT value FROM settings WHERE key='llm_provider'").fetchone()
-            sdb.close()
-            model_mode = (row[0] if row else DEFAULTS.get("llm_provider", "balanced"))
-        except Exception:
-            pass
+            model_mode = get_llm_config().get("model_mode") or "balanced"
+        except Exception as e:
+            logger.debug("读取模型模式失败，使用默认值: %s", e)
 
         depth = getattr(task, 'depth', 'standard') or 'standard'
 
@@ -745,38 +749,6 @@ async def trigger_l2_for_stock(code: str, trade_date: str = None) -> Optional[st
 
     Returns task_id if queued, None if skipped (queue full or already running).
     """
-    if trade_date is None:
-        trade_date = date.today().isoformat()
+    from services.ai_analysis_service import trigger_l2_for_stock as trigger
 
-    # Skip if already running / queued for this code
-    for t in _tasks.values():
-        if t.code == code and t.status in ("running", "pending"):
-            logger.info("L2 already queued/running for %s, skipping", code)
-            return t.task_id
-
-    # Check queue capacity
-    running = sum(1 for v in _tasks_status.values() if v.get("status") == "running")
-    queued = sum(1 for v in _tasks_status.values() if v.get("status") == "queued")
-    if running >= MAX_CONCURRENT and queued >= MAX_QUEUE:
-        logger.warning("L2 queue full, skipping %s", code)
-        return None
-
-    task_id = str(uuid.uuid4())[:8]
-    name = get_stock_name(code)
-    task = AnalysisTask(
-        task_id=task_id,
-        code=code,
-        name=name,
-        status="pending",
-        started_at=datetime.now().isoformat(),
-    )
-    _tasks[task_id] = task
-
-    from tasks import run_with_limits
-
-    async def _wrapper(tid, c, td):
-        await run_with_snapshot(tid, c, td)
-
-    asyncio.create_task(run_with_limits(task_id, _wrapper, code, trade_date))
-    logger.info("🔄 Auto-triggered L2: %s(%s) task=%s", name, code, task_id)
-    return task_id
+    return await trigger(code, trade_date)

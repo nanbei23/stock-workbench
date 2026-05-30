@@ -3,11 +3,10 @@ import asyncio
 import datetime
 import logging
 import sqlite3
-from pathlib import Path
+
+from config import DB_PATH
 
 logger = logging.getLogger(__name__)
-
-DB_PATH = Path(__file__).parent.parent / "data" / "workbench.db"
 
 # 异动阈值
 ANOMALY_THRESHOLDS = {
@@ -272,7 +271,7 @@ async def _trigger_l2_for_severe_anomalies(anomalies: list):
     """Trigger L2 for stocks with severe anomalies (|change%| >= 7).
     Uses fire-and-forget create_task so the anomaly checker is never blocked.
     """
-    from api.ai_api import trigger_l2_for_stock
+    from services.ai_analysis_service import trigger_l2_for_stock
     import datetime
 
     trade_date = datetime.datetime.now().strftime('%Y-%m-%d')

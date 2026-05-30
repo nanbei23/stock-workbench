@@ -8,6 +8,45 @@ let currentChartType = 'candlestick';
 let currentPrevClose = null;  // 昨收价，用于分时图涨跌色参考
 let dragSrcEl = null;   // 当前拖拽的卡片
 
+const STOCK_SIGNAL_LABEL = {
+  'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
+  'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出'
+};
+
+function panelState(message, iconCode = '') {
+  const icon = iconCode ? `<div class="icon ui-glyph" data-icon="${escapeAttr(iconCode)}"></div>` : '';
+  return `<div class="empty-state" style="padding:24px;">${icon}<p>${escapeHtml(message)}</p></div>`;
+}
+
+function loadingState(message = '加载中...') {
+  return panelState(message);
+}
+
+function stockMoveBadge(changePct) {
+  if (changePct == null) return '';
+  if (changePct >= 5) return '<span class="stock-alert-token up">强势</span>';
+  if (changePct <= -5) return '<span class="stock-alert-token down">风险</span>';
+  return '';
+}
+
+function signalBadge(signal) {
+  if (!signal) return '';
+  const label = STOCK_SIGNAL_LABEL[signal.signal] || signal.signal;
+  const sigCls = signal.signal.includes('BUY') ? 'signal-buy' : signal.signal.includes('SELL') ? 'signal-sell' : 'signal-hold';
+  return `<div class="sc-signal ${sigCls}">${escapeHtml(label)}</div>`;
+}
+
+function stockCardMetrics(s) {
+  const cls = priceClass(s.change_pct);
+  const pctSign = s.change_pct != null ? (s.change_pct >= 0 ? '+' : '') : '';
+  const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
+  const dailyPnl = s.daily_pnl ? formatPnl(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(2) + '元') : '--');
+  const dailyPnlCls = s.daily_pnl ? priceClass(s.daily_pnl) : cls;
+  const holdPnl = s.unrealized_pnl ? formatPnl(s.unrealized_pnl) : '--';
+  const holdPnlCls = s.unrealized_pnl ? priceClass(s.unrealized_pnl) : '';
+  return { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls };
+}
+
 /* ============================================================
    0a. K线周期Tab
    ============================================================ */
@@ -38,7 +77,7 @@ async function reloadKline() {
       // 分时图：显示数据日期
       if (dateEl && isIntradayPeriod(currentKlinePeriod) && klines[0]?.date) {
         const d = klines[0].date.split(' ')[0];
-        dateEl.textContent = `📅 ${d}`;
+        dateEl.textContent = d;
       }
       let chartOptions = {};
       try {
@@ -59,11 +98,11 @@ async function reloadKline() {
       } catch (_) {}
       renderKline('klineChart', klines, { ...chartOptions, period: currentKlinePeriod, chartType: currentChartType, refPrice: currentPrevClose });
     } else {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无K线数据</p></div>';
+      container.innerHTML = panelState('暂无K线数据');
     }
   } catch (e) {
     console.error('reloadKline error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>K线加载失败</p></div>';
+    container.innerHTML = panelState('K线加载失败');
   }
 }
 
@@ -77,7 +116,7 @@ async function loadWatchlist() {
     const stocks = data.stocks || [];
 
     if (stocks.length === 0) {
-      listEl.innerHTML = '<div class="empty-state" style="padding:32px 16px;"><div class="icon">📋</div><p>暂无自选股</p></div>';
+      listEl.innerHTML = panelState('暂无自选股', 'WL');
       return;
     }
 
@@ -88,80 +127,51 @@ async function loadWatchlist() {
       if (sigData && sigData.signals) signals = sigData.signals;
     } catch (e) {}
 
-    const sigLabel = {
-      'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
-      'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出'
-    };
-
-    listEl.innerHTML = '<div class="stock-card-list">' + stocks.map(s => {
-      const isActive = currentCode === s.code;
-      const cls = priceClass(s.change_pct);
-      const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
-      const pctSign = s.change_pct != null ? (s.change_pct >= 0 ? '+' : '') : '';
-      const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
-
-      // 当日盈亏 = (现价-昨收) × 持仓股数
-      const dailyPnl = s.daily_pnl ? formatPnl(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(2) + '元') : '--');
-      const dailyPnlCls = s.daily_pnl ? priceClass(s.daily_pnl) : cls;
-      // 持仓盈亏
-      const holdPnl = s.unrealized_pnl ? formatPnl(s.unrealized_pnl) : '--';
-      const holdPnlCls = s.unrealized_pnl ? priceClass(s.unrealized_pnl) : '';
-
-      // 异动标记
-      let anomalyIcon = '';
-      if (s.change_pct != null) {
-        if (s.change_pct >= 5) anomalyIcon = '🔥';
-        else if (s.change_pct <= -5) anomalyIcon = '❄️';
-      }
-
-      // AI信号
-      const sig = signals[s.code];
-      let sigHtml = '';
-      if (sig) {
-        const label = sigLabel[sig.signal] || sig.signal;
-        const sigCls = sig.signal.includes('BUY') ? 'signal-buy' : sig.signal.includes('SELL') ? 'signal-sell' : 'signal-hold';
-        sigHtml = `<div class="sc-signal ${sigCls}">${label}</div>`;
-      }
-
-      return `
-        <div class="stock-card ${isActive ? 'active' : ''}"
-             onclick="selectStock('${s.code}')"
-             data-code="${s.code}">
-          <div class="stock-card-inner">
-            <div class="sc-grip" title="拖拽排序">⋮⋮</div>
-            <div class="sc-left">
-              <div>
-                <div class="sc-name">${anomalyIcon} ${s.name || s.code}</div>
-                <div class="sc-code">${s.code}</div>
-              </div>
-              <div class="sc-price ${cls}">${formatPrice(s.price)}<span class="sc-price-unit">元</span></div>
-            </div>
-            <div class="sc-right">
-              <div class="sc-data-row">
-                <span class="sc-data-lbl">当日盈亏</span>
-                <span class="sc-data-val ${dailyPnlCls}">${dailyPnl}</span>
-              </div>
-              <div class="sc-data-row">
-                <span class="sc-data-lbl">持仓盈亏</span>
-                <span class="sc-data-val ${holdPnlCls}">${holdPnl}</span>
-              </div>
-              <div class="sc-data-row">
-                <span class="sc-data-lbl">当日涨幅</span>
-                <span class="sc-data-val ${cls}">${pctSign}${s.change_pct != null ? s.change_pct.toFixed(2) : '--'}%</span>
-              </div>
-              ${sigHtml}
-            </div>
-          </div>
-          <div class="stock-card-bar ${barCls}"></div>
-          <button class="btn-remove" onclick="event.stopPropagation();removeStock('${s.code}')" title="删除">×</button>
-        </div>`;
-    }).join('') + '</div>';
+    listEl.innerHTML = '<div class="stock-card-list">' + stocks.map(s => renderStockCard(s, signals[s.code])).join('') + '</div>';
   } catch (e) {
     console.error('loadWatchlist error:', e);
-    listEl.innerHTML = '<div class="empty-state"><p>加载失败，请刷新重试</p></div>';
+    listEl.innerHTML = panelState('加载失败，请刷新重试');
   }
 
   initDragDrop();
+}
+
+function renderStockCard(s, signal) {
+  const isActive = currentCode === s.code;
+  const { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls } = stockCardMetrics(s);
+  const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
+  return `
+    <div class="stock-card ${isActive ? 'active' : ''}"
+         onclick="selectStock('${escapeAttr(s.code)}')"
+         data-code="${escapeAttr(s.code)}">
+      <div class="stock-card-inner">
+        <div class="sc-grip" title="拖拽排序">⋮⋮</div>
+        <div class="sc-left">
+          <div>
+            <div class="sc-name">${stockMoveBadge(s.change_pct)}${escapeHtml(s.name || s.code)}</div>
+            <div class="sc-code">${escapeHtml(s.code)}</div>
+          </div>
+          <div class="sc-price ${cls}">${formatPrice(s.price)}<span class="sc-price-unit">元</span></div>
+        </div>
+        <div class="sc-right">
+          <div class="sc-data-row">
+            <span class="sc-data-lbl">当日盈亏</span>
+            <span class="sc-data-val ${dailyPnlCls}">${dailyPnl}</span>
+          </div>
+          <div class="sc-data-row">
+            <span class="sc-data-lbl">持仓盈亏</span>
+            <span class="sc-data-val ${holdPnlCls}">${holdPnl}</span>
+          </div>
+          <div class="sc-data-row">
+            <span class="sc-data-lbl">当日涨幅</span>
+            <span class="sc-data-val ${cls}">${pctSign}${s.change_pct != null ? s.change_pct.toFixed(2) : '--'}%</span>
+          </div>
+          ${signalBadge(signal)}
+        </div>
+      </div>
+      <div class="stock-card-bar ${barCls}"></div>
+      <button class="btn-remove" onclick="event.stopPropagation();removeStock('${escapeAttr(s.code)}')" title="删除">×</button>
+    </div>`;
 }
 /* ============================================================
    1a. 拖拽排序 — HTML5 Drag and Drop
@@ -405,8 +415,8 @@ async function load7Layer(code) {
       // 新闻情绪
       if (sig.sentiment) {
         const s = sig.sentiment;
-        const emoji = s.score > 0.1 ? '🟢' : (s.score < -0.1 ? '🔴' : '⚪');
-        setText('l-sentiment', `${emoji} ${s.label} (${s.positive}/${s.negative})`);
+        const trend = s.score > 0.1 ? '偏多' : (s.score < -0.1 ? '偏空' : '中性');
+        setText('l-sentiment', `${trend} · ${s.label} (${s.positive}/${s.negative})`);
       } else {
         setText('l-sentiment', '--');
       }
@@ -647,10 +657,8 @@ async function refreshQuotes() {
       const el = document.querySelector(`.stock-card[data-code="${s.code}"]`);
       if (!el) return;
 
-      const cls = priceClass(s.change_pct);
+      const { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls } = stockCardMetrics(s);
       const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
-      const pctSign = s.change_pct != null ? (s.change_pct >= 0 ? '+' : '') : '';
-      const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
 
       // 底部色条
       const bar = el.querySelector('.stock-card-bar');
@@ -664,20 +672,16 @@ async function refreshQuotes() {
       }
 
       // 当日盈亏
-      const dailyPnlVal = s.daily_pnl ? formatPnl(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(2) + '元') : '--');
-      const dailyPnlCls = s.daily_pnl ? priceClass(s.daily_pnl) : cls;
       const pnlEl = el.querySelector('.sc-data-row:nth-child(1) .sc-data-val');
       if (pnlEl) {
-        pnlEl.textContent = dailyPnlVal;
+        pnlEl.textContent = dailyPnl;
         pnlEl.className = `sc-data-val ${dailyPnlCls}`;
       }
 
       // 持仓盈亏
-      const holdPnlVal = s.unrealized_pnl ? formatPnl(s.unrealized_pnl) : '--';
-      const holdPnlCls = s.unrealized_pnl ? priceClass(s.unrealized_pnl) : '';
       const holdEl = el.querySelector('.sc-data-row:nth-child(2) .sc-data-val');
       if (holdEl) {
-        holdEl.textContent = holdPnlVal;
+        holdEl.textContent = holdPnl;
         holdEl.className = `sc-data-val ${holdPnlCls}`;
       }
 
@@ -801,7 +805,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const toggle = document.getElementById('autoRefreshToggle');
   const intervalSel = document.getElementById('refreshInterval');
   try {
-    const resp = await API.get('/settings');
+    const resp = await API.get('/api/settings');
     if (resp) {
       // 同步刷新间隔
       if (intervalSel && resp.refresh_interval) {
@@ -821,7 +825,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (toggle.checked) startAutoRefresh();
       else stopAutoRefresh();
       // 保存设置到后端
-      API.post('/settings/bulk', { settings: { auto_refresh_enabled: toggle.checked ? 'true' : 'false' } }).catch(()=>{});
+      API.post('/api/settings/bulk', { settings: { auto_refresh_enabled: toggle.checked ? 'true' : 'false' } }).catch(()=>{});
     });
   }
   if (intervalSel) {
@@ -831,7 +835,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         startAutoRefresh();
       }
       // 保存设置到后端
-      API.post('/settings/bulk', { settings: { refresh_interval: intervalSel.value } }).catch(()=>{});
+      API.post('/api/settings/bulk', { settings: { refresh_interval: intervalSel.value } }).catch(()=>{});
     });
   }
 
@@ -1002,7 +1006,7 @@ function switchNewsTab(target) {
 
 async function loadStockNews(code) {
   const container = document.getElementById('newsStockList');
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>📰 加载中...</p></div>';
+  container.innerHTML = loadingState('加载中...');
   try {
     const [newsRes, sentRes] = await Promise.all([
       API.get(`/api/news/${code}`),
@@ -1013,69 +1017,71 @@ async function loadStockNews(code) {
     const bar = document.getElementById('newsSentimentBar');
     if (sentRes && sentRes.total > 0) {
       bar.style.display = 'flex';
-      document.getElementById('sentPos').textContent = `👍 看多 ${sentRes.positive}`;
-      document.getElementById('sentNeu').textContent = `😐 中性 ${sentRes.neutral}`;
-      document.getElementById('sentNeg').textContent = `👎 看空 ${sentRes.negative}`;
+      document.getElementById('sentPos').textContent = `看多 ${sentRes.positive}`;
+      document.getElementById('sentNeu').textContent = `中性 ${sentRes.neutral}`;
+      document.getElementById('sentNeg').textContent = `看空 ${sentRes.negative}`;
     }
 
     const news = newsRes?.news || [];
     if (news.length === 0) {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无相关新闻</p></div>';
+      container.innerHTML = panelState('暂无相关新闻');
       return;
     }
     container.innerHTML = news.map(renderNewsItem).join('');
   } catch (e) {
     console.error('loadStockNews error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
 async function loadClsNews() {
   const container = document.getElementById('newsClsList');
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>📡 加载中...</p></div>';
+  container.innerHTML = loadingState('加载中...');
   try {
     const data = await API.get('/api/news/cls');
     const news = data?.news || [];
     if (news.length === 0) {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无快讯</p></div>';
+      container.innerHTML = panelState('暂无快讯');
       return;
     }
     container.innerHTML = news.map(renderClsItem).join('');
   } catch (e) {
     console.error('loadClsNews error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
 async function loadWechatNews(code) {
   const container = document.getElementById('newsWechatList');
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>🔍 搜索公众号文章...</p></div>';
+  container.innerHTML = loadingState('搜索公众号文章...');
   try {
     const data = await API.get(`/api/news/wechat/${code}`);
     const news = data?.news || [];
     if (news.length === 0) {
-      container.innerHTML = `<div class="empty-state" style="padding:24px;"><p>未找到 "${data?.keyword || code}" 相关公众号文章</p></div>`;
+      container.innerHTML = `<div class="empty-state" style="padding:24px;"><p>未找到 "${escapeHtml(data?.keyword || code)}" 相关公众号文章</p></div>`;
       return;
     }
-    container.innerHTML = `<div class="wechat-search-hint" style="padding:4px 8px;font-size:0.78rem;color:var(--text-secondary);">搜索: ${data.keyword}</div>` +
+    container.innerHTML = `<div class="wechat-search-hint" style="padding:4px 8px;font-size:0.78rem;color:var(--text-secondary);">搜索: ${escapeHtml(data.keyword)}</div>` +
       news.map(renderWechatItem).join('');
   } catch (e) {
     console.error('loadWechatNews error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
 function renderWechatItem(n) {
-  const url = n.url ? `<a href="${n.url}" target="_blank" rel="noopener">${n.title}</a>` : n.title;
+  const href = safeUrl(n.url);
+  const title = escapeHtml(n.title || '--');
+  const url = href ? `<a href="${escapeAttr(href)}" target="_blank" rel="noopener">${title}</a>` : title;
   return `<div class="news-item">
     <div class="news-item-head">
       <span class="news-item-title">${url}</span>
       ${sentimentBadge(n.sentiment)}
     </div>
-    ${n.summary ? `<div class="news-item-content">${n.summary}</div>` : ''}
+    ${n.summary ? `<div class="news-item-content">${escapeHtml(n.summary)}</div>` : ''}
     <div class="news-item-meta">
-      <span>${n.source ? '💬 ' + n.source : ''}</span>
-      <span>${n.date || ''}</span>
+      <span>${n.source ? escapeHtml(n.source) : ''}</span>
+      <span>${escapeHtml(n.date || '')}</span>
     </div>
   </div>`;
 }
@@ -1087,15 +1093,17 @@ function sentimentBadge(s) {
 }
 
 function renderNewsItem(n) {
-  const url = n.url ? `<a href="${n.url}" target="_blank" rel="noopener">${n.title}</a>` : n.title;
+  const href = safeUrl(n.url);
+  const title = escapeHtml(n.title || '--');
+  const url = href ? `<a href="${escapeAttr(href)}" target="_blank" rel="noopener">${title}</a>` : title;
   return `<div class="news-item">
     <div class="news-item-head">
       <span class="news-item-title">${url}</span>
       ${sentimentBadge(n.sentiment)}
     </div>
     <div class="news-item-meta">
-      <span>${n.media || ''}</span>
-      <span>${n.date || ''}</span>
+      <span>${escapeHtml(n.media || '')}</span>
+      <span>${escapeHtml(n.date || '')}</span>
     </div>
   </div>`;
 }
@@ -1103,11 +1111,11 @@ function renderNewsItem(n) {
 function renderClsItem(n) {
   return `<div class="news-item cls-item">
     <div class="news-item-head">
-      <span class="news-item-title">${n.title}</span>
+      <span class="news-item-title">${escapeHtml(n.title || '--')}</span>
       ${sentimentBadge(n.sentiment)}
     </div>
-    <div class="news-item-content">${n.content || ''}</div>
-    <div class="news-item-meta"><span>${n.time || ''}</span></div>
+    <div class="news-item-content">${escapeHtml(n.content || '')}</div>
+    <div class="news-item-meta"><span>${escapeHtml(n.time || '')}</span></div>
   </div>`;
 }
 
@@ -1116,35 +1124,35 @@ function renderClsItem(n) {
    ============================================================ */
 async function loadIndustryNews(code) {
   const container = document.getElementById('newsIndustryList');
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>🏭 加载中...</p></div>';
+  container.innerHTML = loadingState('加载中...');
   try {
     const data = await API.get(`/api/news/${code}?category=industry`);
     const news = data?.news || [];
     if (news.length === 0) {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无行业新闻</p></div>';
+      container.innerHTML = panelState('暂无行业新闻');
       return;
     }
     container.innerHTML = news.map(renderNewsItem).join('');
   } catch (e) {
     console.error('loadIndustryNews error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
 async function loadGlobalNews() {
   const container = document.getElementById('newsGlobalList');
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>🌍 加载中...</p></div>';
+  container.innerHTML = loadingState('加载中...');
   try {
     const data = await API.get('/api/news/global');
     const news = data?.news || [];
     if (news.length === 0) {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无全球资讯</p></div>';
+      container.innerHTML = panelState('暂无全球资讯');
       return;
     }
     container.innerHTML = news.map(renderNewsItem).join('');
   } catch (e) {
     console.error('loadGlobalNews error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
@@ -1167,9 +1175,9 @@ async function loadBuyPoints(code) {
       return `<tr>
         <td style="font-family:var(--font-mono);font-weight:600;">${p.price.toFixed(2)}</td>
         <td>${p.shares || '--'}</td>
-        <td>${p.reason || '--'}</td>
+        <td>${escapeHtml(p.reason || '--')}</td>
         <td><span class="badge ${statusClass === 'up' ? 'badge-up' : statusClass === 'down' ? 'badge-down' : 'badge-info'}">${statusText}</span></td>
-        <td style="font-size:0.8rem;color:var(--text-muted);">${(p.created_at || '').slice(0, 16)}</td>
+        <td style="font-size:0.8rem;color:var(--text-muted);">${escapeHtml((p.created_at || '').slice(0, 16))}</td>
         <td><button class="btn btn-sm btn-ghost" onclick="deleteBuyPoint(${p.id})">删除</button></td>
       </tr>`;
     }).join('');
@@ -1224,7 +1232,7 @@ async function deleteBuyPoint(id) {
 async function loadResearch(code) {
   const container = document.getElementById('researchList');
   if (!container) return;
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>📊 加载研报中...</p></div>';
+  container.innerHTML = loadingState('加载研报中...');
   try {
     const data = await API.get(`/api/research/${code}`);
     const reports = data?.data?.reports || [];
@@ -1234,7 +1242,7 @@ async function loadResearch(code) {
     let epsHtml = '';
     if (eps && (eps.eps_current_year || eps.analysts)) {
       epsHtml = `<div class="eps-forecast-card">
-        <div class="eps-title">📈 盈利预测</div>
+        <div class="eps-title">盈利预测</div>
         <div class="eps-row"><span class="label">今年EPS</span><span class="value">${eps.eps_current_year ?? '--'}</span></div>
         <div class="eps-row"><span class="label">今年PE</span><span class="value">${eps.pe_current_year ?? '--'}</span></div>
         <div class="eps-row"><span class="label">净利润</span><span class="value">${eps.net_profit ? (eps.net_profit / 1e8).toFixed(2) + '亿' : '--'}</span></div>
@@ -1243,25 +1251,25 @@ async function loadResearch(code) {
     }
 
     if (reports.length === 0 && !epsHtml) {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无研报数据</p></div>';
+      container.innerHTML = panelState('暂无研报数据');
       return;
     }
 
     const reportsHtml = reports.map(r => {
-      const ratingBadge = r.rating ? `<span class="report-rating">${r.rating}</span>` : '';
-      const targetPrice = r.target_price ? `<span class="report-target">目标价 ${r.target_price}</span>` : '';
-      return `<div class="research-item" data-org="${r.org || ''}" data-rating="${r.rating || ''}">
+      const ratingBadge = r.rating ? `<span class="report-rating">${escapeHtml(r.rating)}</span>` : '';
+      const targetPrice = r.target_price ? `<span class="report-target">目标价 ${escapeHtml(r.target_price)}</span>` : '';
+      return `<div class="research-item" data-org="${escapeAttr(r.org || '')}" data-rating="${escapeAttr(r.rating || '')}">
         <div class="research-item-head">
-          <span class="research-item-title">${r.title || '--'}</span>
+          <span class="research-item-title">${escapeHtml(r.title || '--')}</span>
           ${ratingBadge}
         </div>
         <div class="research-item-meta">
-          <span class="research-org">${r.org || ''}</span>
-          <span class="research-author">${r.author || ''}</span>
-          <span class="research-date">${r.date || ''}</span>
+          <span class="research-org">${escapeHtml(r.org || '')}</span>
+          <span class="research-author">${escapeHtml(r.author || '')}</span>
+          <span class="research-date">${escapeHtml(r.date || '')}</span>
           ${targetPrice}
         </div>
-        ${r.content ? `<div class="research-item-content">${r.content}</div>` : ''}
+        ${r.content ? `<div class="research-item-content">${escapeHtml(r.content)}</div>` : ''}
       </div>`;
     }).join('');
 
@@ -1272,43 +1280,11 @@ async function loadResearch(code) {
     if (orgSelect) {
       const orgs = [...new Set(reports.map(r => r.org).filter(Boolean))].sort();
       orgSelect.innerHTML = '<option value="">全部机构</option>' +
-        orgs.map(o => `<option value="${o}">${o}</option>`).join('');
+        orgs.map(o => `<option value="${escapeAttr(o)}">${escapeHtml(o)}</option>`).join('');
     }
   } catch (e) {
     console.error('loadResearch error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
-  }
-}
-
-/* ============================================================
-   公告功能
-   ============================================================ */
-async function loadAnnounce(code) {
-  const container = document.getElementById('announceList');
-  if (!container) return;
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>📋 加载公告中...</p></div>';
-  try {
-    const data = await API.get(`/api/announce/${code}`);
-    const list = data?.data || [];
-    if (list.length === 0) {
-      container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无公告数据</p></div>';
-      return;
-    }
-    container.innerHTML = list.map(a => {
-      const url = a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${a.title}</a>` : a.title;
-      return `<div class="announce-item" data-date="${a.date || ''}">
-        <div class="announce-item-head">
-          <span class="announce-item-title">${url}</span>
-        </div>
-        <div class="announce-item-meta">
-          <span class="announce-type">${a.type || ''}</span>
-          <span class="announce-date">${a.date || ''}</span>
-        </div>
-      </div>`;
-    }).join('');
-  } catch (e) {
-    console.error('loadAnnounce error:', e);
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
@@ -1328,62 +1304,48 @@ function filterResearch() {
 }
 
 /* ============================================================
-   公告筛选
-   ============================================================ */
-function filterAnnouncements() {
-  const from = document.getElementById('announce-date-from').value;
-  const to = document.getElementById('announce-date-to').value;
-  document.querySelectorAll('#announceList .announce-item').forEach(el => {
-    const date = el.dataset.date || '';
-    const showFrom = !from || date >= from;
-    const showTo = !to || date <= to;
-    el.style.display = (showFrom && showTo) ? '' : 'none';
-  });
-}
-
-/* ============================================================
    AI分析（自选股详情内联版）
    ============================================================ */
 async function triggerAnalysis() {
-  if (!currentStock) return alert('请先选择股票');
+  if (!currentCode) return alert('请先选择股票');
   const statusEl = document.getElementById('ai-analysis-status');
-  statusEl.textContent = '⏳ 正在启动分析...';
+  statusEl.textContent = '正在启动分析...';
   try {
-    const resp = await apiPost(`/api/ai/analyze/${currentStock}`);
+    const resp = await API.post(`/api/ai/analyze/${currentCode}`, {});
     if (resp.status === 'running') {
-      statusEl.textContent = '⚠️ 该股票已有分析任务在运行';
+      statusEl.textContent = '该股票已有分析任务在运行';
       return;
     }
     const taskId = resp.task_id;
-    statusEl.innerHTML = '🔄 分析中... <a href="/ai" style="color:var(--color-up);">查看完整进度 →</a>';
+    statusEl.innerHTML = '分析中... <a href="/ai" style="color:var(--color-up);">查看完整进度</a>';
     const poll = async () => {
       try {
-        const s = await apiGet(`/api/ai/analyze/${taskId}/status`);
+        const s = await API.get(`/api/ai/analyze/${taskId}/status`);
         if (s.status === 'completed') {
-          const r = await apiGet(`/api/ai/analyze/${taskId}/result`);
+          const r = await API.get(`/api/ai/analyze/${taskId}/result`);
           const result = r.result || {};
           const elapsed = r.elapsed ? `${Math.floor(r.elapsed/60)}:${String(Math.floor(r.elapsed%60)).padStart(2,'0')}` : '';
           const mainReport = result.final_decision || result.risk_assessment || result.trader_decision || '暂无结果';
           statusEl.innerHTML = `
             <div class="card" style="margin-top:8px;padding:12px;">
-              <div style="font-weight:600;margin-bottom:6px;">🤖 AI分析完成 ${elapsed ? '· 耗时 ' + elapsed : ''}</div>
-              <div style="font-size:0.85rem;line-height:1.6;max-height:400px;overflow-y:auto;">${mainReport.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}</div>
-              <div style="margin-top:8px;"><a href="/ai" class="btn btn-outline" style="font-size:0.8rem;">📄 查看完整报告</a></div>
+              <div style="font-weight:600;margin-bottom:6px;">AI分析完成 ${elapsed ? '· 耗时 ' + elapsed : ''}</div>
+              <div style="font-size:0.85rem;line-height:1.6;max-height:400px;overflow-y:auto;">${escapeHtml(mainReport).replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}</div>
+              <div style="margin-top:8px;"><a href="/ai" class="btn btn-outline" style="font-size:0.8rem;">查看完整报告</a></div>
             </div>`;
           return;
         }
         if (s.status === 'failed') {
-          statusEl.textContent = '❌ 分析失败: ' + (s.error || '未知错误');
+          statusEl.textContent = '分析失败: ' + (s.error || '未知错误');
           return;
         }
         setTimeout(poll, 3000);
       } catch(e) {
-        statusEl.textContent = '❌ 查询状态失败';
+        statusEl.textContent = '查询状态失败';
       }
     };
     setTimeout(poll, 5000);
   } catch(e) {
-    statusEl.textContent = '❌ 启动失败: ' + e.message;
+    statusEl.textContent = '启动失败: ' + e.message;
   }
 }
 
@@ -1401,7 +1363,7 @@ async function loadStockAnomalies(code) {
     const anomalies = data.anomalies || [];
     if (!anomalies.length) {
       list.innerHTML = `<div class="anomaly-empty">
-        <div class="anomaly-empty-icon">📡</div>
+        <div class="anomaly-empty-icon ui-glyph" data-icon="AL"></div>
         <div class="anomaly-empty-title">暂无异动记录</div>
         <div class="anomaly-empty-desc">点击上方按钮检测当前股票异动</div>
       </div>`;
@@ -1411,16 +1373,15 @@ async function loadStockAnomalies(code) {
     if (hint) hint.textContent = `${anomalies.length} 条异动`;
     list.innerHTML = anomalies.map(a => renderAnomalyCard(a)).join('');
   } catch(e) {
-    list.innerHTML = `<div class="empty-state" style="padding:24px;"><p>加载失败: ${e.message}</p></div>`;
+    list.innerHTML = `<div class="empty-state" style="padding:24px;"><p>加载失败: ${escapeHtml(e.message)}</p></div>`;
   }
 }
 
 function renderAnomalyCard(a, isNew) {
-  const level = a.level || 'info';
-  const levelIcon = level === 'critical' ? '🔴' : level === 'warning' ? '🟡' : '🔵';
+  const level = ['critical', 'warning', 'info'].includes(a.level) ? a.level : 'info';
   const levelLabel = level === 'critical' ? '严重' : level === 'warning' ? '警告' : '提示';
-  const name = a.name || a.code;
-  const timeStr = a.time ? a.time.replace(/^\d{4}-/, '').replace(/:\d{2}$/, '') : '';
+  const name = escapeHtml(a.name || a.code || '');
+  const timeStr = a.time ? escapeHtml(a.time.replace(/^\d{4}-/, '').replace(/:\d{2}$/, '')) : '';
   const changeHtml = a.change_pct ? `<span class="anomaly-change ${a.change_pct >= 0 ? 'up' : 'down'}">${a.change_pct >= 0 ? '+' : ''}${(a.change_pct||0).toFixed(2)}%</span>` : '';
   const priceHtml = a.price ? `<span class="anomaly-price">¥${a.price}</span>` : '';
   const typeLabel = {
@@ -1434,23 +1395,23 @@ function renderAnomalyCard(a, isNew) {
     'turnover_spike': '换手率异动',
     'gap_up': '跳空高开',
     'gap_down': '跳空低开'
-  }[a.anomaly_type] || a.anomaly_type || '';
+  }[a.anomaly_type] || escapeHtml(a.anomaly_type || '');
   return `<div class="anomaly-card level-${level} ${isNew ? 'anomaly-new' : ''}">
     <div class="anomaly-card-header">
-      <span class="anomaly-level-badge level-${level}">${levelIcon} ${levelLabel} · ${typeLabel}</span>
+      <span class="anomaly-level-badge level-${level}">${levelLabel} · ${typeLabel}</span>
       <span class="anomaly-time">${timeStr}</span>
     </div>
     <div class="anomaly-card-body">
       <div class="anomaly-stock-info">
         <span class="anomaly-stock-name">${name}</span>
-        <span class="anomaly-stock-code">${a.code || ''}</span>
+        <span class="anomaly-stock-code">${escapeHtml(a.code || '')}</span>
       </div>
       <div class="anomaly-price-info">
         ${priceHtml} ${changeHtml}
       </div>
     </div>
-    ${a.message ? `<div class="anomaly-message">${a.message}</div>` : ''}
-    ${a.l1_advice ? `<div class="anomaly-advice">💡 ${a.l1_advice}</div>` : ''}
+    ${a.message ? `<div class="anomaly-message">${escapeHtml(a.message)}</div>` : ''}
+    ${a.l1_advice ? `<div class="anomaly-advice">建议：${escapeHtml(a.l1_advice)}</div>` : ''}
   </div>`;
 }
 
@@ -1486,13 +1447,13 @@ let _announceData = [];
 async function loadAnnounce(code) {
   const container = document.getElementById('announceList');
   if (!container) return;
-  container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>📰 加载中...</p></div>';
+  container.innerHTML = loadingState('加载中...');
   try {
     const resp = await API.get(`/api/announce/${code}?limit=50`);
     _announceData = resp?.data || [];
     filterAnnouncements();
   } catch(e) {
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载失败</p></div>';
+    container.innerHTML = panelState('加载失败');
   }
 }
 
@@ -1509,17 +1470,19 @@ function filterAnnouncements() {
   if (typeF) filtered = filtered.filter(a => (a.type || '').includes(typeF));
 
   if (!filtered.length) {
-    container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>无匹配公告</p></div>';
+    container.innerHTML = panelState('无匹配公告');
     return;
   }
   container.innerHTML = filtered.map(a => {
-    const url = a.url ? `<a href="${a.url}" target="_blank" rel="noopener">${a.title}</a>` : a.title;
-    const typeBadge = a.type ? `<span class="sent-badge neutral" style="margin-left:6px;">${a.type.trim()}</span>` : '';
+    const href = safeUrl(a.url);
+    const title = escapeHtml(a.title || '--');
+    const url = href ? `<a href="${escapeAttr(href)}" target="_blank" rel="noopener">${title}</a>` : title;
+    const typeBadge = a.type ? `<span class="sent-badge neutral" style="margin-left:6px;">${escapeHtml(a.type.trim())}</span>` : '';
     return `<div class="announce-item">
       <div class="announce-item-head">
         <span class="announce-item-title">${url}${typeBadge}</span>
       </div>
-      <div class="announce-item-meta"><span>${a.date || ''}</span></div>
+      <div class="announce-item-meta"><span>${escapeHtml(a.date || '')}</span></div>
     </div>`;
   }).join('');
 }

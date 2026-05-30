@@ -9,7 +9,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from scheduler.conditional_order_checker import check_conditional_orders
 from scheduler.anomaly_checker import check_anomalies
 from scheduler.report_runner import run_scheduled_report
-from scheduler.signal_tracker import update_prices
+from scheduler.signal_tracker import get_open_tracking_codes, update_prices
+from services import ai_report_service
+from services import settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +51,7 @@ async def anomaly_job():
         return
     # 检查异动监控开关
     try:
-        from api.settings_api import _conn, DEFAULTS
-        db = _conn()
-        row = db.execute("SELECT value FROM settings WHERE key='anomaly_monitor_enabled'").fetchone()
-        db.close()
-        enabled = (row[0] if row else DEFAULTS.get("anomaly_monitor_enabled", "true"))
+        enabled = settings_service.get_setting("anomaly_monitor_enabled")["value"]
         if enabled != "true":
             return
     except Exception:
@@ -64,14 +62,7 @@ async def anomaly_job():
 async def clear_anomaly_logs_job():
     """每天23:59清除当天的异动日志"""
     try:
-        import sqlite3
-        from config import DB_PATH
-        db = sqlite3.connect(str(DB_PATH))
-        today = datetime.now().strftime("%Y-%m-%d")
-        cursor = db.execute("DELETE FROM anomaly_logs WHERE date(created_at) = ?", (today,))
-        count = cursor.rowcount
-        db.commit()
-        db.close()
+        count = await ai_report_service.clear_anomalies_for_date()
         logger.info("🗑️ 已清除当天异动日志 %d 条", count)
     except Exception as e:
         logger.error("清除异动日志失败: %s", e)
@@ -81,17 +72,12 @@ async def signal_tracking_job():
     """每日15:30更新信号跟踪价格"""
     try:
         from data.helpers import tencent_quote_batch
-        from scheduler.signal_tracker import _get_db
 
-        db = _get_db()
-        rows = db.execute("SELECT DISTINCT code FROM signal_tracking WHERE status='open'").fetchall()
-        db.close()
-
-        if not rows:
+        codes = get_open_tracking_codes()
+        if not codes:
             logger.info("无持仓中信号，跳过更新")
             return
 
-        codes = [r["code"] for r in rows]
         logger.info("📊 更新信号跟踪价格: %s", codes)
 
         # 批量获取行情

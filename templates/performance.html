@@ -4,7 +4,7 @@
 {% block content %}
 <div class="perf-page">
     <div class="perf-header">
-        <h2>📈 信号绩效</h2>
+        <h2>信号绩效</h2>
         <p class="perf-subtitle">AI信号前向验证 — 真实信号、真实价格、真实持有期</p>
     </div>
 
@@ -32,6 +32,18 @@
     font-size: 0.9rem;
     color: var(--text-secondary);
 }
+.perf-trend {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 20px;
+    margin-right: 6px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
 </style>
 
 <script>
@@ -44,13 +56,13 @@ const SIG_LABEL = {
 let _perfData = null;
 let _perfFilter = 'open';
 
-async function apiGet(url) {
+async function performanceGet(url) {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
 }
 
-async function apiPost(url, data = {}) {
+async function performancePost(url, data = {}) {
     const res = await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -65,8 +77,8 @@ async function loadPerformance() {
     c.innerHTML = '<div class="perf-empty">加载中...</div>';
     try {
         const [stats, tracking] = await Promise.all([
-            apiGet('/api/signal/stats'),
-            apiGet('/api/signal/tracking')
+            performanceGet('/api/signal/stats'),
+            performanceGet('/api/signal/tracking')
         ]);
         _perfData = { stats, tracking };
         renderPerformance(c);
@@ -142,7 +154,7 @@ function renderPerformance(c) {
         for (const r of filtered) {
             const pnl = r.pnl_pct || ((r.current_price - r.entry_price) / r.entry_price * 100);
             const pnlCls = pnl >= 0 ? 'price-up' : 'price-down';
-            const icon = pnl >= 0 ? '🟢' : '🔴';
+            const trend = pnl >= 0 ? '盈利' : '回撤';
             const sigLabel = SIG_LABEL[r.signal] || r.signal;
             const sigClass = `signal-${r.signal.toLowerCase().replace(/_/g,'-')}`;
             const holdDays = r.hold_days || Math.floor((Date.now() - new Date(r.signal_date).getTime()) / 86400000);
@@ -150,7 +162,7 @@ function renderPerformance(c) {
 
             html += `<div class="perf-tracking-card">
                 <div class="perf-tracking-info">
-                    <div class="perf-tracking-name">${icon} ${r.name} ${r.code}
+                    <div class="perf-tracking-name"><span class="perf-trend ${pnlCls}">${trend}</span> ${r.name} ${r.code}
                         <span class="perf-tracking-signal ${sigClass}">${sigLabel}</span>
                     </div>
                     <div class="perf-tracking-detail">
@@ -172,7 +184,7 @@ function renderPerformance(c) {
 async function closeTracking(id, currentPrice) {
     if (!confirm('确认平仓？')) return;
     try {
-        await apiPost(`/api/signal/tracking/${id}/close`, { exit_price: currentPrice });
+        await performancePost(`/api/signal/tracking/${id}/close`, { exit_price: currentPrice });
         loadPerformance();
     } catch (e) {
         alert('平仓失败: ' + e.message);

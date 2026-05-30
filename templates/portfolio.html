@@ -13,7 +13,7 @@
   </div>
   <div class="stock-list-body" id="portfolioList">
     <div class="empty-state" style="padding:32px 16px;">
-      <div class="icon">💼</div>
+      <div class="icon ui-glyph">PF</div>
       <p>暂无持仓</p>
     </div>
   </div>
@@ -58,11 +58,21 @@
     </div>
   </div>
 
+  <div class="card account-dashboard-card">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div class="card-title">多账户资产看板</div>
+      <button class="btn btn-sm btn-ghost" onclick="loadAccountDashboard()">刷新</button>
+    </div>
+    <div id="accountDashboard" class="account-dashboard">
+      <div class="empty-state"><p>暂无账户数据</p></div>
+    </div>
+  </div>
+
   <!-- Tab切换 -->
   <div class="detail-tabs">
-    <button class="detail-tab active" data-tab="holdings" onclick="switchPTab('holdings')">📊 持仓</button>
-    <button class="detail-tab" data-tab="plan" onclick="switchPTab('plan')">📋 计划</button>
-    <button class="detail-tab" data-tab="trades" onclick="switchPTab('trades')">📝 交易</button>
+    <button class="detail-tab active" data-tab="holdings" onclick="switchPTab('holdings')">持仓</button>
+    <button class="detail-tab" data-tab="plan" onclick="switchPTab('plan')">计划</button>
+    <button class="detail-tab" data-tab="trades" onclick="switchPTab('trades')">交易</button>
   </div>
 
   <div id="ptab-holdings">
@@ -81,7 +91,7 @@
     <div class="card" id="stockActionPanel" style="display:none;margin-top:12px;">
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div class="card-title" id="stockActionTitle">--</div>
-        <button class="btn btn-sm btn-ghost" onclick="closeStockActionPanel()">✕</button>
+        <button class="btn btn-sm btn-ghost" onclick="closeStockActionPanel()">关闭</button>
       </div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
         <div>
@@ -95,18 +105,18 @@
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
           <input type="number" id="manualTargetPrice" step="0.01" placeholder="手动设目标价" style="width:120px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.85rem;">
           <button class="btn btn-sm btn-primary" onclick="saveManualTargetPrice()">保存</button>
-          <button class="btn btn-sm" style="background:#e74c3c;color:#fff;" onclick="clearStockTrades()">🗑 清空此股</button>
+          <button class="btn btn-sm" style="background:#e74c3c;color:#fff;" onclick="clearStockTrades()">清空此股</button>
         </div>
       </div>
     </div>
 
     <!-- 盈亏日历 -->
     <div class="card" style="margin-top:12px;">
-      <div style="font-weight:600;padding:12px 12px 0;">📊 盈亏日历</div>
+      <div style="font-weight:600;padding:12px 12px 0;">盈亏日历</div>
       <div class="calendar-header">
-        <button onclick="changeMonth(-1)">◀</button>
+        <button onclick="changeMonth(-1)">上月</button>
         <span id="calendarTitle">2026年5月</span>
-        <button onclick="changeMonth(1)">▶</button>
+        <button onclick="changeMonth(1)">下月</button>
         <span class="calendar-stats">
           本月盈亏: <span id="monthPnl">--</span>
           胜率: <span id="winRate">--</span>
@@ -120,12 +130,12 @@
   <div id="ptab-plan" style="display:none;">
     <div class="card">
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div class="card-title">📋 交易计划</div>
+        <div class="card-title">交易计划</div>
         <span class="pending-count" id="planCount" style="font-size:0.8rem;color:var(--text-secondary);">0</span>
         <button class="btn btn-sm btn-primary" onclick="showAddPlan()" style="margin-left:auto;">+ 新建计划</button>
       </div>
       <div id="planList">
-        <div class="empty-state"><div class="icon">📋</div><p>暂无交易计划</p></div>
+        <div class="empty-state"><div class="icon ui-glyph">PL</div><p>暂无交易计划</p></div>
       </div>
     </div>
 
@@ -136,7 +146,7 @@
       <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div class="card-title">成交记录</div>
         <div>
-          <button class="btn btn-sm btn-ghost" onclick="undoLastTrade()">↩ 撤销上一笔</button>
+          <button class="btn btn-sm btn-ghost" onclick="undoLastTrade()">撤销上一笔</button>
         </div>
       </div>
       <table class="data-table">

@@ -167,6 +167,18 @@ def update_prices(price_map: Dict[str, float]):
         db.close()
 
 
+def get_open_tracking_codes() -> List[str]:
+    """Return distinct stock codes that currently have open signal tracking."""
+    db = _get_db()
+    try:
+        rows = db.execute(
+            "SELECT DISTINCT code FROM signal_tracking WHERE status='open' ORDER BY code"
+        ).fetchall()
+        return [row["code"] for row in rows]
+    finally:
+        db.close()
+
+
 def close_tracking_manual(tracking_id: int, exit_price: float) -> bool:
     """手动平仓"""
     db = _get_db()

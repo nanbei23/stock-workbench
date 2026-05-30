@@ -3,28 +3,22 @@ PDF报告导出模块
 支持fpdf2生成PDF，或降级为纯文本导出
 """
 
-import sqlite3
 import os
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional
 import base64
 import tempfile
+
+from services import ai_report_service
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["PDF导出"])
-
-DB = str(Path(__file__).parent.parent / "data" / "workbench.db")
-
-
-def _conn():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
 
 
 # 报告字段映射 (column_name -> display_label)
@@ -203,14 +197,7 @@ async def export_report_pdf(report_id: int):
 
 
 async def _do_export(report_id: int, chart_image: Optional[str] = None):
-    conn = _conn()
-    row = conn.execute("SELECT * FROM analysis_reports WHERE id=?", (report_id,)).fetchone()
-    conn.close()
-
-    if not row:
-        raise HTTPException(404, "报告不存在")
-
-    report = dict(row)
+    report = await ai_report_service.get_report(report_id)
 
     # Inject chart image if provided
     if chart_image:

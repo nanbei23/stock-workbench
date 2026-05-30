@@ -1,5 +1,12 @@
 """新闻管理"""
-from models.database import get_db
+import sqlite3
+from config import DB_PATH
+
+
+def _get_sync_db():
+    db = sqlite3.connect(str(DB_PATH))
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def save_news(code6, news_list):
@@ -7,7 +14,7 @@ def save_news(code6, news_list):
     批量保存新闻。
     news_list: [{title, content, url, source, sentiment, published_at}, ...]
     """
-    db = get_db()
+    db = _get_sync_db()
     try:
         for n in news_list:
             # 去重：同 URL 不重复插入
@@ -32,7 +39,7 @@ def save_news(code6, news_list):
 
 def get_news(code6, limit=50):
     """获取指定股票的新闻列表"""
-    db = get_db()
+    db = _get_sync_db()
     try:
         rows = db.execute(
             'SELECT * FROM news_cache WHERE code6 = ? ORDER BY cached_at DESC LIMIT ?',
@@ -45,7 +52,7 @@ def get_news(code6, limit=50):
 
 def get_sentiment_summary(code6):
     """获取情绪统计：positive, negative, neutral, overall"""
-    db = get_db()
+    db = _get_sync_db()
     try:
         rows = db.execute(
             'SELECT sentiment, COUNT(*) as cnt FROM news_cache WHERE code6 = ? GROUP BY sentiment',

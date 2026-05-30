@@ -11,10 +11,10 @@
     <!-- 左栏：自选股卡片列表（可单选/批量选） -->
     <aside class="ai-left" id="aiLeft">
     <div class="ai-left-header">
-        <h3>📊 自选股</h3>
+        <h3>自选股</h3>
         <div class="ai-left-actions">
-            <button class="btn btn-sm ai-batch-toggle" id="batchToggleBtn" onclick="toggleBatchMode()" title="批量选择">☑ 批量</button>
-            <button class="btn btn-sm ai-panel-close" onclick="toggleLeftPanel()" title="收起左栏">✕</button>
+            <button class="btn btn-sm ai-batch-toggle" id="batchToggleBtn" onclick="toggleBatchMode()" title="批量选择">批量</button>
+            <button class="btn btn-sm ai-panel-close" onclick="toggleLeftPanel()" title="收起左栏">收起</button>
         </div>
     </div>
         <div class="ai-stock-list" id="aiStockList">
@@ -23,7 +23,7 @@
         <!-- 批量操作栏 -->
         <div id="batchBar" class="ai-batch-bar" style="display:none">
             <span id="batchCount">已选 0 只</span>
-            <button class="btn btn-sm btn-primary" onclick="batchAnalyze()">🔄 批量分析</button>
+            <button class="btn btn-sm btn-primary" onclick="batchAnalyze()">批量分析</button>
             <button class="btn btn-sm" onclick="clearSelection()">取消</button>
         </div>
     </aside>
@@ -31,8 +31,8 @@
     <!-- 中栏 -->
     <main class="ai-center" id="aiCenter">
         <!-- 响应式切换按钮 -->
-        <button class="ai-toggle-left" id="toggleLeftBtn" onclick="toggleLeftPanel()" title="显示自选股">☰</button>
-        <button class="ai-toggle-right" id="toggleRightBtn" onclick="toggleRightPanel()" title="历史报告">📋</button>
+        <button class="ai-toggle-left" id="toggleLeftBtn" onclick="toggleLeftPanel()" title="显示自选股">自选</button>
+        <button class="ai-toggle-right" id="toggleRightBtn" onclick="toggleRightPanel()" title="历史报告">报告</button>
 
         <!-- ─── 顶部固定区：指数 + 控制 ─── -->
         <div class="ai-center-top" id="aiCenterTop">
@@ -44,26 +44,29 @@
             <!-- 深度分析控制 -->
             <div class="center-control">
                 <div class="center-control-row">
-                    <span class="control-label">🔬 深度分析</span>
+                    <span class="control-label">深度分析</span>
                     <label class="control-field">
                         <span class="control-field-label">分析深度</span>
                         <select id="depthSelect" class="control-select" onchange="setResearchDepth(this.value)">
-                            <option value="quick">⚡ 快速</option>
-                            <option value="standard" selected>📋 标准</option>
-                            <option value="deep">🔬 深度</option>
-                            <option value="custom">🛠️ 自定义</option>
+                            <option value="quick">快速</option>
+                            <option value="standard" selected>标准</option>
+                            <option value="deep">深度</option>
+                            <option value="custom">自定义</option>
                         </select>
                     </label>
                     <label class="control-field">
                         <span class="control-field-label">模型模式</span>
                         <select id="modelModeSelect" class="control-select" onchange="setModelMode(this.value)">
-                            <option value="economy">💰 经济</option>
-                            <option value="balanced" selected>⚖️ 均衡</option>
-                            <option value="flagship">👑 旗舰</option>
+                            <option value="economy">经济</option>
+                            <option value="balanced" selected>均衡</option>
+                            <option value="flagship">旗舰</option>
                         </select>
                     </label>
-                    <button id="btnStartAnalysis" class="btn btn-primary btn-start" onclick="startAnalysis()">🚀 开始分析</button>
+                    <button id="btnStartAnalysis" class="btn btn-primary btn-start" onclick="startAnalysis()">开始分析</button>
                     <span id="selectedStockInfo" class="selected-stock-info"></span>
+                </div>
+                <div id="aiReadinessPanel" class="ai-readiness-panel">
+                    <span>正在检查 AI 引擎配置...</span>
                 </div>
             </div>
         </div>
@@ -90,12 +93,12 @@
                 </div>
                 <div id="tokenStats" class="token-stats" style="margin-top:6px;font-size:0.8rem;color:var(--text-secondary);font-family:var(--font-mono);"></div>
                 <div id="cancelContainer" style="margin-top: 8px; display:none;">
-                    <button id="btnCancelAnalysis" class="btn btn-sm" style="color: #E07A5F; border: 1px solid #E07A5F;" onclick="cancelAnalysis()">✕ 取消分析</button>
+                    <button id="btnCancelAnalysis" class="btn btn-sm" style="color: #E07A5F; border: 1px solid #E07A5F;" onclick="cancelAnalysis()">取消分析</button>
                     <span id="queuePosition" class="text-muted" style="margin-left: 10px; font-size: 0.85em;"></span>
                 </div>
                 <div id="resumeContainer" style="margin-top: 8px; display:none;">
                     <span id="resumeError" style="color: #E07A5F; font-size: 0.85em; margin-right: 10px;"></span>
-                    <button class="btn btn-sm btn-primary" onclick="resumeAnalysis()">🔄 继续分析</button>
+                    <button class="btn btn-sm btn-primary" onclick="resumeAnalysis()">继续分析</button>
                 </div>
             </div>
 
@@ -109,10 +112,10 @@
                         <span id="reportFactBadge" class="report-signal" style="display:none"></span>
                     </div>
                     <div class="report-header-right">
-                        <button class="btn btn-sm" onclick="saveToGbrain()">📥 存入gbrain</button>
-                        <button class="btn btn-sm btn-primary" id="btnGenCondOrder" onclick="generateCondOrder()" style="display:none;">📋 条件单</button>
-                        <button class="btn btn-sm" onclick="downloadPdf()">📄 下载</button>
-                        <button class="btn btn-sm" onclick="closeReport()">✕ 关闭</button>
+                        <button class="btn btn-sm" onclick="saveToGbrain()">存入gbrain</button>
+                        <button class="btn btn-sm btn-primary" id="btnGenCondOrder" onclick="generateCondOrder()" style="display:none;">条件单</button>
+                        <button class="btn btn-sm" onclick="downloadPdf()">下载</button>
+                        <button class="btn btn-sm" onclick="closeReport()">关闭</button>
                     </div>
                 </div>
                 <!-- 报告导航 + 内容 -->
@@ -120,23 +123,23 @@
                     <div class="report-nav" id="reportNav">
                         <div class="nav-group">
                             <div class="nav-group-title">总览</div>
-                            <button class="nav-item active" data-target="overview" onclick="switchReportTab(this, 'overview')">📋 总览</button>
+                            <button class="nav-item active" data-target="overview" onclick="switchReportTab(this, 'overview')">总览</button>
                         </div>
                         <div class="nav-group">
                             <div class="nav-group-title">分析师</div>
-                            <button class="nav-item" data-target="market" onclick="switchReportTab(this, 'market')">📊 技术</button>
-                            <button class="nav-item" data-target="social" onclick="switchReportTab(this, 'social')">💬 情绪</button>
-                            <button class="nav-item" data-target="news" onclick="switchReportTab(this, 'news')">📰 新闻</button>
-                            <button class="nav-item" data-target="fundamentals" onclick="switchReportTab(this, 'fundamentals')">📋 基本面</button>
-                            <button class="nav-item" data-target="policy" onclick="switchReportTab(this, 'policy')">🏛️ 政策</button>
-                            <button class="nav-item" data-target="hot_money" onclick="switchReportTab(this, 'hot_money')">🔥 游资</button>
-                            <button class="nav-item" data-target="lockup" onclick="switchReportTab(this, 'lockup')">🔒 解禁</button>
+                            <button class="nav-item" data-target="market" onclick="switchReportTab(this, 'market')">技术</button>
+                            <button class="nav-item" data-target="social" onclick="switchReportTab(this, 'social')">情绪</button>
+                            <button class="nav-item" data-target="news" onclick="switchReportTab(this, 'news')">新闻</button>
+                            <button class="nav-item" data-target="fundamentals" onclick="switchReportTab(this, 'fundamentals')">基本面</button>
+                            <button class="nav-item" data-target="policy" onclick="switchReportTab(this, 'policy')">政策</button>
+                            <button class="nav-item" data-target="hot_money" onclick="switchReportTab(this, 'hot_money')">游资</button>
+                            <button class="nav-item" data-target="lockup" onclick="switchReportTab(this, 'lockup')">解禁</button>
                         </div>
                         <div class="nav-group">
                             <div class="nav-group-title">决策链</div>
-                            <button class="nav-item" data-target="debate" onclick="switchReportTab(this, 'debate')">⚔️ 辩论</button>
-                            <button class="nav-item" data-target="risk" onclick="switchReportTab(this, 'risk')">🛡️ 风控</button>
-                            <button class="nav-item" data-target="pm" onclick="switchReportTab(this, 'pm')">👔 决策</button>
+                            <button class="nav-item" data-target="debate" onclick="switchReportTab(this, 'debate')">辩论</button>
+                            <button class="nav-item" data-target="risk" onclick="switchReportTab(this, 'risk')">风控</button>
+                            <button class="nav-item" data-target="pm" onclick="switchReportTab(this, 'pm')">决策</button>
                         </div>
                         <div class="nav-group">
                             <div class="nav-group-title">报告验证</div>
@@ -145,10 +148,10 @@
                         </div>
                         <div class="nav-group">
                             <div class="nav-group-title">绩效</div>
-                            <button class="nav-item" data-target="performance" onclick="switchReportTab(this, 'performance')">📈 信号绩效</button>
+                            <button class="nav-item" data-target="performance" onclick="switchReportTab(this, 'performance')">信号绩效</button>
                         </div>
                         <div class="nav-group">
-                            <button class="nav-item nav-item-full" onclick="showFullReport()">📥 完整报告</button>
+                            <button class="nav-item nav-item-full" onclick="showFullReport()">完整报告</button>
                         </div>
                     </div>
                     <div class="report-content" id="reportContent"></div>
@@ -161,13 +164,85 @@
     <aside class="ai-right" id="aiRight">
         <div class="ai-right-header">
             <h3>辅助面板</h3>
-            <button class="btn btn-sm ai-panel-close" onclick="toggleRightPanel()" title="收起右栏">✕</button>
+            <button class="btn btn-sm ai-panel-close" onclick="toggleRightPanel()" title="收起右栏">收起</button>
         </div>
 
         <!-- 历史报告 -->
+        <div class="ai-section ai-right-section ai-task-center-section">
+            <div class="section-header">
+                <h3>AI任务中心</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="loadTaskCenter()">刷新</button>
+                </div>
+            </div>
+            <div id="aiTaskList" class="ai-task-list">
+                <div class="empty-row">暂无任务</div>
+            </div>
+        </div>
+
+        <div class="ai-section ai-right-section report-quality-section">
+            <div class="section-header">
+                <h3>报告质量复盘</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="loadReportQuality()">刷新</button>
+                </div>
+            </div>
+            <div id="reportQualityPanel" class="report-quality-panel">
+                <div class="empty-row">暂无质量数据</div>
+            </div>
+        </div>
+
+        <div class="ai-section ai-right-section">
+            <div class="section-header">
+                <h3>策略与任务复盘</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="loadStrategyReview()">刷新</button>
+                </div>
+            </div>
+            <div id="strategyReviewPanel" class="report-quality-panel">
+                <div class="empty-row">暂无复盘数据</div>
+            </div>
+        </div>
+
+        <div class="ai-section ai-right-section">
+            <div class="section-header">
+                <h3>版本与回测</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="loadReportVersions()">当前股票</button>
+                </div>
+            </div>
+            <div id="reportVersionsPanel" class="report-quality-panel">
+                <div class="empty-row">选择股票后查看报告版本</div>
+            </div>
+        </div>
+
+        <div class="ai-section ai-right-section">
+            <div class="section-header">
+                <h3>风险暴露</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="loadRiskExposure()">刷新</button>
+                </div>
+            </div>
+            <div id="riskExposurePanel" class="report-quality-panel">
+                <div class="empty-row">暂无风险数据</div>
+            </div>
+        </div>
+
+        <div class="ai-section ai-right-section">
+            <div class="section-header">
+                <h3>事件提醒</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="loadEventsPanel()">刷新</button>
+                </div>
+            </div>
+            <div id="eventsPanel" class="report-quality-panel">
+                <div class="empty-row">暂无事件</div>
+            </div>
+        </div>
+
         <div class="ai-section ai-right-section" id="reportsSection">
             <div class="section-header">
-                <h3>📋 历史报告</h3>
+                <h3>历史报告</h3>
                 <div class="section-actions">
                     <input id="reportSearch" type="text" class="form-input-sm" placeholder="搜索代码..." onkeyup="searchReports(event)">
                 </div>
@@ -181,5 +256,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai.js"></script>
+<script src="/static/js/ai-task-client.js?v=hermes-console-20260530"></script>
+<script src="/static/js/ai.js?v=hermes-console-20260530"></script>
 {% endblock %}

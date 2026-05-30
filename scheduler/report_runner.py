@@ -5,9 +5,11 @@ import logging
 import sqlite3
 from pathlib import Path
 
+from config import DB_PATH
+
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).parent.parent / "data" / "workbench.db"
+
 def _gbrain_save_report(slug: str, title: str, content: str):
     """Fire-and-forget gbrain write using subprocess (sync, called in thread)"""
     import subprocess
@@ -424,7 +426,7 @@ async def _trigger_l2_for_actionable_signals(results: list, report_type: str):
     """Trigger L2 deep analysis for stocks with actionable L1 signals.
     Only fires for BUY/SELL signals, or WATCH with |change%| >= 7.
     """
-    from api.ai_api import trigger_l2_for_stock
+    from services.ai_analysis_service import trigger_l2_for_stock
 
     trade_date = datetime.datetime.now().strftime('%Y-%m-%d')
     triggered = 0

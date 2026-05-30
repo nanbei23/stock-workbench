@@ -2,11 +2,10 @@
 import datetime
 import logging
 import sqlite3
-from pathlib import Path
+
+from config import DB_PATH
 
 logger = logging.getLogger(__name__)
-
-DB_PATH = Path(__file__).parent.parent / "data" / "workbench.db"
 
 
 def _get_db():
@@ -22,7 +21,7 @@ def _expire_old_orders():
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor = db.execute(
             "UPDATE conditional_orders SET status = 'expired' "
-            "WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < ?",
+            "WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at < ?",
             (now,)
         )
         if cursor.rowcount > 0:
@@ -42,7 +41,7 @@ async def _check_conditional_orders():
     try:
         # 1. 获取所有活跃条件单
         rows = db.execute(
-            "SELECT * FROM conditional_orders WHERE status = 'active'"
+            "SELECT * FROM conditional_orders WHERE status = 'pending'"
         ).fetchall()
 
         if not rows:
@@ -108,7 +107,7 @@ async def _check_conditional_orders():
 
 async def _trigger_l2_for_triggered_orders(triggered: list):
     """Auto-trigger L2 analysis for triggered conditional orders."""
-    from api.ai_api import trigger_l2_for_stock
+    from services.ai_analysis_service import trigger_l2_for_stock
     trade_date = datetime.datetime.now().strftime('%Y-%m-%d')
     for order in triggered:
         task_id = await trigger_l2_for_stock(order['code'], trade_date)

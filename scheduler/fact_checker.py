@@ -10,8 +10,9 @@ import json
 import logging
 import os
 import re
-import subprocess
 from datetime import datetime
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -115,36 +116,27 @@ def _call_verify_model(prompt: str, config: dict) -> dict | None:
         return None
 
     try:
-        payload = json.dumps({
-            "model": config["model"],
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 2000,
-            "temperature": 0.1,  # 极低温度，确保严谨
-        })
-        result = subprocess.run(
-            [
-                "curl", "-s", "-X", "POST", config["api_url"],
-                "-H", f"Authorization: Bearer {config['api_key']}",
-                "-H", "Content-Type: application/json",
-                "-d", payload,
-                "--max-time", "90",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=95,
+        resp = httpx.post(
+            config["api_url"],
+            headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+            json={
+                "model": config["model"],
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2000,
+                "temperature": 0.1,
+            },
+            timeout=90,
         )
-
-        if result.returncode != 0 or not result.stdout.strip():
-            logger.warning("旁观者模型curl失败: code=%s stderr=%s",
-                           result.returncode, result.stderr[:200])
+        if resp.status_code >= 400 or not resp.text.strip():
+            logger.warning("旁观者模型请求失败: status=%s body=%s", resp.status_code, resp.text[:200])
             return None
 
-        resp = json.loads(result.stdout)
-        if "choices" not in resp:
-            logger.warning("旁观者模型响应异常: %s", json.dumps(resp, ensure_ascii=False)[:300])
+        data = resp.json()
+        if "choices" not in data:
+            logger.warning("旁观者模型响应异常: %s", json.dumps(data, ensure_ascii=False)[:300])
             return None
 
-        content = resp["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
         # 提取JSON（可能被```json```包裹）
         json_match = re.search(r'\{[\s\S]*\}', content)
         if json_match:

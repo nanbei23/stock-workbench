@@ -12,11 +12,15 @@ def _get_sync_db():
 
 def record_trade(code6, trade_type, price, shares, note=''):
     """记录买入/卖出"""
+    amount = round(price * shares, 2)
     db = _get_sync_db()
     try:
         db.execute(
-            'INSERT INTO trades (code6, type, price, shares, note) VALUES (?, ?, ?, ?, ?)',
-            (code6, trade_type, price, shares, note)
+            '''
+            INSERT INTO trades (code, direction, price, shares, amount, total_cost, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (code6, trade_type, price, shares, amount, amount, note)
         )
         db.commit()
     finally:
@@ -28,7 +32,7 @@ def undo_last(code6):
     db = _get_sync_db()
     try:
         row = db.execute(
-            'SELECT id FROM trades WHERE code6 = ? ORDER BY id DESC LIMIT 1', (code6,)
+            'SELECT id FROM trades WHERE code = ? ORDER BY id DESC LIMIT 1', (code6,)
         ).fetchone()
         if row:
             db.execute('DELETE FROM trades WHERE id = ?', (row['id'],))
@@ -43,7 +47,7 @@ def clear_trades(code6):
     """清空某只股票的所有成交记录"""
     db = _get_sync_db()
     try:
-        db.execute('DELETE FROM trades WHERE code6 = ?', (code6,))
+        db.execute('DELETE FROM trades WHERE code = ?', (code6,))
         db.commit()
     finally:
         db.close()
@@ -54,7 +58,8 @@ def get_trades(code6):
     db = _get_sync_db()
     try:
         rows = db.execute(
-            'SELECT * FROM trades WHERE code = ? ORDER BY id ASC', (code6,)
+            'SELECT * FROM trades WHERE code = ? ORDER BY trade_time ASC, id ASC',
+            (code6,)
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -106,9 +111,7 @@ def get_portfolio_overview():
     """
     db = _get_sync_db()
     try:
-        codes = db.execute(
-            'SELECT DISTINCT code6 FROM trades'
-        ).fetchall()
+        codes = db.execute('SELECT DISTINCT code FROM trades').fetchall()
 
         total_value = 0.0
         total_cost = 0.0
@@ -116,7 +119,7 @@ def get_portfolio_overview():
         historical_pnl = 0.0
 
         for row in codes:
-            code6 = row['code6']
+            code6 = row['code']
             summary = get_position_summary(code6)
             total_cost += summary['cost_basis']
 
@@ -132,11 +135,11 @@ def get_portfolio_overview():
 
             # 历史已实现盈亏：所有卖出收入 - 对应成本
             sell_rows = db.execute(
-                "SELECT price, shares FROM trades WHERE code6 = ? AND type = 'sell'",
+                "SELECT price, shares FROM trades WHERE code = ? AND direction = 'sell'",
                 (code6,)
             ).fetchall()
             buy_rows = db.execute(
-                "SELECT price, shares FROM trades WHERE code6 = ? AND type = 'buy'",
+                "SELECT price, shares FROM trades WHERE code = ? AND direction = 'buy'",
                 (code6,)
             ).fetchall()
             total_bought_shares = sum(r['shares'] for r in buy_rows)

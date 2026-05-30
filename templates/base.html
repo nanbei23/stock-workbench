@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}炒股小牛马{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=home-polish-20260530">
     <!-- 赛博朋克主题 -->
     <link rel="stylesheet" href="/static/css/cyberpunk.css">
     <!-- 午夜主题 -->
@@ -14,7 +14,7 @@
     <!-- Orbitron字体（赛博朋克主题用） -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=api-ui-20260530"></script>
     <!-- marked.js — markdown渲染 -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     {% block head_extras %}{% endblock %}
@@ -41,7 +41,8 @@
             border-color: rgba(0,0,0,0.20);
         }
         .theme-switcher .theme-icon {
-            font-size: 1rem;
+            width: 22px;
+            height: 22px;
         }
         .theme-switcher .theme-name {
             font-size: 0.72rem;
@@ -53,24 +54,25 @@
 <body>
     <div class="app">
         <header class="banner">
-            <a href="/" class="logo">🐂 炒股小牛马</a>
+            <a href="/" class="logo"><span class="logo-mark">SW</span><span>炒股小牛马</span></a>
             <nav class="nav-tabs">
-                <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}">📊 自选股</a>
-                <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}">💼 持仓</a>
-                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}">🤖 AI分析台</a>
-                <a href="/performance" class="tab-btn {% if request.url.path == '/performance' %}active{% endif %}">📈 信号绩效</a>
-                <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}">⚙️ 设置</a>
+                <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}"><span class="ui-glyph" data-icon="WL"></span>自选股</a>
+                <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}"><span class="ui-glyph" data-icon="PF"></span>持仓</a>
+                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}"><span class="ui-glyph" data-icon="AI"></span>AI分析台</a>
+                <a href="/hermes" class="tab-btn {% if request.url.path == '/hermes' %}active{% endif %}"><span class="ui-glyph" data-icon="HC"></span>对话台</a>
+                <a href="/performance" class="tab-btn {% if request.url.path == '/performance' %}active{% endif %}"><span class="ui-glyph" data-icon="PX"></span>信号绩效</a>
+                <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}"><span class="ui-glyph" data-icon="ST"></span>设置</a>
             </nav>
             <select id="accountSwitcher" style="margin-left:auto;padding:4px 14px;border-radius:20px;font-size:0.75rem;font-weight:600;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);cursor:pointer;transition:all 0.2s;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22 fill=%22%23888%22><polygon points=%220,0 10,0 5,6%22/></svg>');background-repeat:no-repeat;background-position:right 8px center;padding-right:24px;">
               <option value="default">默认账户</option>
             </select>
             <div class="bell-wrapper" id="bellWrapper">
               <div class="notify-badge" id="bellBtn" onclick="toggleBellPanel()" title="异动监控">
-                🔔 <span id="bellBadge">0</span>
+                <span class="ui-glyph" data-icon="AL"></span><span id="bellBadge">0</span>
               </div>
             </div>
             <button class="theme-switcher" id="themeSwitcher" title="切换主题">
-                <span class="theme-icon" id="themeIcon">🎨</span>
+                <span class="theme-icon ui-glyph" id="themeIcon" data-icon="CY"></span>
                 <span class="theme-name" id="themeName">赛博</span>
             </button>
         </header>
@@ -81,23 +83,27 @@
         <!-- 移动端底部Tab栏（CSS media query控制显示） -->
         <nav class="mobile-tab-bar">
             <a href="/" class="mobile-tab-item {% if request.url.path == '/' %}active{% endif %}">
-                <span class="tab-icon">📊</span>
+                <span class="tab-icon" data-icon="WL"></span>
                 <span>自选股</span>
             </a>
             <a href="/portfolio" class="mobile-tab-item {% if request.url.path == '/portfolio' %}active{% endif %}">
-                <span class="tab-icon">💼</span>
+                <span class="tab-icon" data-icon="PF"></span>
                 <span>持仓</span>
             </a>
             <a href="/ai" class="mobile-tab-item {% if request.url.path == '/ai' %}active{% endif %}">
-                <span class="tab-icon">🤖</span>
+                <span class="tab-icon" data-icon="AI"></span>
                 <span>AI分析台</span>
             </a>
+            <a href="/hermes" class="mobile-tab-item {% if request.url.path == '/hermes' %}active{% endif %}">
+                <span class="tab-icon" data-icon="HC"></span>
+                <span>对话台</span>
+            </a>
             <a href="/performance" class="mobile-tab-item {% if request.url.path == '/performance' %}active{% endif %}">
-                <span class="tab-icon">📈</span>
+                <span class="tab-icon" data-icon="PX"></span>
                 <span>信号绩效</span>
             </a>
             <a href="/settings" class="mobile-tab-item {% if request.url.path == '/settings' %}active{% endif %}">
-                <span class="tab-icon">⚙️</span>
+                <span class="tab-icon" data-icon="ST"></span>
                 <span>设置</span>
             </a>
         </nav>
@@ -107,9 +113,9 @@
     <script>
     (function() {
         const THEMES = [
-            { id: 'cyberpunk', name: '赛博',   icon: '🌆' },
-            { id: 'midnight',  name: '午夜',   icon: '🌙' },
-            { id: 'sunny',     name: '阳光',   icon: '☀️' },
+            { id: 'cyberpunk', name: '赛博',   icon: 'CY' },
+            { id: 'midnight',  name: '午夜',   icon: 'MD' },
+            { id: 'sunny',     name: '阳光',   icon: 'SN' },
         ];
 
         function getTheme() {
@@ -129,7 +135,7 @@
             const t = THEMES.find(t => t.id === id) || THEMES[0];
             const iconEl = document.getElementById('themeIcon');
             const nameEl = document.getElementById('themeName');
-            if (iconEl) iconEl.textContent = t.icon;
+            if (iconEl) iconEl.dataset.icon = t.icon;
             if (nameEl) nameEl.textContent = t.name;
         }
 
@@ -155,10 +161,10 @@
     <div class="anomaly-modal-overlay" id="anomalyModal" style="display:none;" onclick="if(event.target===this)closeAnomalyModal()">
       <div class="anomaly-modal">
         <div class="anomaly-modal-header">
-          <h3>🔔 异动监控</h3>
+          <h3>异动监控</h3>
           <div class="anomaly-modal-actions">
             <button class="btn btn-sm btn-primary" onclick="triggerAllAnomalies()">全部检测</button>
-            <button class="btn btn-sm btn-ghost" onclick="closeAnomalyModal()">✕</button>
+            <button class="btn btn-sm btn-ghost" onclick="closeAnomalyModal()">关闭</button>
           </div>
         </div>
         <div id="anomalyModalList" class="anomaly-modal-list">
@@ -195,7 +201,7 @@
                 const data = await resp.json();
                 const anomalies = data.anomalies || [];
                 if (!anomalies.length) {
-                    list.innerHTML = '<div class="bell-empty">暂无异动 ✅</div>';
+                    list.innerHTML = '<div class="bell-empty">暂无异动</div>';
                     return;
                 }
                 const typeLabel = {
@@ -219,20 +225,22 @@
                 });
                 let html = '';
                 Object.values(grouped).forEach(g => {
+                    const code = escapeAttr(g.code || '');
                     html += `<div class="anomaly-group">
-                      <div class="anomaly-group-title" style="cursor:pointer;" onclick="closeAnomalyModal();window.location.href='/?code=${g.code}'">${g.name} <span style="color:var(--text-muted);font-size:0.75rem;">${g.code}</span> <span class="anomaly-group-count">${g.items.length}</span></div>`;
+                      <div class="anomaly-group-title" style="cursor:pointer;" onclick="closeAnomalyModal();window.location.href='/?code=${code}'">${escapeHtml(g.name)} <span style="color:var(--text-muted);font-size:0.75rem;">${escapeHtml(g.code)}</span> <span class="anomaly-group-count">${g.items.length}</span></div>`;
                     g.items.forEach(a => {
-                        const levelIcon = a.level === 'critical' ? '🔴' : a.level === 'warning' ? '🟡' : '🔵';
+                        const levelLabel = a.level === 'critical' ? '严重' : a.level === 'warning' ? '预警' : '关注';
+                        const levelClass = a.level === 'critical' ? 'level-critical' : a.level === 'warning' ? 'level-warning' : 'level-info';
                         const changeHtml = a.change_pct ? `<span class="${a.change_pct >= 0 ? 'up' : 'down'}" style="font-family:var(--font-mono);font-weight:600;">${a.change_pct >= 0 ? '+' : ''}${(a.change_pct||0).toFixed(2)}%</span>` : '';
-                        const timeStr = a.time ? (a.time.length > 5 ? a.time.slice(11, 19) || a.time : a.time) : '';
-                        const tLabel = typeLabel[a.anomaly_type] || a.anomaly_type || '';
-                        html += `<div class="anomaly-modal-item" style="cursor:pointer;" onclick="closeAnomalyModal();window.location.href='/?code=${g.code}'">
+                        const timeStr = a.time ? escapeHtml(a.time.length > 5 ? a.time.slice(11, 19) || a.time : a.time) : '';
+                        const tLabel = escapeHtml(typeLabel[a.anomaly_type] || a.anomaly_type || '');
+                        html += `<div class="anomaly-modal-item" style="cursor:pointer;" onclick="closeAnomalyModal();window.location.href='/?code=${code}'">
                           <div class="anomaly-modal-item-row">
-                            <span>${levelIcon} ${tLabel}</span>
+                            <span><span class="anomaly-level-badge ${levelClass}">${levelLabel}</span> ${tLabel}</span>
                             <span class="anomaly-modal-item-time">${timeStr}</span>
                           </div>
-                          <div class="anomaly-modal-item-msg">${a.message || ''} ${changeHtml}</div>
-                          ${a.l1_advice ? `<div class="anomaly-modal-item-advice">💡 ${a.l1_advice}</div>` : ''}
+                          <div class="anomaly-modal-item-msg">${escapeHtml(a.message || '')} ${changeHtml}</div>
+                          ${a.l1_advice ? `<div class="anomaly-modal-item-advice">建议：${escapeHtml(a.l1_advice)}</div>` : ''}
                         </div>`;
                     });
                     html += '</div>';
@@ -277,7 +285,7 @@
                             const tag = 'anomaly-' + a.code + '-' + (a.anomaly_type || '');
                             if (!notifiedTags.has(tag)) {
                                 notifiedTags.add(tag);
-                                new Notification('⚠️ ' + (a.name || a.code) + ' 异动', {
+                                new Notification((a.name || a.code) + ' 异动', {
                                     body: a.anomaly_type + ' ' + (a.message || ''),
                                     tag: tag,
                                 });

@@ -4,6 +4,12 @@ from pathlib import Path
 from config import DB_PATH
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -251,17 +257,128 @@ CREATE TABLE IF NOT EXISTS signal_tracking (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS analysis_tasks (
+    task_id TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    queue_status TEXT,
+    depth TEXT DEFAULT 'standard',
+    selected_analysts TEXT,
+    debate_rounds INTEGER,
+    risk_rounds INTEGER,
+    stages TEXT DEFAULT '{}',
+    result TEXT,
+    error TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    elapsed REAL,
+    payload TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS hermes_console_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    message TEXT NOT NULL,
+    draft_json TEXT,
+    result_json TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_signal_tracking_status ON signal_tracking(status);
 CREATE INDEX IF NOT EXISTS idx_tracking_code ON signal_tracking(code);
 CREATE INDEX IF NOT EXISTS idx_tracking_signal ON signal_tracking(signal);
 CREATE INDEX IF NOT EXISTS idx_tracking_date ON signal_tracking(signal_date);
+CREATE INDEX IF NOT EXISTS idx_trades_code_time ON trades(code, trade_time);
+CREATE INDEX IF NOT EXISTS idx_conditional_orders_status ON conditional_orders(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_conditional_orders_code_status ON conditional_orders(code, status);
+CREATE INDEX IF NOT EXISTS idx_analysis_reports_code_created ON analysis_reports(code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_anomaly_logs_code_created ON anomaly_logs(code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_cache_code_cached ON news_cache(code6, cached_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_cache_url ON news_cache(url);
+CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_updated ON analysis_tasks(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analysis_tasks_code_updated ON analysis_tasks(code, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hermes_console_session_created
+    ON hermes_console_events(session_id, created_at DESC);
 """
+
+MIGRATIONS = [
+    (
+        1,
+        "baseline_schema_tracking",
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+    ),
+    (
+        2,
+        "analysis_task_state",
+        """
+        CREATE TABLE IF NOT EXISTS analysis_tasks (
+            task_id TEXT PRIMARY KEY,
+            code TEXT NOT NULL,
+            name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            queue_status TEXT,
+            depth TEXT DEFAULT 'standard',
+            selected_analysts TEXT,
+            debate_rounds INTEGER,
+            risk_rounds INTEGER,
+            stages TEXT DEFAULT '{}',
+            result TEXT,
+            error TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            elapsed REAL,
+            payload TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_updated
+            ON analysis_tasks(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analysis_tasks_code_updated
+            ON analysis_tasks(code, updated_at DESC);
+        """,
+    ),
+]
+
+
+async def run_migrations(db):
+    """Apply ordered schema migrations idempotently."""
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    rows = await db.execute_fetchall("SELECT version FROM schema_migrations")
+    applied = {row[0] for row in rows}
+    for version, name, sql in MIGRATIONS:
+        if version in applied:
+            continue
+        await db.executescript(sql)
+        await db.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
+            (version, name),
+        )
+
 
 async def init_db():
     """初始化数据库，创建所有表"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.executescript(SCHEMA)
+        await run_migrations(db)
         await db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
         await db.commit()
     return True

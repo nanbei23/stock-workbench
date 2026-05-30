@@ -364,15 +364,15 @@
 
 {% block content %}
 <div class="settings-container">
-  <h2>⚙️ 设置</h2>
+  <h2>设置</h2>
 
   <!-- Tab栏 -->
   <div class="settings-tabs">
-    <button class="settings-tab active" onclick="switchSettingsTab(this, 'market')">📊 行情监控</button>
-    <button class="settings-tab" onclick="switchSettingsTab(this, 'ai')">🤖 AI引擎</button>
-    <button class="settings-tab" onclick="switchSettingsTab(this, 'notify')">🔔 通知</button>
-    <button class="settings-tab" onclick="switchSettingsTab(this, 'fee')">💰 费率</button>
-    <button class="settings-tab" onclick="switchSettingsTab(this, 'data')">💾 数据</button>
+    <button class="settings-tab active" onclick="switchSettingsTab(this, 'market')">行情监控</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'ai')">AI引擎</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'notify')">通知</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'fee')">费率</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'data')">数据</button>
   </div>
 
   <!-- 行情监控 -->
@@ -467,17 +467,17 @@
         <div class="setting-control">
           <div class="model-mode-group" id="modelModeGroup">
             <button class="model-mode-btn" data-mode="economy" onclick="setModelMode('economy')">
-              <span class="mode-icon">💰</span>
+              <span class="mode-icon">EC</span>
               <span class="mode-name">经济</span>
               <span class="mode-desc">全链路Flash</span>
             </button>
             <button class="model-mode-btn active" data-mode="balanced" onclick="setModelMode('balanced')">
-              <span class="mode-icon">⚖️</span>
+              <span class="mode-icon">BL</span>
               <span class="mode-name">均衡</span>
               <span class="mode-desc">Flash分析+Pro裁决</span>
             </button>
             <button class="model-mode-btn" data-mode="flagship" onclick="setModelMode('flagship')">
-              <span class="mode-icon">🚀</span>
+              <span class="mode-icon">FG</span>
               <span class="mode-name">旗舰</span>
               <span class="mode-desc">全链路Pro</span>
             </button>
@@ -485,64 +485,69 @@
           <input type="hidden" id="set-model_mode" value="balanced">
         </div>
       </div>
+      <input type="hidden" id="set-llm_provider" value="openai-compatible">
       <div class="setting-row">
         <div>
-          <div class="setting-label">LLM供应商</div>
-          <div class="setting-hint">选择AI推理引擎</div>
+          <div class="setting-label">名称</div>
+          <div class="setting-hint">根据 Base URL 自动生成，可手动调整</div>
         </div>
         <div class="setting-control">
-          <select class="setting-select" id="set-llm_provider" onchange="updateModelOptions()">
-            <option value="deepseek">DeepSeek</option>
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="qwen">通义千问</option>
-            <option value="glm">智谱GLM</option>
-            <option value="xai">xAI (Grok)</option>
-            <option value="minimax">MiniMax</option>
-            <option value="ollama">Ollama (本地)</option>
-            <option value="google">Google Gemini</option>
-          </select>
+          <input type="text" class="setting-input" id="set-llm_name" placeholder="根据 Base URL 自动生成" style="width: 360px;" oninput="this.dataset.generated='false'">
         </div>
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">深度思考模型</div>
-          <div class="setting-hint">用于分析推理（慢但深入）</div>
+          <div class="setting-label">Base URL <span class="required-star">*</span></div>
+          <div class="setting-hint">OpenAI 兼容服务地址，例如 https://api.example.com/v1</div>
         </div>
         <div class="setting-control">
-          <select class="setting-select" id="set-deep_think_model"></select>
+          <input type="text" class="setting-input" id="set-custom_endpoint" placeholder="例如 https://api.example.com/v1" style="width: 360px;" oninput="syncAiNameFromBaseUrl()">
         </div>
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">快速思考模型</div>
-          <div class="setting-hint">用于数据处理（快但简单）</div>
-        </div>
-        <div class="setting-control">
-          <select class="setting-select" id="set-quick_think_model"></select>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">API密钥</div>
-          <div class="setting-hint">留空则使用环境变量 DEEPSEEK_API_KEY</div>
+          <div class="setting-label">API Key <span class="required-star">*</span></div>
+          <div class="setting-hint">用于获取模型列表和执行AI分析</div>
         </div>
         <div class="setting-control">
           <div class="password-group">
             <input type="password" class="setting-input" id="set-api_key" placeholder="sk-...">
-            <button class="btn-icon" onclick="toggleApiKeyVisibility()">👁</button>
+            <button class="btn-icon" onclick="toggleApiKeyVisibility()">显示</button>
           </div>
         </div>
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">自定义API端点</div>
-          <div class="setting-hint">留空使用官方API，支持代理/私有部署（如 OneAPI / LiteLLM / OpenRouter）</div>
+          <div class="setting-label">快速思考模型 <span class="required-star">*</span></div>
+          <div class="setting-hint">用于数据处理和轻量判断，从 Base URL 模型列表选择</div>
         </div>
-        <div class="setting-control" style="display:flex;gap:8px;align-items:center;">
-          <input type="text" class="setting-input" id="set-custom_endpoint" placeholder="https://api.deepseek.com" style="width: 220px;">
-          <button class="btn-secondary" onclick="fetchRemoteModels()" id="fetchModelsBtn">🔍 获取模型</button>
+        <div class="setting-control verification-model-control">
+          <select class="setting-select" id="set-quick_think_model" style="flex:1;">
+            <option value="">请先获取模型列表</option>
+          </select>
+          <button type="button" class="btn-secondary" onclick="fetchRemoteModels()" id="fetchModelsBtn">获取</button>
           <span id="fetchModelsResult" class="test-result" style="font-size:12px;"></span>
+          <input type="hidden" id="set-llm_model_options">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">深度思考模型 <span class="required-star">*</span></div>
+          <div class="setting-hint">用于分析推理和最终裁决，使用同一 Base URL 模型列表</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-deep_think_model" style="width: 360px;">
+            <option value="">请先获取模型列表</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">上下文长度</div>
+          <div class="setting-hint">可选，例如 256000</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-llm_context_length" placeholder="例如 256000（可选）" min="0" step="1024" style="width: 220px;">
         </div>
       </div>
       <div class="setting-row">
@@ -597,14 +602,32 @@
       <div class="setting-row">
         <div></div>
         <div class="setting-control">
-          <button class="btn-test" onclick="testApiConnection()">🔌 测试连接</button>
+          <button class="btn-test" onclick="testApiConnection()">测试连接</button>
           <span class="test-result" id="testResult"></span>
         </div>
       </div>
     </div>
 
     <div class="setting-group">
-      <div class="setting-group-title">🔍 旁观者核对</div>
+      <div class="setting-group-title">模型配置池</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">保存当前AI引擎配置</div>
+          <div class="setting-hint">保存名称、Base URL、模型列表、快速/深度模型和上下文长度，供 AI 引擎与旁观者核对复用</div>
+        </div>
+        <div class="setting-control">
+          <button type="button" class="btn-secondary" onclick="saveCurrentModelProvider()">保存配置</button>
+          <button type="button" class="btn-secondary" onclick="saveVerificationModelProvider()">保存核对配置</button>
+          <button type="button" class="btn-secondary" onclick="loadModelProviders()">刷新</button>
+        </div>
+      </div>
+      <div id="modelProviderList" class="provider-list">
+        <div class="empty-state"><p>暂无模型配置</p></div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">旁观者核对</div>
       <div class="setting-row">
         <div>
           <div class="setting-label">启用旁观者核对</div>
@@ -617,45 +640,61 @@
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">核对模型</div>
-          <div class="setting-hint">推荐与分析模型不同的模型</div>
-        </div>
-        <div class="setting-control" style="display:flex;gap:8px;align-items:center;">
-          <select class="setting-select" id="set-verification_model" style="flex:1;" onchange="updateVerEndpointPlaceholder()">
-            <option value="mimo-v2.5-pro">MiMo v2.5 Pro</option>
-            <option value="deepseek-chat">DeepSeek Chat</option>
-            <option value="deepseek-reasoner">DeepSeek Reasoner</option>
-            <option value="custom">自定义模型</option>
-          </select>
-          <button class="btn-secondary" onclick="fetchVerificationModels()" id="fetchVerModelsBtn">🔍 获取模型</button>
-          <span id="fetchVerModelsResult" class="test-result" style="font-size:12px;"></span>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">核对API端点</div>
-          <div class="setting-hint">留空使用MiMo默认端点（如 OneAPI / LiteLLM / OpenRouter）</div>
+          <div class="setting-label">名称</div>
+          <div class="setting-hint">根据 Base URL 自动生成，可手动调整</div>
         </div>
         <div class="setting-control">
-          <input type="text" class="setting-input" id="set-verification_endpoint" placeholder="https://token-plan-cn.xiaomimimo.com/v1" style="width: 220px;">
+          <input type="text" class="setting-input" id="set-verification_name" placeholder="根据 Base URL 自动生成" style="width: 360px;" oninput="this.dataset.generated='false'">
         </div>
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">核对API密钥</div>
-          <div class="setting-hint">留空使用Hermes配置</div>
+          <div class="setting-label">Base URL <span class="required-star">*</span></div>
+          <div class="setting-hint">OpenAI 兼容服务地址，例如 https://api.example.com/v1</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-verification_endpoint" placeholder="例如 https://api.example.com/v1" style="width: 360px;" oninput="syncVerificationNameFromBaseUrl()">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">API Key <span class="required-star">*</span></div>
+          <div class="setting-hint">用于从 Base URL 获取模型列表和执行核对</div>
         </div>
         <div class="setting-control">
           <div style="display:flex;align-items:center;gap:6px">
             <input type="password" class="setting-input" id="set-verification_api_key" placeholder="sk-...">
-            <button type="button" class="pwd-toggle" id="btnToggleApiKey" onclick="toggleApiKey(this)" title="显示/隐藏">👁</button>
+            <button type="button" class="pwd-toggle" id="btnToggleApiKey" onclick="toggleApiKey(this)" title="显示/隐藏">显示</button>
           </div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">默认模型 <span class="required-star">*</span></div>
+          <div class="setting-hint">根据 Base URL 获取模型列表后选择</div>
+        </div>
+        <div class="setting-control verification-model-control">
+          <select class="setting-select" id="set-verification_model" style="flex:1;">
+            <option value="">请先获取模型列表</option>
+          </select>
+          <button type="button" class="btn-secondary" onclick="fetchVerificationModels()" id="fetchVerModelsBtn">获取</button>
+          <span id="fetchVerModelsResult" class="test-result" style="font-size:12px;"></span>
+          <input type="hidden" id="set-verification_model_options">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">上下文长度</div>
+          <div class="setting-hint">可选，例如 256000</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-verification_context_length" placeholder="例如 256000（可选）" min="0" step="1024" style="width: 220px;">
         </div>
       </div>
       <div class="setting-row">
         <div></div>
         <div class="setting-control">
-          <button class="btn-test" onclick="testVerificationConnection()">🔌 测试连接</button>
+          <button class="btn-test" onclick="testVerificationConnection()">测试连接</button>
           <span class="test-result" id="testVerificationResult"></span>
         </div>
       </div>
@@ -664,23 +703,23 @@
     <div class="setting-group">
       <div class="setting-group-title">AI调度计划</div>
       <div class="setting-row">
-        <div class="setting-label">📈 早盘开盘报告 (09:30)</div>
+        <div class="setting-label">早盘开盘报告 (09:30)</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_open_report"><span class="toggle-slider"></span></label>
       </div>
       <div class="setting-row">
-        <div class="setting-label">📊 上午收盘报告 (11:30)</div>
+        <div class="setting-label">上午收盘报告 (11:30)</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_am_close"><span class="toggle-slider"></span></label>
       </div>
       <div class="setting-row">
-        <div class="setting-label">📉 下午开盘报告 (13:00)</div>
+        <div class="setting-label">下午开盘报告 (13:00)</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_pm_open"><span class="toggle-slider"></span></label>
       </div>
       <div class="setting-row">
-        <div class="setting-label">🔔 下午收盘报告 (15:00)</div>
+        <div class="setting-label">下午收盘报告 (15:00)</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_close_report"><span class="toggle-slider"></span></label>
       </div>
       <div class="setting-row">
-        <div class="setting-label">⚡ 异动实时分析</div>
+        <div class="setting-label">异动实时分析</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_anomaly_realtime"><span class="toggle-slider"></span></label>
       </div>
     </div>
@@ -696,7 +735,7 @@
           <div class="setting-hint">需要浏览器授权通知权限</div>
         </div>
         <div class="setting-control">
-          <button class="btn-test" id="btnNotifyPerm" onclick="requestNotifyPermission()">🔔 请求权限</button>
+          <button class="btn-test" id="btnNotifyPerm" onclick="requestNotifyPermission()">请求权限</button>
           <label class="toggle">
             <input type="checkbox" id="set-browser_notify_enabled" onchange="onNotifyToggle(this)">
             <span class="toggle-slider"></span>
@@ -777,26 +816,57 @@
 
     <div class="setting-group">
       <div class="setting-group-title">导入/导出</div>
+      <div id="backupStatusPanel" class="backup-status-panel">
+        <div class="empty-state"><p>正在读取数据库状态...</p></div>
+      </div>
       <div class="data-actions">
-        <button class="btn-secondary" onclick="exportData()">📦 导出全部数据</button>
-        <button class="btn-secondary" onclick="document.getElementById('importFile').click()">📥 导入数据</button>
+        <button class="btn-secondary" onclick="exportData()">导出全部数据</button>
+        <button class="btn-secondary" onclick="document.getElementById('importFile').click()">导入数据</button>
+        <button class="btn-secondary" onclick="createBackup()">一键备份</button>
+        <button class="btn-secondary" onclick="restoreLatestBackup()">恢复最近备份</button>
         <input type="file" id="importFile" class="file-input" accept=".json" onchange="importData(this)">
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">数据健康检查</div>
+      <div id="systemDiagnosticsPanel" class="system-diagnostics-panel">
+        <div class="empty-state"><p>正在生成系统诊断...</p></div>
+      </div>
+      <div id="dataHealthPanel" class="data-health-panel">
+        <div class="empty-state"><p>正在检查数据...</p></div>
+      </div>
+      <div class="data-actions">
+        <button class="btn-secondary" onclick="loadSystemDiagnostics()">系统诊断</button>
+        <button class="btn-secondary" onclick="loadDataHealth()">重新检查</button>
+        <button class="btn-secondary" onclick="fixDataHealth()">一键修复可修复项</button>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">工作区模板</div>
+      <div id="workspaceTemplateList" class="workspace-template-list">
+        <div class="empty-state"><p>正在读取模板...</p></div>
+      </div>
+      <div class="data-actions">
+        <button class="btn-secondary" onclick="saveWorkspaceTemplate()">保存当前配置为模板</button>
+        <button class="btn-secondary" onclick="loadWorkspaceTemplates()">刷新模板</button>
       </div>
     </div>
 
     <div class="setting-group">
       <div class="setting-group-title">危险操作</div>
       <div class="data-actions">
-        <button class="btn-danger" onclick="confirmClearAll()">🗑 清空所有数据</button>
-        <button class="btn-secondary" onclick="resetSettings()">↩️ 重置设置为默认</button>
+        <button class="btn-danger" onclick="confirmClearAll()">清空所有数据</button>
+        <button class="btn-secondary" onclick="resetSettings()">重置设置为默认</button>
       </div>
     </div>
   </div>
 
   <!-- 底部保存栏 -->
   <div class="settings-actions">
-    <button class="btn-save" onclick="saveSettings()">💾 保存设置</button>
-    <button class="btn-secondary" onclick="loadSettings()">🔄 重新加载</button>
+    <button class="btn-save" onclick="saveSettings()">保存设置</button>
+    <button class="btn-secondary" onclick="loadSettings()">重新加载</button>
   </div>
 </div>
 
@@ -812,5 +882,5 @@
   </div>
 </div>
 
-<script src="/static/js/settings.js"></script>
+<script src="/static/js/settings.js?v=system-diagnostics-20260530"></script>
 {% endblock %}
