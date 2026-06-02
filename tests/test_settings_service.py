@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -140,6 +141,54 @@ class SettingsApiTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["status"], "ok")
+
+    def test_fetch_models_reports_connect_error_detail(self):
+        class FakeClient:
+            def __init__(self, timeout=None):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None):
+                raise httpx.ConnectError("nodename nor servname provided")
+
+        with patch("api.settings_api.httpx.AsyncClient", FakeClient):
+            resp = self.client.post(
+                "/api/settings/fetch-models",
+                json={"endpoint": "https://token-plan-cn.xiaomimimo.com/v1", "api_key": "sk-test"},
+            )
+
+        self.assertEqual(resp.status_code, 400)
+        detail = resp.json()["detail"]
+        self.assertIn("nodename nor servname provided", detail)
+        self.assertIn("代理", detail)
+
+    def test_fetch_models_rejects_empty_model_payload(self):
+        class FakeClient:
+            def __init__(self, timeout=None):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None):
+                return SimpleNamespace(status_code=200, json=lambda: {"data": []}, text='{"data":[]}')
+
+        with patch("api.settings_api.httpx.AsyncClient", FakeClient):
+            resp = self.client.post(
+                "/api/settings/fetch-models",
+                json={"endpoint": "https://api.example.com/v1", "api_key": "sk-test"},
+            )
+
+        self.assertEqual(resp.status_code, 502)
+        self.assertIn("未返回模型", resp.json()["detail"])
 
 
 if __name__ == "__main__":

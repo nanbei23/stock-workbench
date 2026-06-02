@@ -215,18 +215,37 @@ class FetchModelsReq(BaseModel):
     endpoint: str
     api_key: str = ""
 
+
+def _model_list_url(endpoint: str) -> str:
+    base = endpoint.rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/models"
+    if base.endswith("/models"):
+        return base
+    return f"{base}/v1/models"
+
+
+def _parse_model_ids(data) -> list[str]:
+    models = []
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        models = [m["id"] for m in data["data"] if isinstance(m, dict) and "id" in m]
+    elif isinstance(data, list):
+        models = [m if isinstance(m, str) else m.get("id", "") for m in data if isinstance(m, (str, dict))]
+    return sorted({m for m in models if m})
+
+
+def _connect_error_detail(url: str, exc: Exception) -> str:
+    reason = str(exc) or exc.__class__.__name__
+    return (
+        f"无法连接到模型接口 {url}：{reason}。"
+        "请检查 Base URL、部署机器网络、DNS、证书，以及 launchd/终端进程是否带有代理环境变量。"
+    )
+
+
 @router.post("/settings/fetch-models")
 async def fetch_models(req: FetchModelsReq):
     """从自定义API端点获取模型列表（兼容 OpenAI /v1/models 协议）"""
-    endpoint = req.endpoint.rstrip("/")
-    # 自动拼接 /v1/models（处理端点已含 /v1 的情况）
-    base = endpoint.rstrip("/")
-    if base.endswith("/v1"):
-        url = f"{base}/models"
-    elif base.endswith("/models"):
-        url = base
-    else:
-        url = f"{base}/v1/models"
+    url = _model_list_url(req.endpoint)
     headers = {}
     if req.api_key:
         headers["Authorization"] = f"Bearer {req.api_key}"
@@ -246,20 +265,16 @@ async def fetch_models(req: FetchModelsReq):
                     pass
                 raise HTTPException(resp.status_code, detail=f"模型接口返回 {resp.status_code}: {message}")
             data = resp.json()
-        # 解析 OpenAI 格式 {"data": [{"id": "model-name", ...}, ...]}
-        models = []
-        if isinstance(data, dict) and "data" in data:
-            models = [m["id"] for m in data["data"] if isinstance(m, dict) and "id" in m]
-        elif isinstance(data, list):
-            models = [m if isinstance(m, str) else m.get("id", "") for m in data]
-            models = [m for m in models if m]
-        return {"status": "ok", "models": sorted(models)}
+        models = _parse_model_ids(data)
+        if not models:
+            raise HTTPException(502, detail=f"模型接口已连接，但未返回模型列表: {str(data)[:200]}")
+        return {"status": "ok", "models": models}
     except HTTPException:
         raise
-    except httpx.ConnectError:
-        raise HTTPException(400, detail=f"无法连接到模型接口 {url}，请检查 Base URL 或网络")
+    except httpx.ConnectError as exc:
+        raise HTTPException(400, detail=_connect_error_detail(url, exc))
     except httpx.TimeoutException:
-        raise HTTPException(408, detail="连接超时")
+        raise HTTPException(408, detail=f"连接模型接口超时 {url}，请检查网络、代理或服务状态")
     except Exception as e:
         raise HTTPException(500, detail=f"获取模型失败: {str(e)}")
 
