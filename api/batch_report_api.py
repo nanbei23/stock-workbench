@@ -14,6 +14,7 @@ router = APIRouter(tags=["batch-research"])
 class BatchResearchCreatePayload(BaseModel):
     job_type: str = Field(default="report_generation")
     codes: list[str] = Field(default_factory=list)
+    report_ids: list[int] = Field(default_factory=list)
     group: str = "all"
     top_n: int = Field(default=0, ge=0)
     skip_recent_days: int = Field(default=30, ge=0)
@@ -23,6 +24,7 @@ class BatchResearchCreatePayload(BaseModel):
     analysis_concurrency: int = Field(default=1, ge=1, le=10)
     snapshot_model_tier: str = "deep"
     plan_top_n: int = Field(default=10, ge=1, le=50)
+    multi_role: bool = False
     trade_date: Optional[str] = None
     output_dir: Optional[Path] = None
 

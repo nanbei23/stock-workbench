@@ -84,6 +84,40 @@ def _load_watchlist_codes(group: str = "all", codes: list[str] | None = None) ->
     ]
 
 
+def _load_report_codes(report_ids: list[int]) -> list[dict[str, Any]]:
+    clean_ids = [int(report_id) for report_id in report_ids if int(report_id) > 0]
+    if not clean_ids:
+        return []
+    placeholders = ",".join("?" for _ in clean_ids)
+    order_expr = "CASE " + " ".join(f"WHEN ar.id = ? THEN {idx}" for idx, _ in enumerate(clean_ids)) + " END"
+    params: list[Any] = clean_ids + clean_ids
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT ar.id AS report_id,
+                   ar.code,
+                   COALESCE(w.name, ar.code) AS name,
+                   COALESCE(w.group_name, '默认') AS group_name,
+                   COALESCE(w.sort_order, 0) AS sort_order
+            FROM analysis_reports ar
+            LEFT JOIN watchlist w ON w.code = ar.code
+            WHERE ar.id IN ({placeholders})
+            ORDER BY {order_expr}
+            """,
+            params,
+        ).fetchall()
+    return [
+        {
+            "code": row["code"],
+            "name": row["name"] or row["code"],
+            "group_name": row["group_name"] or "默认",
+            "sort_order": int(row["sort_order"] or 0),
+            "report_id": int(row["report_id"]),
+        }
+        for row in rows
+    ]
+
+
 def _stock_candidate(item: dict[str, Any]) -> batch_research.StockCandidate:
     return batch_research.StockCandidate(
         item["code"],
@@ -301,6 +335,7 @@ async def create_research_job(
     *,
     job_type: str,
     codes: list[str] | None = None,
+    report_ids: list[int] | None = None,
     group: str = "all",
     top_n: int = 0,
     skip_recent_days: int = 30,
@@ -310,6 +345,7 @@ async def create_research_job(
     analysis_concurrency: int = 1,
     snapshot_model_tier: str = "deep",
     plan_top_n: int = 10,
+    multi_role: bool = False,
     trade_date: str | None = None,
     output_dir: Path | str | None = None,
     auto_start: bool = True,
@@ -317,7 +353,8 @@ async def create_research_job(
 ) -> dict[str, Any]:
     if job_type not in JOB_TYPES:
         raise HTTPException(400, f"未知批量任务类型: {job_type}")
-    stocks = _load_watchlist_codes(group, codes or None)
+    clean_report_ids = [int(report_id) for report_id in (report_ids or []) if int(report_id) > 0]
+    stocks = _load_report_codes(clean_report_ids) if job_type == "position_plan" and clean_report_ids else _load_watchlist_codes(group, codes or None)
     if top_n > 0:
         stocks = stocks[:top_n]
     if not stocks:
@@ -327,6 +364,7 @@ async def create_research_job(
         "job_type": job_type,
         "group": group,
         "codes": [stock["code"] for stock in stocks],
+        "report_ids": clean_report_ids,
         "top_n": top_n,
         "skip_recent_days": skip_recent_days,
         "refresh_snapshots": refresh_snapshots,
@@ -335,6 +373,7 @@ async def create_research_job(
         "analysis_concurrency": max(1, analysis_concurrency),
         "snapshot_model_tier": snapshot_model_tier,
         "plan_top_n": plan_top_n,
+        "multi_role": multi_role,
         "trade_date": trade_date or date.today().isoformat(),
         "output_dir": str(output_dir) if output_dir else str(Path("data") / "batch_research"),
         **extra,
@@ -406,7 +445,18 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
 async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
     stocks = [batch_research.StockCandidate(item["code"], item.get("name") or item["code"], "默认", 0) for item in items]
     output_dir = Path(payload.get("output_dir") or Path("data") / "batch_research")
-    plan = batch_research.build_position_plan(DB_PATH, stocks, top_n=int(payload.get("plan_top_n") or 10))
+    if payload.get("multi_role"):
+        config = batch_research._snapshot_llm_config(DB_PATH, model_tier=payload.get("snapshot_model_tier") or "deep")
+        plan = await batch_research.build_multi_role_position_plan(
+            DB_PATH,
+            stocks,
+            report_ids=payload.get("report_ids") or [],
+            top_n=int(payload.get("plan_top_n") or 10),
+            config=config,
+            timeout_seconds=int(payload.get("timeout_seconds") or 1800),
+        )
+    else:
+        plan = batch_research.build_position_plan(DB_PATH, stocks, top_n=int(payload.get("plan_top_n") or 10))
     outputs = batch_research.write_position_plan(output_dir, plan)
     reports = {item["code"]: item for item in plan.get("recommendations", []) if item.get("report_id")}
     for item in items:

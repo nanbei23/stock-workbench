@@ -1264,7 +1264,7 @@ async function createBatchResearchJob(type) {
     const labels = {
         data_prefetch: '创建七层数据预取任务？',
         report_generation: '创建快照报告生成任务？最近已有报告会自动跳过。',
-        position_plan: '基于已有报告生成建仓建议？'
+        position_plan: '基于已有完整报告生成组合级多角色建仓建议？'
     };
     if (!confirm(labels[type] || '创建批量任务？')) return;
     try {
@@ -1277,7 +1277,8 @@ async function createBatchResearchJob(type) {
             analysis_mode: 'snapshot',
             analysis_concurrency: 1,
             snapshot_model_tier: 'deep',
-            plan_top_n: 10
+            plan_top_n: 10,
+            multi_role: type === 'position_plan'
         };
         const resp = await aiTaskClient().createBatchResearch(payload);
         showToast(`批量任务已创建：${resp.job_id}`, 'success');

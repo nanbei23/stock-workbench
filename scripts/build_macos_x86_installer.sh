@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' "$ROOT_DIR/app_metadata.py" | head -n 1)"
-VERSION="${VERSION:-${DEFAULT_VERSION:-2.8.0}}"
+VERSION="${VERSION:-${DEFAULT_VERSION:-2.8.1}}"
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_DIR="$DIST_DIR/stock-workbench-v$VERSION-macos-x86"
 ARCHIVE="$DIST_DIR/stock-workbench-v$VERSION-macos-x86.tar.gz"

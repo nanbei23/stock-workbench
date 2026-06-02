@@ -155,6 +155,97 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["plan"]["missing_reports"], 1)
         self.assertTrue(result["outputs"]["markdown"].endswith(".md"))
 
+    async def test_position_plan_job_runs_multi_role_discussion_from_selected_full_reports(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                """
+                INSERT INTO analysis_reports
+                    (code, task_id, signal, confidence, risk_score,
+                     market_report, sentiment_report, news_report, fundamentals_report,
+                     investment_debate, risk_debate, final_decision, trader_plan, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                [
+                    (
+                        "000001",
+                        "r1",
+                        "BUY",
+                        0.82,
+                        24,
+                        "平安银行市场结构改善",
+                        "情绪稳定",
+                        "新闻无重大负面",
+                        "基本面稳健",
+                        "多方认为赔率改善",
+                        "保守派要求控制仓位",
+                        "最终建议分批买入",
+                        "回踩分批建仓",
+                    ),
+                    (
+                        "600519",
+                        "r2",
+                        "HOLD",
+                        0.61,
+                        55,
+                        "贵州茅台趋势震荡",
+                        "情绪分歧",
+                        "新闻偏中性",
+                        "基本面高质量但估值压力",
+                        "多空分歧较大",
+                        "风险经理提示估值风险",
+                        "最终建议观察",
+                        "等待突破再考虑",
+                    ),
+                ],
+            )
+            report_ids = [row[0] for row in db.execute("SELECT id FROM analysis_reports ORDER BY id ASC").fetchall()]
+            db.commit()
+
+        role_outputs = [
+            "组合经理：优先小仓位配置平安银行，贵州茅台观察。",
+            "风控经理：单票仓位不超过 10%，保留现金。",
+            "交易员：分两批执行，设置失效条件。",
+            "反方审查：警惕银行顺周期和白酒估值压力。",
+            json.dumps(
+                {
+                    "summary": "组合级讨论后建议轻仓试探平安银行，贵州茅台暂缓。",
+                    "actions": [
+                        {"code": "000001", "action": "buy", "suggested_amount": 12000.123, "position_pct": 4.737, "reason": "报告完整且多角色共识较高"},
+                        {"code": "600519", "action": "watch", "suggested_amount": 0, "position_pct": 0, "reason": "估值风险仍需等待"},
+                    ],
+                    "risk_controls": ["总仓位先控制在 10% 以内"],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+
+        with patch(
+            "services.batch_report_service.batch_research._call_position_plan_role_llm",
+            new=AsyncMock(side_effect=role_outputs),
+            create=True,
+        ) as call_role:
+            created = await batch_report_service.create_research_job(
+                job_type="position_plan",
+                report_ids=report_ids,
+                multi_role=True,
+                auto_start=False,
+                output_dir=Path(self.tmp.name),
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        result = json.loads(job["result_json"])
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual([item["code"] for item in job["items"]], ["000001", "600519"])
+        self.assertEqual(call_role.await_count, 5)
+        first_prompt = call_role.await_args_list[0].args[1]
+        self.assertIn("平安银行市场结构改善", first_prompt)
+        self.assertIn("贵州茅台趋势震荡", first_prompt)
+        self.assertTrue(result["plan"]["multi_role"])
+        self.assertEqual(len(result["plan"]["role_discussion"]), 5)
+        self.assertEqual(result["plan"]["recommendations"][0]["suggested_amount"], 12000.123)
+        self.assertIn("multi_role_position_plan", result["outputs"]["markdown"])
+
     async def test_retry_failed_resets_only_failed_items(self):
         created = await batch_report_service.create_research_job(
             job_type="report_generation",
@@ -208,6 +299,21 @@ class BatchResearchApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["job_id"], "job-1")
         create_job.assert_awaited_once()
+
+    def test_create_position_plan_route_forwards_selected_report_ids(self):
+        with patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(return_value={"job_id": "job-1", "status": "pending", "total_count": 2}),
+        ) as create_job:
+            resp = self.client.post(
+                "/api/batch-research/jobs",
+                json={"job_type": "position_plan", "report_ids": [10, 11], "multi_role": True},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        create_job.assert_awaited_once()
+        self.assertEqual(create_job.await_args.kwargs["report_ids"], [10, 11])
+        self.assertTrue(create_job.await_args.kwargs["multi_role"])
 
     def test_batch_reports_route_is_compatibility_wrapper(self):
         with patch(

@@ -883,11 +883,305 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
     }
 
 
+POSITION_PLAN_ROLES = [
+    ("portfolio_manager", "组合经理", "从收益目标、候选优先级和资金利用效率给出组合构建意见。"),
+    ("risk_manager", "风控经理", "从回撤、集中度、行业/风格拥挤和现金缓冲角度审查方案。"),
+    ("trader", "交易员", "把研究结论转成可执行的分批、触发、止损和失效条件。"),
+    ("skeptic", "反方审查", "主动寻找报告中的弱证据、冲突信号和可能被高估的确定性。"),
+    ("chair", "最终裁决", "综合前面角色观点，输出最终 JSON 建仓建议。"),
+]
+
+
+FULL_REPORT_COLUMNS = [
+    "market_report",
+    "sentiment_report",
+    "news_report",
+    "fundamentals_report",
+    "policy_report",
+    "hot_money_report",
+    "lockup_report",
+    "investment_debate",
+    "risk_debate",
+    "final_decision",
+    "trader_plan",
+    "raw_state",
+    "market_snapshot",
+    "fact_check",
+    "bystander_verify",
+]
+
+
+def _load_position_reports(db_path: Path, stocks: list[StockCandidate], report_ids: list[int] | None) -> list[sqlite3.Row]:
+    with _connect(db_path) as conn:
+        if report_ids:
+            clean_ids = [int(report_id) for report_id in report_ids if int(report_id) > 0]
+            if not clean_ids:
+                return []
+            placeholders = ",".join("?" for _ in clean_ids)
+            order_expr = "CASE " + " ".join(f"WHEN ar.id = ? THEN {idx}" for idx, _ in enumerate(clean_ids)) + " END"
+            return conn.execute(
+                f"""
+                SELECT ar.*, COALESCE(w.name, ar.code) AS watch_name, COALESCE(w.group_name, '默认') AS group_name
+                FROM analysis_reports ar
+                LEFT JOIN watchlist w ON w.code = ar.code
+                WHERE ar.id IN ({placeholders})
+                ORDER BY {order_expr}
+                """,
+                clean_ids + clean_ids,
+            ).fetchall()
+        codes = [stock.code for stock in stocks]
+        if not codes:
+            return []
+        placeholders = ",".join("?" for _ in codes)
+        rows = conn.execute(
+            f"""
+            SELECT ar.*, COALESCE(w.name, ar.code) AS watch_name, COALESCE(w.group_name, '默认') AS group_name
+            FROM analysis_reports ar
+            LEFT JOIN watchlist w ON w.code = ar.code
+            JOIN (
+                SELECT code, MAX(created_at) AS created_at
+                FROM analysis_reports
+                WHERE code IN ({placeholders})
+                GROUP BY code
+            ) latest ON latest.code = ar.code AND latest.created_at = ar.created_at
+            """,
+            codes,
+        ).fetchall()
+        by_code = {row["code"]: row for row in rows}
+        return [by_code[stock.code] for stock in stocks if by_code.get(stock.code)]
+
+
+def _report_context_block(row: sqlite3.Row) -> str:
+    lines = [
+        f"## {row['watch_name'] or row['code']} {row['code']} 报告 #{row['id']}",
+        f"- 信号：{row['signal'] or 'UNKNOWN'}",
+        f"- 置信度：{row['confidence']}",
+        f"- 风险评分：{row['risk_score']}",
+        f"- 深度/模式：{row['depth']} / {row['model_mode']}",
+        f"- 生成时间：{row['created_at']}",
+    ]
+    for column in FULL_REPORT_COLUMNS:
+        value = row[column] if column in row.keys() else ""
+        if value:
+            lines.extend(["", f"### {column}", str(value)])
+    return "\n".join(lines)
+
+
+def _position_discussion_prompt(
+    *,
+    role_name: str,
+    role_goal: str,
+    cash: float,
+    top_n: int,
+    report_context: str,
+    previous_discussion: list[dict[str, str]],
+) -> str:
+    previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
+    final_instruction = ""
+    if role_name == "最终裁决":
+        final_instruction = """
+
+最终裁决必须输出 JSON 对象，不要 Markdown。格式：
+{
+  "summary": "组合层面的最终结论",
+  "actions": [
+    {"code": "000001", "action": "buy|watch|avoid|sell", "suggested_amount": 0.0, "position_pct": 0.0, "reason": "理由", "entry_plan": "分批/触发/失效条件"}
+  ],
+  "risk_controls": ["组合级风险约束"]
+}
+"""
+    return f"""你正在参加 A 股组合建仓委员会。当前角色：{role_name}。
+角色目标：{role_goal}
+
+约束：
+- 只能基于下方已入库的完整 AI 报告内容和已有角色观点判断。
+- 不允许自行联网，不允许编造报告没有提供的数据。
+- 当前可用现金：{cash:.3f}
+- 最多给出 {top_n} 只买入候选。
+- 建仓建议不写库、不下单，只生成研究建议。
+- 金额和百分比保留三位小数。
+{final_instruction}
+
+已有角色讨论：
+{previous}
+
+完整报告上下文：
+{_clip_text(report_context, 60000)}
+"""
+
+
+async def _call_position_plan_role_llm(role: dict[str, str], prompt: str, config: dict[str, str], *, timeout_seconds: int) -> str:
+    if not config.get("base_url"):
+        raise RuntimeError("AI 引擎 Base URL 未配置，无法生成多角色建仓建议")
+    if not config.get("api_key"):
+        raise RuntimeError("AI 引擎 API Key 未配置，无法生成多角色建仓建议")
+    if not config.get("model"):
+        raise RuntimeError("AI 引擎模型未配置，无法生成多角色建仓建议")
+    async with httpx.AsyncClient(timeout=max(30, timeout_seconds)) as client:
+        resp = await client.post(
+            _chat_completions_url(config["base_url"]),
+            headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+            json={
+                "model": config["model"],
+                "messages": [
+                    {"role": "system", "content": f"你是{role['role_name']}，参与组合级多角色建仓讨论。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.25 if role["role_key"] != "chair" else 0.15,
+                "max_tokens": 5000,
+            },
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"多角色建仓建议模型请求失败 HTTP {resp.status_code}: {resp.text[:240]}")
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def _parse_position_plan_final(text: str) -> dict[str, Any]:
+    parsed = _parse_llm_json(text)
+    return parsed if isinstance(parsed, dict) else {"summary": str(text or ""), "actions": [], "risk_controls": []}
+
+
+def _multi_role_plan_items(
+    rows: list[sqlite3.Row],
+    final_payload: dict[str, Any],
+    deterministic_plan: dict[str, Any],
+) -> list[dict[str, Any]]:
+    by_code = {item["code"]: item for item in deterministic_plan.get("recommendations", [])}
+    actions = final_payload.get("actions") if isinstance(final_payload.get("actions"), list) else []
+    output: list[dict[str, Any]] = []
+    used: set[str] = set()
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        code = str(action.get("code") or "").strip()
+        if not code:
+            continue
+        base = dict(by_code.get(code) or {"code": code, "name": code, "score": 0.0})
+        used.add(code)
+        try:
+            suggested_amount = round(float(action.get("suggested_amount") or 0), 3)
+        except (TypeError, ValueError):
+            suggested_amount = 0.0
+        try:
+            position_pct = round(float(action.get("position_pct") or 0), 3)
+        except (TypeError, ValueError):
+            position_pct = 0.0
+        base.update(
+            {
+                "action": action.get("action") or base.get("action") or "watch",
+                "suggested_amount": suggested_amount,
+                "position_pct": position_pct,
+                "reason": action.get("reason") or base.get("reason") or "",
+                "entry_plan": action.get("entry_plan") or action.get("plan") or "",
+            }
+        )
+        output.append(base)
+    for row in rows:
+        if row["code"] not in used and row["code"] in by_code:
+            output.append(by_code[row["code"]])
+    return output
+
+
+def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row], *, top_n: int) -> dict[str, Any]:
+    with _connect(db_path) as conn:
+        cash = _cash_balance(conn)
+    items = [
+        _report_to_plan_item(
+            StockCandidate(row["code"], row["watch_name"] or row["code"], row["group_name"] or "默认", 0),
+            row,
+        )
+        for row in rows
+    ]
+    buyable = sorted(
+        [item for item in items if item.get("action") == "buy"],
+        key=lambda item: item["score"],
+        reverse=True,
+    )[:top_n]
+    watchers = sorted(
+        [item for item in items if item.get("action") != "buy"],
+        key=lambda item: item["score"],
+        reverse=True,
+    )
+    score_sum = sum(max(item["score"], 1.0) for item in buyable) or 1.0
+    max_single_amount = cash * 0.15 if cash > 0 else 0.0
+    for item in buyable:
+        raw_amount = cash * max(item["score"], 1.0) / score_sum
+        item["suggested_amount"] = round(min(raw_amount, max_single_amount), 3)
+        item["position_pct"] = round(item["suggested_amount"] / cash * 100, 3) if cash else 0.0
+    for item in watchers:
+        item["suggested_amount"] = 0.0
+        item["position_pct"] = 0.0
+    return {
+        "cash": cash,
+        "candidate_count": len(rows),
+        "available_reports": len(rows),
+        "missing_reports": 0,
+        "top_n": top_n,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "recommendations": buyable + watchers,
+        "notes": [
+            "建仓建议只基于已勾选并入库的 AI 分析报告生成，不自动写入交易流水或条件单。",
+            "单票建议金额默认不超过可用现金 15%，用于空仓后的分批建仓参考。",
+        ],
+    }
+
+
+async def build_multi_role_position_plan(
+    db_path: Path,
+    stocks: list[StockCandidate],
+    *,
+    report_ids: list[int] | None = None,
+    top_n: int = 10,
+    config: dict[str, str] | None = None,
+    timeout_seconds: int = 1800,
+) -> dict[str, Any]:
+    with _connect(db_path) as conn:
+        cash = _cash_balance(conn)
+    rows = _load_position_reports(db_path, stocks, report_ids)
+    if not rows:
+        raise RuntimeError("缺少可用于多角色建仓建议的完整报告")
+    deterministic_plan = _build_position_plan_from_report_rows(db_path, rows, top_n=top_n)
+    report_context = "\n\n".join(_report_context_block(row) for row in rows)
+    role_discussion: list[dict[str, str]] = []
+    llm_config = config or _snapshot_llm_config(db_path, model_tier="deep")
+    for role_key, role_name, role_goal in POSITION_PLAN_ROLES:
+        role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal}
+        prompt = _position_discussion_prompt(
+            role_name=role_name,
+            role_goal=role_goal,
+            cash=cash,
+            top_n=top_n,
+            report_context=report_context,
+            previous_discussion=role_discussion,
+        )
+        content = await _call_position_plan_role_llm(role, prompt, llm_config, timeout_seconds=timeout_seconds)
+        role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
+    final_payload = _parse_position_plan_final(role_discussion[-1]["content"])
+    recommendations = _multi_role_plan_items(rows, final_payload, deterministic_plan)
+    return {
+        **deterministic_plan,
+        "multi_role": True,
+        "selected_report_ids": [int(row["id"]) for row in rows],
+        "available_reports": len(rows),
+        "missing_reports": 0,
+        "summary": final_payload.get("summary") or "",
+        "risk_controls": final_payload.get("risk_controls") or [],
+        "role_discussion": role_discussion,
+        "recommendations": recommendations,
+        "notes": [
+            "建仓建议由组合经理、风控经理、交易员、反方审查和最终裁决多角色顺序讨论生成。",
+            "上下文仅包含已勾选并入库的完整 AI 报告内容，不自动写入交易流水或条件单。",
+        ],
+    }
+
+
 def write_position_plan(output_dir: Path, plan: dict[str, Any]) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    json_path = output_dir / f"position_plan_{stamp}.json"
-    md_path = output_dir / f"position_plan_{stamp}.md"
+    prefix = "multi_role_position_plan" if plan.get("multi_role") else "position_plan"
+    json_path = output_dir / f"{prefix}_{stamp}.json"
+    md_path = output_dir / f"{prefix}_{stamp}.md"
     json_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     lines = [
         "# 批量建仓建议",
@@ -908,6 +1202,15 @@ def write_position_plan(output_dir: Path, plan: dict[str, Any]) -> dict[str, str
         )
     lines.extend(["", "## 说明", ""])
     lines.extend(f"- {note}" for note in plan["notes"])
+    if plan.get("multi_role"):
+        if plan.get("summary"):
+            lines.extend(["", "## 最终裁决摘要", "", str(plan["summary"])])
+        if plan.get("risk_controls"):
+            lines.extend(["", "## 组合风控约束", ""])
+            lines.extend(f"- {item}" for item in plan["risk_controls"])
+        lines.extend(["", "## 多角色讨论", ""])
+        for item in plan.get("role_discussion") or []:
+            lines.extend([f"### {item.get('role_name')}", "", str(item.get("content") or ""), ""])
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"json": str(json_path), "markdown": str(md_path)}
 

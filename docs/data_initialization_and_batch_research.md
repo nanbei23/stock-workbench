@@ -1,6 +1,6 @@
 # 数据初始化与批量研究脚本
 
-适用版本：`v2.8.0`
+适用版本：`v2.8.1`
 
 初始化脚本用于自用场景下跳过页面初始化，直接从本地文件初始化数据库。批量研究从 `v2.8.0` 起同时支持页面后台任务和 CLI 脚本：页面适合日常观察进度、续跑和重试；CLI 适合部署机长任务和批处理。
 
@@ -169,11 +169,13 @@ POST /api/batch-research/jobs/{job_id}/retry-failed
 ```json
 {
   "job_type": "position_plan",
-  "group": "all",
-  "top_n": 0,
+  "report_ids": [101, 102, 103],
+  "multi_role": true,
   "plan_top_n": 10
 }
 ```
+
+`v2.8.1` 起，报告库里的建仓建议默认使用勾选报告的 `report_ids`。后端会读取这些报告的完整字段作为上下文，按组合经理、风控经理、交易员、反方审查、最终裁决五个角色顺序讨论，最后生成组合级建仓建议。未勾选报告不会进入上下文。
 
 旧接口 `/api/batch-reports` 仍保留兼容，但新功能以 `/api/batch-research` 为准。
 
@@ -258,6 +260,8 @@ data/batch_research/batch_research_*.json
 data/batch_research/batch_research_*.md
 data/batch_research/position_plan_*.json
 data/batch_research/position_plan_*.md
+data/batch_research/multi_role_position_plan_*.json
+data/batch_research/multi_role_position_plan_*.md
 ```
 
 真正提交 AI 后，单股 AI 报告仍按现有系统写入：

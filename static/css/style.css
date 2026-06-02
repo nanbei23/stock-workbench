@@ -6771,25 +6771,27 @@ body.dense-watch-mode .portfolio-container {
 /* ── AI报告库 ── */
 .report-library {
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(520px, 1fr) minmax(320px, 420px);
-  gap: 14px;
+  grid-template-columns: minmax(236px, 272px) minmax(560px, 1fr) minmax(340px, 420px);
+  gap: 12px;
   height: calc(100vh - var(--header-height, 56px) - 24px);
   padding: 12px;
   overflow: hidden;
+  background: var(--bg);
 }
 
 .report-library-filters,
 .report-library-main,
 .report-library-preview {
   min-height: 0;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-light);
   background: var(--bg-card);
   border-radius: 8px;
+  box-shadow: var(--shadow-card);
 }
 
 .report-library-filters,
 .report-library-preview {
-  padding: 14px;
+  padding: 12px;
   overflow: auto;
 }
 
@@ -6805,43 +6807,111 @@ body.dense-watch-mode .portfolio-container {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .library-panel-title h2,
 .library-panel-title h3,
 .library-toolbar h3 {
   margin: 0;
-  font-size: 1rem;
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .library-panel-title span,
 .library-toolbar p {
   margin: 4px 0 0;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.library-filter-stack {
+  display: grid;
+  gap: 10px;
 }
 
 .library-filter {
   display: grid;
-  gap: 6px;
-  margin-bottom: 12px;
+  gap: 5px;
 }
 
 .library-filter span {
   color: var(--text-secondary);
   font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.report-library .form-input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  padding: 7px 10px;
+}
+
+.report-library .form-input:focus {
+  border-color: var(--color-accent);
+  background: var(--bg-card);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(91,155,213,0.12);
+}
+
+.library-selection-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(91,155,213,0.18);
+  border-radius: 8px;
+  background: rgba(91,155,213,0.07);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.library-selection-summary strong {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1;
 }
 
 .library-actions {
   display: grid;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 12px;
+}
+
+.library-action-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.report-library .btn {
+  min-height: 34px;
+  border-radius: 8px;
+  justify-content: center;
+  font-size: 0.84rem;
+  line-height: 1;
+}
+
+.report-library .btn-sm {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.8rem;
 }
 
 .library-toolbar {
-  padding: 14px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-light);
+  background: linear-gradient(180deg, rgba(255,255,255,0.4), rgba(255,255,255,0));
 }
 
 .report-table-wrap {
@@ -6851,14 +6921,15 @@ body.dense-watch-mode .portfolio-container {
 
 .report-library-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.84rem;
 }
 
 .report-library-table th,
 .report-library-table td {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-light);
   text-align: left;
   white-space: nowrap;
 }
@@ -6869,22 +6940,41 @@ body.dense-watch-mode .portfolio-container {
   z-index: 1;
   background: var(--bg-card);
   color: var(--text-secondary);
-  font-size: 0.76rem;
-  font-weight: 600;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.report-library-table .select-col {
+  width: 40px;
+  text-align: center;
+}
+
+.report-library-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
 }
 
 .report-library-table tbody tr {
   cursor: pointer;
+  transition: background 0.16s ease, box-shadow 0.16s ease;
 }
 
 .report-library-table tbody tr:hover {
   background: var(--bg-hover);
 }
 
+.report-library-table tbody tr.selected {
+  background: rgba(91,155,213,0.08);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
 .report-library-table td strong {
   display: block;
   color: var(--text-primary);
   font-size: 0.88rem;
+  line-height: 1.25;
 }
 
 .report-library-table td span {
@@ -6895,12 +6985,14 @@ body.dense-watch-mode .portfolio-container {
 .report-preview-body {
   color: var(--text-secondary);
   line-height: 1.55;
+  font-size: 0.84rem;
 }
 
 .report-preview-body h4 {
   margin: 16px 0 8px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 700;
 }
 
 .preview-signal {
@@ -6909,16 +7001,27 @@ body.dense-watch-mode .portfolio-container {
   gap: 8px;
   align-items: center;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.preview-signal > span:not(.report-signal) {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
 }
 
 .preview-block {
   max-height: 260px;
   overflow: auto;
   padding: 10px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-light);
   border-radius: 8px;
-  background: rgba(255,255,255,0.03);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .preview-block p {
@@ -6927,8 +7030,16 @@ body.dense-watch-mode .portfolio-container {
 
 .preview-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
+}
+
+.library-empty-state {
+  padding: 28px 16px !important;
+  color: var(--text-secondary);
+  text-align: center !important;
+  font-size: 0.86rem;
 }
 
 @media (max-width: 1180px) {
@@ -6948,6 +7059,7 @@ body.dense-watch-mode .portfolio-container {
     flex-direction: column;
     height: auto;
     overflow: visible;
+    padding: 10px;
   }
 
   .report-library-filters,
@@ -6956,7 +7068,22 @@ body.dense-watch-mode .portfolio-container {
     overflow: visible;
   }
 
+  .library-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .library-toolbar,
+  .library-panel-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .report-table-wrap {
     overflow-x: auto;
+  }
+
+  .report-library-table th,
+  .report-library-table td {
+    padding: 9px 10px;
   }
 }

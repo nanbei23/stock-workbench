@@ -54,13 +54,14 @@
 
     async function loadReportLibrary() {
         const tbody = document.getElementById('reportLibraryRows');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty-row">正在加载...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">正在加载...</td></tr>';
         try {
             const data = await requestJson('/api/ai/reports?limit=500');
             reports = data.reports || [];
             filterReportLibrary();
         } catch (err) {
-            if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="empty-row">加载失败：${escapeHtml(err.message)}</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`;
+            updateSelectionSummary();
         }
     }
 
@@ -91,18 +92,31 @@
         renderReportRows();
     }
 
+    function updateSelectionSummary() {
+        const selectedCount = document.getElementById('selectedReportCount');
+        if (selectedCount) selectedCount.textContent = String(selected.size);
+        const selectAll = document.getElementById('reportSelectAll');
+        if (!selectAll) return;
+        const visibleIds = filtered.map(report => Number(report.id));
+        const visibleSelected = visibleIds.filter(id => selected.has(id)).length;
+        selectAll.checked = Boolean(visibleIds.length && visibleSelected === visibleIds.length);
+        selectAll.indeterminate = Boolean(visibleSelected && visibleSelected < visibleIds.length);
+    }
+
     function renderReportRows() {
         const countEl = document.getElementById('reportLibraryCount');
         if (countEl) countEl.textContent = `${filtered.length} / ${reports.length} 份`;
         const tbody = document.getElementById('reportLibraryRows');
         if (!tbody) return;
         if (!filtered.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty-row">没有符合条件的报告</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">没有符合条件的报告</td></tr>';
+            updateSelectionSummary();
             return;
         }
         tbody.innerHTML = filtered.map(report => {
             const signal = report.signal || 'HOLD';
-            return `<tr onclick="previewReport(${Number(report.id)})">
+            const id = Number(report.id);
+            return `<tr class="${selected.has(id) ? 'selected' : ''}" onclick="previewReport(${id})">
                 <td onclick="event.stopPropagation()"><input type="checkbox" data-report-id="${Number(report.id)}" ${selected.has(Number(report.id)) ? 'checked' : ''} onchange="toggleReportSelection(${Number(report.id)}, this.checked)"></td>
                 <td><strong>${escapeHtml(report.name || report.code)}</strong><span>${escapeHtml(report.code)}</span></td>
                 <td><span class="report-signal signal-${escapeHtml(signal.toLowerCase().replace(/_/g, '-'))}">${escapeHtml(SIG_LABEL[signal] || signal)}</span></td>
@@ -113,13 +127,14 @@
                 <td>${escapeHtml(formatTime(report.created_at))}</td>
             </tr>`;
         }).join('');
+        updateSelectionSummary();
     }
 
     async function previewReport(id) {
         const meta = document.getElementById('reportPreviewMeta');
         const body = document.getElementById('reportPreview');
         if (meta) meta.textContent = `#${id}`;
-        if (body) body.innerHTML = '<div class="empty-row">加载报告...</div>';
+        if (body) body.innerHTML = '<div class="library-empty-state">加载报告...</div>';
         try {
             const report = await requestJson(`/api/ai/reports/${encodeURIComponent(id)}`);
             if (meta) meta.textContent = `${report.name || report.code || ''} ${report.code || ''}`;
@@ -142,7 +157,7 @@
                 </div>
             `;
         } catch (err) {
-            if (body) body.innerHTML = `<div class="empty-row">加载失败：${escapeHtml(err.message)}</div>`;
+            if (body) body.innerHTML = `<div class="library-empty-state">加载失败：${escapeHtml(err.message)}</div>`;
         }
     }
 
@@ -155,6 +170,7 @@
     function toggleReportSelection(id, checked) {
         if (checked) selected.add(id);
         else selected.delete(id);
+        renderReportRows();
     }
 
     function toggleAllReports(checked) {
@@ -167,14 +183,14 @@
     }
 
     async function createPlanFromReportLibrary() {
-        const codes = [...new Set(filtered.filter(report => selected.size === 0 || selected.has(Number(report.id))).map(report => report.code))];
-        if (!codes.length) return alert('没有可用于生成建议的报告');
+        if (!selected.size) return alert('请先勾选要进入组合级讨论的完整报告');
+        const reportIds = [...selected];
         const resp = await requestJson('/api/batch-research/jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ job_type: 'position_plan', codes, plan_top_n: 10 })
+            body: JSON.stringify({ job_type: 'position_plan', report_ids: reportIds, multi_role: true, plan_top_n: 10 })
         });
-        alert(`建仓建议任务已创建：${resp.job_id}`);
+        alert(`多角色建仓建议任务已创建：${resp.job_id}`);
     }
 
     function exportReportLibrary(type) {

@@ -22,7 +22,7 @@ npm ci
 ```bash
 python -m compileall app.py api models repositories scheduler services schemas scripts tests
 python -m unittest discover tests
-python -m py_compile scripts/init_from_files.py scripts/batch_research.py
+python -m py_compile scripts/init_from_files.py scripts/batch_research.py scripts/clear_report_data.py
 node --check static/js/hermes.js
 node --check static/js/shadow.js
 node --check static/js/ai-task-client.js static/js/ai.js static/js/reports.js
@@ -66,7 +66,9 @@ Check release scripts:
 
 - [ ] `.venv312/bin/python scripts/init_from_files.py --help`
 - [ ] `.venv312/bin/python scripts/batch_research.py --help`
+- [ ] `.venv312/bin/python scripts/clear_report_data.py --help`
 - [ ] `.venv312/bin/python scripts/init_from_files.py --watchlist <file> --trades <file> --cash <cash> --reset` dry-run does not write the database.
+- [ ] `.venv312/bin/python scripts/clear_report_data.py` dry-run reports counts without deleting rows.
 - [ ] `.venv312/bin/python scripts/batch_research.py --group 默认 --top-n 5` dry-run does not submit AI tasks.
 - [ ] `.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --data-only --apply` writes validated seven-layer snapshots before AI submission.
 - [ ] `.venv312/bin/python scripts/batch_research.py --group 默认 --top-n 5 --analysis-mode snapshot --apply` reuses complete snapshots and writes reports without TradingAgents online data calls.
@@ -86,6 +88,6 @@ Check release scripts:
 
 ```bash
 git add .
-git commit -m "Release v2.8.0"
-git tag v2.8.0
+git commit -m "Release v2.8.1"
+git tag v2.8.1
 ```

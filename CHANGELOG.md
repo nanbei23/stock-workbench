@@ -4,6 +4,21 @@
 
 No unreleased changes.
 
+## 2.8.1 - 2026-06-02
+
+### Added
+
+- Added portfolio-level multi-role position-plan generation from selected full AI reports.
+- Added selected `report_ids` support to `/api/batch-research/jobs` so the report library can pass exact checked reports as context.
+- Added `scripts/clear_report_data.py` to clear generated AI reports, AI tasks, signal tracking, and batch job records while preserving seven-layer snapshots and business data.
+- Added regression coverage for forwarding selected report IDs and generating multi-role position plans from full report content.
+
+### Changed
+
+- Changed the report-library position-plan action to require checked reports and create a multi-role discussion job.
+- Changed the AI page position-plan action to use the multi-role portfolio discussion path.
+- Updated release metadata, package metadata, installer badge, and frontend cache versions to `2.8.1`.
+
 ## 2.8.0 - 2026-06-02
 
 ### Added
