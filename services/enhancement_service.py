@@ -18,6 +18,7 @@ from data.signal import get_hot_reasons, get_industry_ranking
 
 
 MODEL_PROVIDERS_KEY = "model_providers"
+WORKER_POOL_KEY = "batch_worker_pool"
 WORKSPACE_TEMPLATES_KEY = "workspace_templates"
 
 
@@ -97,6 +98,35 @@ def _public_settings(settings: dict):
     if "verification_api_key" in public:
         public["verification_api_key"] = "********" if public["verification_api_key"] else ""
     return public
+
+
+def _normalize_worker_pool_worker(worker: dict, index: int) -> dict:
+    provider_ids = [str(item).strip() for item in worker.get("provider_ids") or [] if str(item).strip()]
+    model_tier = worker.get("model_tier") if worker.get("model_tier") in {"quick", "deep"} else "deep"
+    worker_id = (worker.get("id") or worker.get("name") or f"worker-{index + 1}").strip()
+    return {
+        "id": re.sub(r"[^A-Za-z0-9_.-]+", "-", worker_id).strip("-") or f"worker-{index + 1}",
+        "name": worker.get("name") or worker_id or f"Worker {index + 1}",
+        "enabled": bool(worker.get("enabled", True)),
+        "provider_ids": provider_ids,
+        "model_tier": model_tier,
+        "sleep_seconds": max(1, _safe_int(worker.get("sleep_seconds"), 5)),
+        "stale_minutes": max(1, _safe_int(worker.get("stale_minutes"), 15)),
+    }
+
+
+def get_worker_pool_config():
+    settings = _settings()
+    workers = _loads(settings.get(WORKER_POOL_KEY), [])
+    normalized = [_normalize_worker_pool_worker(worker, index) for index, worker in enumerate(workers) if isinstance(worker, dict)]
+    return {"count": len(normalized), "workers": normalized}
+
+
+def save_worker_pool_config(payload: dict):
+    workers = payload.get("workers") if isinstance(payload, dict) else []
+    normalized = [_normalize_worker_pool_worker(worker, index) for index, worker in enumerate(workers or []) if isinstance(worker, dict)]
+    settings_repository.upsert_settings({WORKER_POOL_KEY: _dumps(normalized)})
+    return {"status": "ok", "count": len(normalized), "workers": normalized}
 
 
 def save_model_provider(payload: dict):

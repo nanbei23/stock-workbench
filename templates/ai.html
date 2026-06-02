@@ -184,15 +184,33 @@
             <div class="section-header">
                 <h3>批量研究</h3>
                 <div class="section-actions">
-                    <button class="btn btn-sm" onclick="createBatchResearchJob('data_prefetch')">预取数据</button>
-                    <button class="btn btn-sm btn-primary" onclick="createBatchResearchJob('report_generation')">生成报告</button>
+                    <button class="btn btn-sm" onclick="createBatchResearchJob('data_prefetch')">预取所选数据</button>
+                    <button class="btn btn-sm btn-primary" onclick="createBatchResearchJob('report_generation')">生成所选报告</button>
                 </div>
+            </div>
+            <div class="batch-research-controls">
+                <label class="batch-research-control">
+                    <span>分析深度</span>
+                    <select id="batchDepthSelect" class="control-select">
+                        <option value="quick">快速</option>
+                        <option value="standard" selected>标准</option>
+                        <option value="deep">深度</option>
+                    </select>
+                </label>
+                <label class="batch-research-control">
+                    <span>模型模式</span>
+                    <select id="batchModelModeSelect" class="control-select">
+                        <option value="economy">经济</option>
+                        <option value="balanced" selected>均衡</option>
+                        <option value="flagship">旗舰</option>
+                    </select>
+                </label>
             </div>
             <div id="batchResearchPanel" class="report-quality-panel">
                 <div class="empty-row">暂无批量任务</div>
             </div>
             <div class="section-actions" style="margin-top:8px;justify-content:space-between">
-                <button class="btn btn-sm" onclick="createBatchResearchJob('position_plan')">生成多角色建仓建议</button>
+                <button class="btn btn-sm" onclick="createBatchResearchJob('position_plan')">用所选股票生成建仓建议</button>
                 <a class="btn btn-sm" href="/reports">进入报告库</a>
             </div>
         </div>
@@ -274,6 +292,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-task-client.js?v=2.9.0"></script>
-<script src="/static/js/ai.js?v=2.9.0"></script>
+<script src="/static/js/ai-task-client.js?v=2.9.1"></script>
+<script src="/static/js/ai.js?v=2.9.1"></script>
 {% endblock %}

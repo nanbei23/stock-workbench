@@ -33,14 +33,22 @@ async def main() -> None:
     parser.add_argument("--sleep", type=float, default=5.0, help="seconds to sleep when no job is available")
     parser.add_argument("--worker-id", default=f"batch-worker-{os.getpid()}", help="worker id shown in job runtime state")
     parser.add_argument("--stale-minutes", type=int, default=15, help="mark running jobs stale after this heartbeat gap")
+    parser.add_argument("--model-provider-ids", default="", help="comma-separated model provider ids for this worker pool")
+    parser.add_argument("--model-tier", choices=["quick", "deep"], default=None, help="force quick/deep model tier for this worker")
     args = parser.parse_args()
+    provider_ids = [item.strip() for item in args.model_provider_ids.split(",") if item.strip()]
 
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
     await init_db()
 
     while not _STOP:
-        result = await batch_report_service.run_worker_once(worker_id=args.worker_id, stale_minutes=args.stale_minutes)
+        result = await batch_report_service.run_worker_once(
+            worker_id=args.worker_id,
+            stale_minutes=args.stale_minutes,
+            model_provider_ids=provider_ids,
+            model_tier=args.model_tier,
+        )
         print(result, flush=True)
         if args.once:
             break

@@ -15,6 +15,7 @@ class BatchResearchCreatePayload(BaseModel):
     job_type: str = Field(default="report_generation")
     codes: list[str] = Field(default_factory=list)
     report_ids: list[int] = Field(default_factory=list)
+    allow_all: bool = False
     group: str = "all"
     top_n: int = Field(default=0, ge=0)
     skip_recent_days: int = Field(default=30, ge=0)
@@ -22,6 +23,8 @@ class BatchResearchCreatePayload(BaseModel):
     snapshot_concurrency: int = Field(default=3, ge=1, le=10)
     analysis_mode: str = "snapshot-tradingagents"
     analysis_concurrency: int = Field(default=1, ge=1, le=10)
+    analysis_depth: str = "standard"
+    model_mode: str = "balanced"
     snapshot_model_tier: str = "deep"
     debate_rounds: int = Field(default=1, ge=1, le=5)
     risk_rounds: int = Field(default=1, ge=1, le=5)
@@ -49,6 +52,7 @@ class BatchReportCreatePayload(BaseModel):
     codes: list[str] = Field(default_factory=list)
     group: str = "all"
     depth: str = "standard"
+    model_mode: str = "balanced"
     debate_rounds: Optional[int] = 1
     risk_rounds: Optional[int] = 1
     batch_size: int = Field(default=2, ge=1, le=10)
@@ -135,7 +139,9 @@ async def create_batch_report(payload: BatchReportCreatePayload):
         skip_recent_days=30,
         analysis_mode="snapshot",
         analysis_concurrency=max(1, min(int(data.get("batch_size") or 1), 10)),
-        snapshot_model_tier="deep",
+        analysis_depth=data.get("depth") or "standard",
+        model_mode=data.get("model_mode") or "balanced",
+        snapshot_model_tier="quick" if data.get("model_mode") == "economy" or data.get("depth") == "quick" else "deep",
         trade_date=data.get("trade_date"),
     )
 

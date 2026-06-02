@@ -222,6 +222,7 @@ async function batchAnalyze() {
         const resp = await aiTaskClient().batchReport({
             codes,
             depth: currentDepth,
+            model_mode: currentModelMode,
             debate_rounds: dc.debate_rounds,
             risk_rounds: dc.risk_rounds,
             batch_size: 2
@@ -322,6 +323,21 @@ function getActiveDepthConfig() {
         };
     }
     return DEPTH_CONFIG[currentDepth] || DEPTH_CONFIG.standard;
+}
+
+function getBatchResearchOptions() {
+    const depth = document.getElementById('batchDepthSelect')?.value || 'standard';
+    const modelMode = document.getElementById('batchModelModeSelect')?.value || 'balanced';
+    const modelTier = modelMode === 'economy' ? 'quick' : (depth === 'quick' ? 'quick' : 'deep');
+    const depthLabel = { quick: '快速', standard: '标准', deep: '深度' };
+    const modelModeLabel = { economy: '经济', balanced: '均衡', flagship: '旗舰' };
+    return {
+        depth,
+        modelMode,
+        modelTier,
+        depthLabel: depthLabel[depth] || depth,
+        modelModeLabel: modelModeLabel[modelMode] || modelMode
+    };
 }
 
 async function startAnalysis() {
@@ -1261,27 +1277,40 @@ async function loadBatchResearchJobs() {
 }
 
 async function createBatchResearchJob(type) {
+    const codes = getSelectedCodes();
+    const batchOptions = getBatchResearchOptions();
+    if (!codes.length) {
+        const list = document.getElementById('aiStockList');
+        const btn = document.getElementById('batchToggleBtn');
+        list?.classList.add('batch-active');
+        btn?.classList.add('active');
+        updateBatchBar();
+        return alert('请先在左侧自选股列表勾选要进入批量任务的股票');
+    }
     const labels = {
-        data_prefetch: '创建七层数据预取任务？',
-        report_generation: '创建快照报告生成任务？最近已有报告会自动跳过。',
-        position_plan: '基于已有完整报告生成组合级多角色建仓建议？'
+        data_prefetch: `为已选 ${codes.length} 只股票创建七层数据预取任务？`,
+        report_generation: `为已选 ${codes.length} 只股票创建${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}快照报告生成任务？最近已有报告会自动跳过。`,
+        position_plan: `基于已选 ${codes.length} 只股票的已有完整报告生成${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}组合级多角色建仓建议？`
     };
     if (!confirm(labels[type] || '创建批量任务？')) return;
     try {
         const payload = {
             job_type: type,
-            group: 'all',
-            top_n: 0,
+            codes,
+            allow_all: false,
             skip_recent_days: type === 'data_prefetch' ? 0 : 30,
             snapshot_concurrency: 3,
             analysis_mode: type === 'report_generation' ? 'snapshot-tradingagents' : 'snapshot',
             analysis_concurrency: 1,
-            snapshot_model_tier: 'deep',
+            analysis_depth: batchOptions.depth,
+            model_mode: batchOptions.modelMode,
+            snapshot_model_tier: batchOptions.modelTier,
             plan_top_n: 10,
             multi_role: type === 'position_plan'
         };
         const resp = await aiTaskClient().createBatchResearch(payload);
         showToast(`批量任务已创建：${resp.job_id}`, 'success');
+        clearSelection();
         await loadBatchResearchJobs();
     } catch(e) {
         showToast('创建批量任务失败: ' + e.message, 'error');

@@ -41,6 +41,20 @@ class ApplyProviderPayload(BaseModel):
     target: str = "ai"
 
 
+class WorkerPoolWorkerPayload(BaseModel):
+    id: str | None = ""
+    name: str | None = ""
+    enabled: bool = True
+    provider_ids: list[str] | None = None
+    model_tier: str | None = "deep"
+    sleep_seconds: int | None = 5
+    stale_minutes: int | None = 15
+
+
+class WorkerPoolConfigPayload(BaseModel):
+    workers: list[WorkerPoolWorkerPayload] = []
+
+
 class BacktestPayload(BaseModel):
     code: str
     condition_type: str = "price_lte"
@@ -80,6 +94,16 @@ async def refresh_model_provider(provider_id: str):
 @router.post("/model-providers/{provider_id}/test")
 async def test_model_provider(provider_id: str):
     return await enhancement_service.test_model_provider(provider_id)
+
+
+@router.get("/worker-pool/config")
+async def get_worker_pool_config():
+    return enhancement_service.get_worker_pool_config()
+
+
+@router.post("/worker-pool/config")
+async def save_worker_pool_config(payload: WorkerPoolConfigPayload):
+    return enhancement_service.save_worker_pool_config(payload.model_dump())
 
 
 @router.get("/ai/report-versions/{code}")

@@ -9,6 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_SCRIPT = ROOT / "scripts" / "migrate_2_8_1_to_2_9.py"
 DEPLOY_SCRIPT = ROOT / "scripts" / "deploy_macos_x86.sh"
 BUILD_INSTALLER_SCRIPT = ROOT / "scripts" / "build_macos_x86_installer.sh"
+AI_JS = ROOT / "static" / "js" / "ai.js"
+AI_TEMPLATE = ROOT / "templates" / "ai.html"
+BATCH_WORKER_SCRIPT = ROOT / "scripts" / "run_batch_worker.py"
+WORKER_POOL_SCRIPT = ROOT / "scripts" / "run_batch_worker_pool.py"
+SETTINGS_JS = ROOT / "static" / "js" / "settings.js"
+SETTINGS_TEMPLATE = ROOT / "templates" / "settings.html"
 
 
 def load_migration_module():
@@ -42,6 +48,44 @@ class ReleaseMigrationTests(unittest.TestCase):
 
         self.assertIn("--exclude 'data/batch_research'", source)
         self.assertIn("--exclude 'logs'", source)
+
+    def test_ai_batch_research_requires_selected_codes(self):
+        js = AI_JS.read_text(encoding="utf-8")
+        html = AI_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("const codes = getSelectedCodes();", js)
+        self.assertIn("function getBatchResearchOptions()", js)
+        self.assertIn("请先在左侧自选股列表勾选", js)
+        self.assertIn("codes,", js)
+        self.assertIn("allow_all: false", js)
+        self.assertIn("analysis_depth: batchOptions.depth", js)
+        self.assertIn("model_mode: batchOptions.modelMode", js)
+        self.assertIn("snapshot_model_tier: batchOptions.modelTier", js)
+        self.assertNotIn("group: 'all',\n            top_n: 0", js)
+        self.assertNotIn("snapshot_model_tier: 'deep'", js)
+        self.assertIn('id="batchDepthSelect"', html)
+        self.assertIn('id="batchModelModeSelect"', html)
+        self.assertIn("生成所选报告", html)
+
+    def test_batch_worker_supports_model_provider_pool(self):
+        content = BATCH_WORKER_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("--model-provider-ids", content)
+        self.assertIn("--model-tier", content)
+        self.assertIn("model_provider_ids=provider_ids", content)
+
+    def test_worker_pool_has_config_script_and_settings_ui(self):
+        script = WORKER_POOL_SCRIPT.read_text(encoding="utf-8")
+        js = SETTINGS_JS.read_text(encoding="utf-8")
+        html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("get_worker_pool_config", script)
+        self.assertIn("subprocess.Popen", script)
+        self.assertIn("asyncio.run(init_db())", script)
+        self.assertNotIn("init_db_sync", script)
+        self.assertIn("/worker-pool/config", js)
+        self.assertIn("saveWorkerPoolConfig", js)
+        self.assertIn("workerPoolList", html)
 
     def test_migration_script_upgrades_2_8_1_database(self):
         module = load_migration_module()

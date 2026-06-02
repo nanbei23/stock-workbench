@@ -71,6 +71,38 @@ class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings["deep_think_model"], "deep")
         self.assertEqual(settings["llm_model_options"], '["fast", "deep"]')
 
+    async def test_worker_pool_config_saves_enabled_workers(self):
+        result = enhancement_service.save_worker_pool_config({
+            "workers": [
+                {
+                    "id": "mimo-deep",
+                    "name": "MiMo 深度池",
+                    "enabled": True,
+                    "provider_ids": ["mimo", "deepseek"],
+                    "model_tier": "deep",
+                    "sleep_seconds": 3,
+                    "stale_minutes": 20,
+                },
+                {
+                    "id": "",
+                    "name": "",
+                    "enabled": False,
+                    "provider_ids": [],
+                    "model_tier": "invalid",
+                },
+            ]
+        })
+
+        loaded = enhancement_service.get_worker_pool_config()
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(loaded["workers"][0]["id"], "mimo-deep")
+        self.assertEqual(loaded["workers"][0]["provider_ids"], ["mimo", "deepseek"])
+        self.assertEqual(loaded["workers"][0]["model_tier"], "deep")
+        self.assertEqual(loaded["workers"][0]["sleep_seconds"], 3)
+        self.assertEqual(loaded["workers"][0]["stale_minutes"], 20)
+        self.assertEqual(loaded["workers"][1]["model_tier"], "deep")
+
     async def test_model_provider_save_can_apply_to_verification_settings(self):
         enhancement_service.save_model_provider({
             "id": "p-verifier",

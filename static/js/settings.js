@@ -4,6 +4,8 @@
 const API_BASE = '/api';
 
 let currentSettings = {};
+let modelProviderCache = [];
+let workerPoolRows = [];
 
 // ── Tab切换 ──
 function switchSettingsTab(btn, section) {
@@ -520,8 +522,10 @@ async function loadModelProviders() {
         const resp = await fetch(`${API_BASE}/model-providers`);
         const data = await resp.json();
         const providers = data.providers || [];
+        modelProviderCache = providers;
         if (!providers.length) {
             el.innerHTML = '<div class="empty-state"><p>暂无模型配置</p></div>';
+            renderWorkerPoolRows();
             return;
         }
         el.innerHTML = providers.map(p => `<div class="quality-report-row">
@@ -535,8 +539,106 @@ async function loadModelProviders() {
             <button class="btn-secondary" onclick="applyModelProvider('${escapeAttr(p.id)}','verification')">用于核对</button>
             <button class="btn-secondary" onclick="deleteModelProvider('${escapeAttr(p.id)}')">删除</button>
         </div>`).join('');
+        renderWorkerPoolRows();
     } catch (e) {
         el.innerHTML = `<div class="empty-state"><p>模型配置读取失败：${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+function providerCheckboxes(selected = []) {
+    const selectedSet = new Set(selected || []);
+    if (!modelProviderCache.length) {
+        return '<span class="text-muted">请先保存模型配置</span>';
+    }
+    return modelProviderCache.map(provider => `<label class="worker-provider-option">
+        <input type="checkbox" value="${escapeAttr(provider.id)}" ${selectedSet.has(provider.id) ? 'checked' : ''}>
+        <span>${escapeHtml(provider.name || provider.id)}</span>
+    </label>`).join('');
+}
+
+function renderWorkerPoolRows() {
+    const el = document.getElementById('workerPoolList');
+    if (!el) return;
+    if (!workerPoolRows.length) {
+        el.innerHTML = '<div class="empty-state"><p>暂无 Worker 配置</p></div>';
+        return;
+    }
+    el.innerHTML = workerPoolRows.map((worker, index) => `<div class="worker-pool-row" data-index="${index}">
+        <label class="worker-enabled"><input type="checkbox" data-field="enabled" ${worker.enabled !== false ? 'checked' : ''}>启用</label>
+        <input class="setting-input" data-field="id" value="${escapeAttr(worker.id || '')}" placeholder="worker-id">
+        <input class="setting-input" data-field="name" value="${escapeAttr(worker.name || '')}" placeholder="显示名称">
+        <select class="setting-select" data-field="model_tier">
+            <option value="deep" ${(worker.model_tier || 'deep') === 'deep' ? 'selected' : ''}>深度模型</option>
+            <option value="quick" ${worker.model_tier === 'quick' ? 'selected' : ''}>快速模型</option>
+        </select>
+        <input class="setting-input" type="number" min="1" step="1" data-field="sleep_seconds" value="${escapeAttr(worker.sleep_seconds || 5)}" placeholder="轮询秒">
+        <input class="setting-input" type="number" min="1" step="1" data-field="stale_minutes" value="${escapeAttr(worker.stale_minutes || 15)}" placeholder="超时分钟">
+        <div class="worker-provider-list">${providerCheckboxes(worker.provider_ids || [])}</div>
+        <button class="btn-secondary" onclick="removeWorkerPoolRow(${index})">删除</button>
+    </div>`).join('');
+}
+
+async function loadWorkerPoolConfig() {
+    try {
+        const resp = await fetch(`${API_BASE}/worker-pool/config`);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '读取失败');
+        workerPoolRows = data.workers || [];
+        renderWorkerPoolRows();
+    } catch (e) {
+        toast('error', 'Worker 配置读取失败: ' + e.message);
+    }
+}
+
+function addWorkerPoolRow() {
+    const next = workerPoolRows.length + 1;
+    workerPoolRows.push({
+        id: `worker-${next}`,
+        name: `Worker ${next}`,
+        enabled: true,
+        provider_ids: [],
+        model_tier: 'deep',
+        sleep_seconds: 5,
+        stale_minutes: 15,
+    });
+    renderWorkerPoolRows();
+}
+
+function removeWorkerPoolRow(index) {
+    workerPoolRows.splice(index, 1);
+    renderWorkerPoolRows();
+}
+
+function collectWorkerPoolRows() {
+    return Array.from(document.querySelectorAll('#workerPoolList .worker-pool-row')).map(row => {
+        const field = name => row.querySelector(`[data-field="${name}"]`);
+        return {
+            id: field('id')?.value?.trim() || '',
+            name: field('name')?.value?.trim() || '',
+            enabled: !!field('enabled')?.checked,
+            model_tier: field('model_tier')?.value || 'deep',
+            sleep_seconds: Number(field('sleep_seconds')?.value || 5),
+            stale_minutes: Number(field('stale_minutes')?.value || 15),
+            provider_ids: Array.from(row.querySelectorAll('.worker-provider-list input:checked')).map(input => input.value),
+        };
+    });
+}
+
+async function saveWorkerPoolConfig() {
+    try {
+        const payload = {workers: collectWorkerPoolRows()};
+        const resp = await fetch(`${API_BASE}/worker-pool/config`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '保存失败');
+        workerPoolRows = data.workers || [];
+        renderWorkerPoolRows();
+        toast('success', 'Worker 模型池配置已保存');
+    } catch (e) {
+        toast('error', 'Worker 配置保存失败: ' + e.message);
     }
 }
 
@@ -934,6 +1036,7 @@ loadSettings();
 loadAccountList();
 loadBackupStatus();
 loadModelProviders();
+loadWorkerPoolConfig();
 loadHermesToolPolicy();
 loadDataAudit();
 loadDataHealth();
@@ -1013,6 +1116,10 @@ Object.assign(window, {
     refreshModelProvider,
     testModelProvider,
     deleteModelProvider,
+    loadWorkerPoolConfig,
+    addWorkerPoolRow,
+    removeWorkerPoolRow,
+    saveWorkerPoolConfig,
     loadHermesToolPolicy,
     saveHermesToolPolicy,
     loadDataAudit,

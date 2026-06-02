@@ -44,6 +44,7 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_endpoint', 'https://api.example.com/v1')")
             db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('api_key', 'sk-test')")
+            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('quick_think_model', 'model-quick')")
             db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('deep_think_model', 'model-deep')")
             db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('cash_balance_default', '253375.680')")
             db.commit()
@@ -90,6 +91,26 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["000001"], "skipped")
         self.assertEqual(statuses["000002"], "completed")
         fetch.assert_awaited_once()
+
+    async def test_batch_research_rejects_implicit_all_watchlist_without_selection(self):
+        with self.assertRaises(Exception) as ctx:
+            await batch_report_service.create_research_job(
+                job_type="report_generation",
+                auto_start=False,
+            )
+
+        self.assertIn("请先选择股票", str(ctx.exception))
+
+    async def test_batch_research_all_watchlist_requires_explicit_allow_all(self):
+        created = await batch_report_service.create_research_job(
+            job_type="data_prefetch",
+            allow_all=True,
+            auto_start=False,
+        )
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        self.assertEqual(job["total_count"], 3)
+        self.assertEqual(sorted(item["code"] for item in job["items"]), ["000001", "000002", "600519"])
 
     async def test_report_generation_skips_recent_report_and_waits_for_snapshot(self):
         self._insert_snapshot("000001", "平安银行")
@@ -163,9 +184,92 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         call_single.assert_not_awaited()
         with sqlite3.connect(self.db_path) as db:
             row = db.execute("SELECT depth, model_mode, raw_state FROM analysis_reports WHERE code='000001'").fetchone()
-        self.assertEqual(row[0], "snapshot_tradingagents")
-        self.assertEqual(row[1], "snapshot_tradingagents")
+        self.assertEqual(row[0], "standard")
+        self.assertEqual(row[1], "balanced")
         self.assertIn("snapshot_tradingagents_state", json.loads(row[2]))
+
+    async def test_report_generation_preserves_selected_depth_and_model_mode(self):
+        self._insert_snapshot("000001", "平安银行")
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.8,
+            "risk_score": 28,
+            "final_decision": "评级：BUY",
+            "trader_plan": "分批建仓",
+        }
+        with patch("services.batch_report_service.batch_research._call_snapshot_llm", new=AsyncMock(return_value=llm_result)):
+            created = await batch_report_service.create_research_job(
+                job_type="report_generation",
+                codes=["000001"],
+                skip_recent_days=0,
+                analysis_mode="snapshot",
+                analysis_depth="quick",
+                model_mode="economy",
+                snapshot_model_tier="quick",
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        with sqlite3.connect(self.db_path) as db:
+            payload_row = db.execute("SELECT payload_json FROM batch_jobs WHERE job_id = ?", (created["job_id"],)).fetchone()
+            row = db.execute("SELECT depth, model_mode, raw_state FROM analysis_reports WHERE code='000001'").fetchone()
+        payload = json.loads(payload_row[0])
+        self.assertEqual(payload["analysis_depth"], "quick")
+        self.assertEqual(payload["model_mode"], "economy")
+        self.assertEqual(payload["snapshot_model_tier"], "quick")
+        self.assertEqual(row[0], "quick")
+        self.assertEqual(row[1], "economy")
+        self.assertEqual(json.loads(row[2])["model"], "model-quick")
+
+    async def test_worker_model_provider_pool_overrides_primary_model(self):
+        self._insert_snapshot("000001", "平安银行")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('model_providers', ?)",
+                (
+                    json.dumps(
+                        [
+                            {
+                                "id": "fast",
+                                "name": "Fast Pool",
+                                "base_url": "https://fast.example.com/v1",
+                                "api_key": "sk-fast",
+                                "default_model": "fast-default",
+                                "quick_model": "fast-quick",
+                                "deep_model": "fast-deep",
+                            }
+                        ],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.commit()
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.8,
+            "risk_score": 28,
+            "final_decision": "评级：BUY",
+            "trader_plan": "分批建仓",
+        }
+        with patch("services.batch_report_service.batch_research._call_snapshot_llm", new=AsyncMock(return_value=llm_result)) as call_llm:
+            created = await batch_report_service.create_research_job(
+                job_type="report_generation",
+                codes=["000001"],
+                skip_recent_days=0,
+                analysis_mode="snapshot",
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(
+                created["job_id"],
+                worker_id="fast-worker",
+                worker_model_provider_ids=["fast"],
+                worker_model_tier="quick",
+            )
+
+        self.assertEqual(call_llm.await_args.args[1]["model"], "fast-quick")
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute("SELECT raw_state FROM analysis_reports WHERE code='000001'").fetchone()
+        self.assertEqual(json.loads(row[0])["model"], "fast-quick")
 
     async def test_snapshot_tradingagents_resume_uses_completed_role_steps(self):
         self._insert_snapshot("000001", "平安银行")
@@ -562,7 +666,7 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         first = batch_report_service.claim_next_job(worker_id="worker-a", lease_seconds=60)
-        second = batch_report_service.claim_next_job(worker_id="worker-b", lease_seconds=60)
+        second = batch_report_service.claim_next_job(worker_id="worker-b", lease_seconds=60, cooperative=False)
 
         self.assertEqual(first["job_id"], created["job_id"])
         self.assertIsNone(second)
@@ -591,6 +695,64 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(reclaimed["job_id"], created["job_id"])
         self.assertEqual(batch_report_service.get_research_job(created["job_id"])["lease_owner"], "worker-b")
+
+    async def test_worker_can_join_running_report_job_with_pending_items(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+
+        first = batch_report_service.claim_next_job(worker_id="worker-a", lease_seconds=60)
+        joined = batch_report_service.claim_next_job(worker_id="worker-b", lease_seconds=60)
+
+        self.assertEqual(first["job_id"], created["job_id"])
+        self.assertEqual(joined["job_id"], created["job_id"])
+        runtime = json.loads(batch_report_service.get_research_job(created["job_id"])["runtime_json"])
+        self.assertIn("worker-b", runtime["cooperative_workers"])
+
+    async def test_item_leases_split_work_between_workers(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+
+        first = batch_report_service._claim_runnable_items(
+            created["job_id"],
+            worker_id="worker-a",
+            lease_token="lease-a",
+            limit=1,
+        )
+        second = batch_report_service._claim_runnable_items(
+            created["job_id"],
+            worker_id="worker-b",
+            lease_token="lease-b",
+            limit=1,
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first[0]["id"], second[0]["id"])
+        items = batch_report_service.get_research_items(created["job_id"])["items"]
+        leases = {item["code"]: item["lease_owner"] for item in items}
+        self.assertEqual(set(leases.values()), {"worker-a", "worker-b"})
+
+    async def test_finalize_lock_can_only_be_claimed_once(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001"],
+            auto_start=False,
+        )
+
+        first = batch_report_service._try_claim_finalize(created["job_id"])
+        second = batch_report_service._try_claim_finalize(created["job_id"])
+        batch_report_service._mark_finalize_completed(created["job_id"], status="completed")
+        runtime = json.loads(batch_report_service.get_research_job(created["job_id"])["runtime_json"])
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(runtime["finalize"]["state"], "completed")
 
     async def test_guard_pause_stops_batch_after_consecutive_failures(self):
         self._insert_snapshot("000001", "平安银行")

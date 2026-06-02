@@ -625,6 +625,20 @@
       <div id="modelProviderList" class="provider-list">
         <div class="empty-state"><p>暂无模型配置</p></div>
       </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">批量 Worker 模型池</div>
+          <div class="setting-hint">保存后可用 scripts/run_batch_worker_pool.py 一次启动多个 worker</div>
+        </div>
+        <div class="setting-control">
+          <button type="button" class="btn-secondary" onclick="addWorkerPoolRow()">新增 Worker</button>
+          <button type="button" class="btn-secondary" onclick="saveWorkerPoolConfig()">保存 Worker 配置</button>
+          <button type="button" class="btn-secondary" onclick="loadWorkerPoolConfig()">刷新</button>
+        </div>
+      </div>
+      <div id="workerPoolList" class="provider-list worker-pool-list">
+        <div class="empty-state"><p>暂无 Worker 配置</p></div>
+      </div>
     </div>
 
     <div class="setting-group">
@@ -978,5 +992,5 @@
   </div>
 </div>
 
-<script src="/static/js/settings.js?v=2.9.0"></script>
+<script src="/static/js/settings.js?v=2.9.1"></script>
 {% endblock %}

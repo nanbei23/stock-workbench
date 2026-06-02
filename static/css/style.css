@@ -3300,6 +3300,29 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
   gap: 12px;
 }
 
+.batch-research-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+
+.batch-research-control {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.batch-research-control span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.batch-research-control .control-select {
+  width: 100%;
+}
+
 .update-time {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -4040,6 +4063,38 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 
 .provider-list .quality-report-row {
   grid-template-columns: minmax(180px, 1fr) repeat(5, auto);
+}
+
+.worker-pool-list {
+  display: grid;
+  gap: 10px;
+}
+
+.worker-pool-row {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) minmax(120px, 1fr) 120px 90px 90px minmax(180px, 1.2fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+
+.worker-enabled,
+.worker-provider-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.worker-provider-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
 }
 
 .workspace-template-list .quality-report-row {

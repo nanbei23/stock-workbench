@@ -494,6 +494,99 @@ def _completed_steps(item_id: int) -> dict[str, dict[str, Any]]:
     return {row["role_key"]: dict(row) for row in rows}
 
 
+def _claim_runnable_items(
+    job_id: str,
+    *,
+    worker_id: str,
+    lease_token: str,
+    limit: int,
+    lease_seconds: int = 900,
+) -> list[dict[str, Any]]:
+    limit = max(1, int(limit or 1))
+    lease = max(60, int(lease_seconds or 900))
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM batch_job_items
+            WHERE job_id = ?
+              AND (
+                status IN ('pending', 'quota_paused')
+                OR (
+                  status = 'running'
+                  AND lease_until IS NOT NULL
+                  AND datetime(lease_until) < datetime('now')
+                )
+              )
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (job_id, limit),
+        ).fetchall()
+        item_ids = [int(row["id"]) for row in rows]
+        if item_ids:
+            placeholders = ",".join("?" for _ in item_ids)
+            conn.execute(
+                f"""
+                UPDATE batch_job_items
+                SET status='running',
+                    lease_owner=?,
+                    lease_token=?,
+                    lease_until=datetime('now', ?),
+                    started_at=COALESCE(started_at, datetime('now')),
+                    completed_at=NULL,
+                    error='',
+                    updated_at=datetime('now')
+                WHERE id IN ({placeholders})
+                """,
+                [worker_id, lease_token, f"+{lease} seconds", *item_ids],
+            )
+        conn.commit()
+    return [dict(row) for row in rows]
+
+
+def _unfinished_item_count(job_id: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM batch_job_items
+            WHERE job_id = ?
+              AND status NOT IN ('completed', 'failed', 'skipped', 'waiting_snapshot', 'cancelled')
+            """,
+            (job_id,),
+        ).fetchone()
+    return int(row["count"] or 0)
+
+
+def _try_claim_finalize(job_id: str) -> bool:
+    token = f"finalize-{uuid.uuid4().hex}"
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT runtime_json FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        runtime = _loads(row["runtime_json"] if row else "{}", {})
+        if runtime.get("finalize", {}).get("state") in {"running", "completed"}:
+            conn.commit()
+            return False
+        runtime["finalize"] = {"state": "running", "token": token, "started_at": _iso_now()}
+        conn.execute(
+            "UPDATE batch_jobs SET runtime_json = ?, updated_at=datetime('now') WHERE job_id = ?",
+            (json.dumps(runtime, ensure_ascii=False, default=str), job_id),
+        )
+        conn.commit()
+    return True
+
+
+def _mark_finalize_completed(job_id: str, *, status: str) -> None:
+    runtime = _runtime_state(job_id)
+    finalize = runtime.setdefault("finalize", {})
+    finalize["state"] = "completed"
+    finalize["status"] = status
+    finalize["completed_at"] = _iso_now()
+    _save_runtime_state(job_id, runtime)
+
+
 def _snapshot_by_id(snapshot_id: int) -> dict[str, Any] | None:
     with _connect() as conn:
         row = conn.execute(
@@ -602,8 +695,15 @@ def _load_model_providers() -> list[dict[str, Any]]:
     return [provider for provider in providers if isinstance(provider, dict)]
 
 
-def _provider_to_config(provider: dict[str, Any], *, model: str | None = None) -> dict[str, str]:
-    selected_model = model or provider.get("default_model") or provider.get("deep_model") or provider.get("quick_model") or ""
+def _provider_to_config(provider: dict[str, Any], *, model: str | None = None, model_tier: str | None = None) -> dict[str, str]:
+    if model:
+        selected_model = model
+    elif model_tier == "quick":
+        selected_model = provider.get("quick_model") or provider.get("default_model") or provider.get("deep_model") or ""
+    elif model_tier == "deep":
+        selected_model = provider.get("deep_model") or provider.get("default_model") or provider.get("quick_model") or ""
+    else:
+        selected_model = provider.get("default_model") or provider.get("deep_model") or provider.get("quick_model") or ""
     return {
         "base_url": provider.get("base_url") or "",
         "api_key": provider.get("api_key") or "",
@@ -613,11 +713,41 @@ def _provider_to_config(provider: dict[str, Any], *, model: str | None = None) -
     }
 
 
+def _provider_configs_by_ids(provider_ids: list[str], *, model_tier: str | None = None) -> list[dict[str, str]]:
+    if not provider_ids:
+        return []
+    providers = _load_model_providers()
+    order = {str(provider_id): index for index, provider_id in enumerate(provider_ids)}
+    selected = [provider for provider in providers if str(provider.get("id")) in order]
+    selected.sort(key=lambda provider: order[str(provider.get("id"))])
+    configs: list[dict[str, str]] = []
+    seen = set()
+    for provider in selected:
+        config = _provider_to_config(provider, model_tier=model_tier)
+        key = (config.get("base_url"), config.get("api_key"), config.get("model"))
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        configs.append(config)
+    return configs
+
+
+def _primary_model_config(payload: dict[str, Any], *, model_tier: str) -> dict[str, str]:
+    provider_ids = [str(item) for item in (payload.get("_worker_model_provider_ids") or payload.get("primary_provider_ids") or []) if str(item)]
+    provider_configs = _provider_configs_by_ids(provider_ids, model_tier=model_tier)
+    if provider_configs:
+        return provider_configs[0]
+    return batch_research._snapshot_llm_config(DB_PATH, model_tier=model_tier)
+
+
 def _fallback_model_configs(payload: dict[str, Any]) -> list[dict[str, str]]:
     if payload.get("model_fallback_enabled") is False:
         return []
     providers = _load_model_providers()
     provider_ids = [str(item) for item in payload.get("fallback_provider_ids") or [] if str(item)]
+    if not provider_ids:
+        worker_provider_ids = [str(item) for item in payload.get("_worker_model_provider_ids") or [] if str(item)]
+        provider_ids = worker_provider_ids[1:] if len(worker_provider_ids) > 1 else []
     if provider_ids:
         order = {provider_id: index for index, provider_id in enumerate(provider_ids)}
         providers = [provider for provider in providers if str(provider.get("id")) in order]
@@ -625,7 +755,7 @@ def _fallback_model_configs(payload: dict[str, Any]) -> list[dict[str, str]]:
     configs: list[dict[str, str]] = []
     seen = set()
     for provider in providers:
-        config = _provider_to_config(provider)
+        config = _provider_to_config(provider, model_tier=payload.get("_worker_model_tier") or payload.get("snapshot_model_tier") or "deep")
         key = (config.get("base_url"), config.get("api_key"), config.get("model"))
         if not all(key) or key in seen:
             continue
@@ -1157,11 +1287,12 @@ def list_research_jobs(limit: int = 50, status: str | None = None, job_type: str
     return {"count": len(rows), "jobs": [dict(row) for row in rows]}
 
 
-def claim_next_job(*, worker_id: str, lease_seconds: int = 300) -> dict[str, Any] | None:
+def claim_next_job(*, worker_id: str, lease_seconds: int = 300, cooperative: bool = True) -> dict[str, Any] | None:
     """Atomically claim one runnable job for an independent worker."""
     worker = worker_id or f"worker-{os.getpid()}"
     lease = max(30, int(lease_seconds or 300))
     token = uuid.uuid4().hex
+    joined_running = False
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -1181,37 +1312,64 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300) -> dict[str, Any
             LIMIT 1
             """
         ).fetchone()
+        if not row and cooperative:
+            row = conn.execute(
+                """
+                SELECT bj.job_id
+                FROM batch_jobs bj
+                WHERE bj.job_type = 'report_generation'
+                  AND bj.status = 'running'
+                  AND COALESCE(bj.pause_requested, 0) = 0
+                  AND EXISTS (
+                    SELECT 1
+                    FROM batch_job_items bi
+                    WHERE bi.job_id = bj.job_id
+                      AND (
+                        bi.status IN ('pending', 'quota_paused')
+                        OR (
+                          bi.status = 'running'
+                          AND bi.lease_until IS NOT NULL
+                          AND datetime(bi.lease_until) < datetime('now')
+                        )
+                      )
+                  )
+                ORDER BY bj.created_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            joined_running = bool(row)
         if not row:
             conn.commit()
             return None
         job_id = row["job_id"]
-        cursor = conn.execute(
-            """
-            UPDATE batch_jobs
-            SET status='running',
-                worker_id=?,
-                heartbeat_at=datetime('now'),
-                lease_owner=?,
-                lease_token=?,
-                lease_until=datetime('now', ?),
-                completed_at=NULL,
-                updated_at=datetime('now')
-            WHERE job_id = ?
-              AND COALESCE(pause_requested, 0) = 0
-              AND (
-                status IN ('pending', 'interrupted')
-                OR (
-                  status = 'running'
-                  AND lease_until IS NOT NULL
-                  AND datetime(lease_until) < datetime('now')
-                )
-              )
-            """,
-            (worker, worker, token, f"+{lease} seconds", job_id),
-        )
-        if cursor.rowcount != 1:
-            conn.commit()
-            return None
+        if not joined_running:
+            cursor = conn.execute(
+                """
+                UPDATE batch_jobs
+                SET status='running',
+                    worker_id=?,
+                    heartbeat_at=datetime('now'),
+                    lease_owner=?,
+                    lease_token=?,
+                    lease_until=datetime('now', ?),
+                    completed_at=NULL,
+                    updated_at=datetime('now')
+                WHERE job_id = ?
+                  AND COALESCE(pause_requested, 0) = 0
+                  AND (
+                    status IN ('pending', 'interrupted')
+                    OR (
+                      status = 'running'
+                      AND lease_until IS NOT NULL
+                      AND datetime(lease_until) < datetime('now')
+                    )
+                  )
+                """,
+                (worker, worker, token, f"+{lease} seconds", job_id),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
         payload_row = conn.execute("SELECT payload_json FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
         payload = _loads(payload_row["payload_json"] if payload_row else "{}", {})
         payload["worker_id"] = worker
@@ -1228,8 +1386,17 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300) -> dict[str, Any
         "lease_seconds": lease,
         "claimed_at": _iso_now(),
     }
+    if joined_running:
+        cooperative_workers = runtime.setdefault("cooperative_workers", {})
+        cooperative_workers[worker] = {"joined_at": _iso_now(), "lease_token": token, "lease_seconds": lease}
     _save_runtime_state(job_id, runtime)
-    log_job_event(job_id, "info", "job_claimed", "worker 已领取批量任务", {"worker_id": worker, "lease_seconds": lease})
+    log_job_event(
+        job_id,
+        "info",
+        "job_joined" if joined_running else "job_claimed",
+        "worker 已加入运行中的批量任务" if joined_running else "worker 已领取批量任务",
+        {"worker_id": worker, "lease_seconds": lease, "cooperative": joined_running},
+    )
     return get_research_job(job_id)
 
 
@@ -1481,6 +1648,7 @@ async def create_research_job(
     job_type: str,
     codes: list[str] | None = None,
     report_ids: list[int] | None = None,
+    allow_all: bool = False,
     group: str = "all",
     top_n: int = 0,
     skip_recent_days: int = 30,
@@ -1488,6 +1656,8 @@ async def create_research_job(
     snapshot_concurrency: int = 3,
     analysis_mode: str = "snapshot-tradingagents",
     analysis_concurrency: int = 1,
+    analysis_depth: str = "standard",
+    model_mode: str = "balanced",
     snapshot_model_tier: str = "deep",
     plan_top_n: int = 10,
     multi_role: bool = False,
@@ -1505,6 +1675,9 @@ async def create_research_job(
     if job_type not in JOB_TYPES:
         raise HTTPException(400, f"未知批量任务类型: {job_type}")
     clean_report_ids = [int(report_id) for report_id in (report_ids or []) if int(report_id) > 0]
+    explicit_codes = [str(code).strip() for code in (codes or []) if str(code).strip()]
+    if job_type in {"data_prefetch", "report_generation"} and not explicit_codes and not allow_all:
+        raise HTTPException(400, "请先选择股票；如需全量批量任务，请显式启用 allow_all")
     stocks = _load_report_codes(clean_report_ids) if job_type == "position_plan" and clean_report_ids else _load_watchlist_codes(group, codes or None)
     if top_n > 0:
         stocks = stocks[:top_n]
@@ -1517,6 +1690,7 @@ async def create_research_job(
     payload = {
         "job_type": job_type,
         "group": group,
+        "allow_all": allow_all,
         "codes": [stock["code"] for stock in stocks],
         "report_ids": clean_report_ids,
         "top_n": top_n,
@@ -1525,6 +1699,8 @@ async def create_research_job(
         "snapshot_concurrency": max(1, snapshot_concurrency),
         "analysis_mode": analysis_mode,
         "analysis_concurrency": max(1, analysis_concurrency),
+        "analysis_depth": analysis_depth or "standard",
+        "model_mode": model_mode or "balanced",
         "snapshot_model_tier": snapshot_model_tier,
         "plan_top_n": plan_top_n,
         "multi_role": multi_role,
@@ -1598,6 +1774,8 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
     log_job_event(payload.get("job_id") or item["job_id"], "info", "item_started", f"{code} 开始生成报告", {"snapshot_id": snapshot["id"]}, item_id=item["id"])
     ranked = batch_research.RankedCandidate(code, item.get("name") or code, "默认", 0, 0.0, {})
     analysis_mode = payload.get("analysis_mode") or "snapshot-tradingagents"
+    report_depth = payload.get("analysis_depth") or "standard"
+    report_model_mode = payload.get("model_mode") or "balanced"
     timeout_seconds = int(payload.get("timeout_seconds") or 1800)
     started = datetime.now()
     if analysis_mode == "snapshot-tradingagents":
@@ -1610,8 +1788,8 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
             timeout_seconds=timeout_seconds,
         )
         report_source = "snapshot_tradingagents"
-        depth = "snapshot_tradingagents"
-        model_mode = "snapshot_tradingagents"
+        depth = report_depth
+        model_mode = report_model_mode
     elif analysis_mode == "snapshot-debate":
         role_discussion = []
         for role_key, role_name, role_goal in batch_research.SNAPSHOT_DEBATE_ROLES:
@@ -1627,8 +1805,8 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
             role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
         result = batch_research._snapshot_debate_result(role_discussion)
         report_source = "snapshot_debate"
-        depth = "snapshot_debate"
-        model_mode = "snapshot_debate"
+        depth = report_depth
+        model_mode = report_model_mode
     else:
         result = await batch_research._call_snapshot_llm(
             batch_research._snapshot_prompt(ranked, snapshot),
@@ -1636,8 +1814,8 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
             timeout_seconds=timeout_seconds,
         )
         report_source = "snapshot_report"
-        depth = "snapshot"
-        model_mode = "snapshot_report"
+        depth = report_depth
+        model_mode = report_model_mode
     report_id = batch_research._save_snapshot_report(
         DB_PATH,
         ranked,
@@ -1794,9 +1972,21 @@ def _write_post_batch_artifacts(job_id: str, payload: dict[str, Any], counts: di
     return actions
 
 
-async def run_research_job(job_id: str) -> dict[str, Any]:
+async def run_research_job(
+    job_id: str,
+    *,
+    worker_id: str | None = None,
+    worker_model_provider_ids: list[str] | None = None,
+    worker_model_tier: str | None = None,
+) -> dict[str, Any]:
     job, items, payload = _load_job_for_run(job_id)
     payload["job_id"] = job_id
+    if worker_id:
+        payload["worker_id"] = worker_id
+    if worker_model_provider_ids:
+        payload["_worker_model_provider_ids"] = [str(item).strip() for item in worker_model_provider_ids if str(item).strip()]
+    if worker_model_tier:
+        payload["_worker_model_tier"] = worker_model_tier
     job_type = job["job_type"]
     if job.get("status") == "cancelled":
         return get_research_job(job_id)
@@ -1840,11 +2030,15 @@ async def run_research_job(job_id: str) -> dict[str, Any]:
             await asyncio.gather(*(run_one(item) for item in runnable_items))
         elif job_type == "report_generation":
             recent_codes = batch_research.recent_report_codes(DB_PATH, int(payload.get("skip_recent_days") or 30))
-            config = batch_research._snapshot_llm_config(DB_PATH, model_tier=payload.get("snapshot_model_tier") or "deep")
+            config = _primary_model_config(payload, model_tier=payload.get("_worker_model_tier") or payload.get("snapshot_model_tier") or "deep")
             _lock_job_snapshots(job_id, items)
             job, items, payload = _load_job_for_run(job_id)
             payload["job_id"] = job_id
-            runnable_items = [item for item in items if item["status"] in RESUMABLE_ITEM_STATUS]
+            payload["worker_id"] = worker_id
+            if worker_model_provider_ids:
+                payload["_worker_model_provider_ids"] = [str(item).strip() for item in worker_model_provider_ids if str(item).strip()]
+            if worker_model_tier:
+                payload["_worker_model_tier"] = worker_model_tier
             requested_concurrency = max(1, int(payload.get("analysis_concurrency") or 1))
             semaphore = asyncio.Semaphore(_effective_concurrency(job_id, "llm", requested_concurrency))
 
@@ -1871,7 +2065,20 @@ async def run_research_job(job_id: str) -> dict[str, Any]:
                     finally:
                         _recount_job(job_id)
 
-            await asyncio.gather(*(run_one(item) for item in runnable_items))
+            lease_token = payload.get("lease_token") or uuid.uuid4().hex
+            while True:
+                if _is_job_cancelled(job_id) or _is_job_pause_requested(job_id):
+                    break
+                runnable_items = _claim_runnable_items(
+                    job_id,
+                    worker_id=worker_id,
+                    lease_token=lease_token,
+                    limit=max(1, requested_concurrency),
+                    lease_seconds=int(payload.get("item_lease_seconds") or 900),
+                )
+                if not runnable_items:
+                    break
+                await asyncio.gather(*(run_one(item) for item in runnable_items))
         counts = _recount_job(job_id)
         refreshed = get_research_job(job_id)
         if refreshed["status"] == "quota_paused":
@@ -1882,6 +2089,11 @@ async def run_research_job(job_id: str) -> dict[str, Any]:
             return refreshed
         if _is_job_cancelled(job_id):
             _update_job(job_id, status="cancelled", completed_at=_now_expr(), current_code="")
+            return get_research_job(job_id)
+        if job_type == "report_generation" and _unfinished_item_count(job_id):
+            _update_job(job_id, status="running", current_code="")
+            return get_research_job(job_id)
+        if job_type == "report_generation" and not _try_claim_finalize(job_id):
             return get_research_job(job_id)
         final_status = "failed" if counts["failed_count"] and not counts["completed_count"] and not counts["skipped_count"] else "completed"
         if counts["waiting_count"] and not counts["completed_count"] and not counts["skipped_count"]:
@@ -1897,6 +2109,8 @@ async def run_research_job(job_id: str) -> dict[str, Any]:
             current_code="",
             result_json=json.dumps({"counts": counts, "quality": quality, "post_actions": post_actions, **result}, ensure_ascii=False, default=str),
         )
+        if job_type == "report_generation":
+            _mark_finalize_completed(job_id, status=final_status)
         log_job_event(job_id, "info", "job_completed", "批量任务执行结束", {"status": final_status, "counts": counts})
     except Exception as exc:
         log_job_event(job_id, "error", "job_failed", "批量任务执行异常", {"error": str(exc)})
@@ -1969,15 +2183,26 @@ async def retry_failed(job_id: str, *, auto_start: bool = True) -> dict[str, Any
     return {"job_id": job_id, "reset_count": reset_count, "status": "pending" if reset_count else get_research_job(job_id)["status"]}
 
 
-async def run_worker_once(*, worker_id: str | None = None, stale_minutes: int = 15) -> dict[str, Any]:
+async def run_worker_once(
+    *,
+    worker_id: str | None = None,
+    stale_minutes: int = 15,
+    model_provider_ids: list[str] | None = None,
+    model_tier: str | None = None,
+) -> dict[str, Any]:
     worker = worker_id or f"worker-{os.getpid()}"
     stalled = mark_stalled_jobs(stale_minutes=stale_minutes)
     claimed = claim_next_job(worker_id=worker, lease_seconds=max(60, int(stale_minutes or 15) * 60))
     if not claimed:
-        return {"worker_id": worker, "ran": False, "stalled": stalled}
+        return {"worker_id": worker, "ran": False, "stalled": stalled, "model_provider_ids": model_provider_ids or []}
     job_id = claimed["job_id"]
-    await run_research_job(job_id)
-    return {"worker_id": worker, "ran": True, "job_id": job_id, "stalled": stalled}
+    await run_research_job(
+        job_id,
+        worker_id=worker,
+        worker_model_provider_ids=model_provider_ids or [],
+        worker_model_tier=model_tier,
+    )
+    return {"worker_id": worker, "ran": True, "job_id": job_id, "stalled": stalled, "model_provider_ids": model_provider_ids or []}
 
 
 # Compatibility wrappers for the old /api/batch-reports surface.
