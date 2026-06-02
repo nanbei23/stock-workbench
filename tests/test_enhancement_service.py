@@ -49,6 +49,48 @@ class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(applied["settings"]["deep_think_model"], "deep")
         self.assertEqual(applied["settings"]["api_key"], "********")
 
+    async def test_model_provider_save_can_apply_to_current_ai_settings(self):
+        enhancement_service.save_model_provider({
+            "id": "p-ai",
+            "name": "Inline AI",
+            "base_url": "https://api.inline.com/v1",
+            "api_key": "sk-inline",
+            "models": ["fast", "deep"],
+            "quick_model": "fast",
+            "deep_model": "deep",
+            "context_length": "256000",
+            "apply_to": "ai",
+        })
+
+        settings = settings_repository.fetch_settings()
+
+        self.assertEqual(settings["llm_name"], "Inline AI")
+        self.assertEqual(settings["custom_endpoint"], "https://api.inline.com/v1")
+        self.assertEqual(settings["api_key"], "sk-inline")
+        self.assertEqual(settings["quick_think_model"], "fast")
+        self.assertEqual(settings["deep_think_model"], "deep")
+        self.assertEqual(settings["llm_model_options"], '["fast", "deep"]')
+
+    async def test_model_provider_save_can_apply_to_verification_settings(self):
+        enhancement_service.save_model_provider({
+            "id": "p-verifier",
+            "name": "Inline Verifier",
+            "base_url": "https://verify.inline.com/v1",
+            "api_key": "sk-verify",
+            "models": ["verify-pro"],
+            "default_model": "verify-pro",
+            "context_length": "128000",
+            "apply_to": "verification",
+        })
+
+        settings = settings_repository.fetch_settings()
+
+        self.assertEqual(settings["verification_name"], "Inline Verifier")
+        self.assertEqual(settings["verification_endpoint"], "https://verify.inline.com/v1")
+        self.assertEqual(settings["verification_api_key"], "sk-verify")
+        self.assertEqual(settings["verification_model"], "verify-pro")
+        self.assertEqual(settings["verification_model_options"], '["verify-pro"]')
+
     async def test_report_versions_and_compare(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute(

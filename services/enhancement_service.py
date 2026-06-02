@@ -121,7 +121,11 @@ def save_model_provider(payload: dict):
     providers = [item for item in providers if item.get("id") != provider_id]
     providers.insert(0, provider)
     settings_repository.upsert_settings({MODEL_PROVIDERS_KEY: _dumps(providers)})
-    return {"status": "ok", "provider": _public_provider(provider), "count": len(providers)}
+    result = {"status": "ok", "provider": _public_provider(provider), "count": len(providers)}
+    apply_to = payload.get("apply_to")
+    if apply_to in {"ai", "verification"}:
+        result["applied"] = apply_model_provider(provider_id, apply_to)
+    return result
 
 
 def delete_model_provider(provider_id: str):

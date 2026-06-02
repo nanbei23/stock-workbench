@@ -34,6 +34,7 @@ class ModelProviderPayload(BaseModel):
     deep_model: str | None = ""
     default_model: str | None = ""
     context_length: str | int | None = ""
+    apply_to: str | None = None
 
 
 class ApplyProviderPayload(BaseModel):

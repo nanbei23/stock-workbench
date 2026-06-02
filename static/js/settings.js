@@ -551,6 +551,7 @@ async function saveCurrentModelProvider() {
         deep_model: document.getElementById('set-deep_think_model')?.value || '',
         default_model: document.getElementById('set-deep_think_model')?.value || document.getElementById('set-quick_think_model')?.value || '',
         context_length: document.getElementById('set-llm_context_length')?.value || '',
+        apply_to: 'ai',
     };
     if (!payload.base_url) {
         toast('error', '请先填写 Base URL');
@@ -564,7 +565,8 @@ async function saveCurrentModelProvider() {
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || '保存失败');
-        toast('success', '模型配置已保存');
+        toast('success', '模型配置已保存并应用到AI引擎');
+        await loadSettings();
         loadModelProviders();
     } catch (e) {
         toast('error', '保存失败: ' + e.message);
@@ -582,6 +584,7 @@ async function saveVerificationModelProvider() {
         quick_model: '',
         deep_model: document.getElementById('set-verification_model')?.value || '',
         context_length: document.getElementById('set-verification_context_length')?.value || '',
+        apply_to: 'verification',
     };
     if (!payload.base_url) {
         toast('error', '请先填写核对 Base URL');
@@ -595,7 +598,8 @@ async function saveVerificationModelProvider() {
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || '保存失败');
-        toast('success', '核对模型配置已保存');
+        toast('success', '核对模型配置已保存并应用到旁观者核对');
+        await loadSettings();
         loadModelProviders();
     } catch (e) {
         toast('error', '保存失败: ' + e.message);

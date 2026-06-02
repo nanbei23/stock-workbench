@@ -613,12 +613,12 @@
       <div class="setting-group-title">模型配置池</div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">保存当前AI引擎配置</div>
-          <div class="setting-hint">保存名称、Base URL、模型列表、快速/深度模型和上下文长度，供 AI 引擎与旁观者核对复用</div>
+          <div class="setting-label">保存并应用模型配置</div>
+          <div class="setting-hint">保存名称、Base URL、模型列表、快速/深度模型和上下文长度，并同步应用到当前区域</div>
         </div>
         <div class="setting-control">
-          <button type="button" class="btn-secondary" onclick="saveCurrentModelProvider()">保存配置</button>
-          <button type="button" class="btn-secondary" onclick="saveVerificationModelProvider()">保存核对配置</button>
+          <button type="button" class="btn-secondary" onclick="saveCurrentModelProvider()">保存并用于AI</button>
+          <button type="button" class="btn-secondary" onclick="saveVerificationModelProvider()">保存并用于核对</button>
           <button type="button" class="btn-secondary" onclick="loadModelProviders()">刷新</button>
         </div>
       </div>
