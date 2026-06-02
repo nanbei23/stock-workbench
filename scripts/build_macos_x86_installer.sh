@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-2.7.0}"
+DEFAULT_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' "$ROOT_DIR/app_metadata.py" | head -n 1)"
+VERSION="${VERSION:-${DEFAULT_VERSION:-2.7.3}}"
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_DIR="$DIST_DIR/stock-workbench-v$VERSION-macos-x86"
 ARCHIVE="$DIST_DIR/stock-workbench-v$VERSION-macos-x86.tar.gz"
@@ -54,6 +55,7 @@ main() {
 2. 双击「安装.command」开始安装。
 3. 安装完成后打开 http://127.0.0.1:8000
 4. 后续升级可双击「升级.command」。
+5. 数据初始化和批量研究脚本见 docs/data_initialization_and_batch_research.md。
 EOF
 
   log "Creating archive $ARCHIVE"

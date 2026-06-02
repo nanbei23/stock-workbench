@@ -152,6 +152,62 @@ a { color: var(--color-accent); text-decoration: none; }
   gap: 8px;
 }
 
+.watchlist-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.watchlist-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 2px;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.watchlist-section-head small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.watchlist-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.watch-pool-section {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.watch-pool-card {
+  border-style: dashed;
+  background: var(--bg-card);
+  box-shadow: inset 3px 0 0 rgba(91,155,213,0.35);
+}
+
+.watch-pool-card .stock-card-inner {
+  padding-right: 54px;
+}
+
+.watchlist-empty-note {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
 .stock-card {
   position: relative;
   border-radius: var(--radius-md);
@@ -355,6 +411,37 @@ a { color: var(--color-accent); text-decoration: none; }
   transform: translate(-50%, -50%) scale(1.08);
 }
 
+.stock-card .btn-promote {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 9;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--color-accent);
+  font-size: 0.72rem;
+  font-weight: 650;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s ease, background 0.18s ease, color 0.18s ease;
+}
+
+.stock-card:hover .btn-promote {
+  opacity: 1;
+}
+
+.watch-pool-card .btn-promote {
+  opacity: 1;
+}
+
+.stock-card .btn-promote:hover {
+  background: var(--color-accent);
+  color: white;
+}
+
 /* --- 确认弹窗 --- */
 .modal-overlay {
   position: fixed;
@@ -429,9 +516,16 @@ a { color: var(--color-accent); text-decoration: none; }
 .stock-search {
   padding: 8px 12px;
   border-bottom: 1px solid rgba(0,0,0,0.06);
+  display: grid;
+  grid-template-columns: minmax(104px, 1fr) minmax(104px, 1fr) auto;
+  gap: 8px;
+}
+.stock-search input,
+.stock-search button {
+  width: 100%;
+  min-width: 0;
 }
 .stock-search input {
-  width: 100%;
   padding: 8px 12px;
   border: 1px solid rgba(0,0,0,0.08);
   border-radius: var(--radius-sm);
@@ -441,6 +535,14 @@ a { color: var(--color-accent); text-decoration: none; }
   transition: border-color 0.2s;
 }
 .stock-search input:focus { border-color: var(--color-accent); }
+@media (max-width: 720px) {
+  .stock-search {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stock-search button {
+    grid-column: 1 / -1;
+  }
+}
 
 /* --- 右侧详情区 --- */
 .detail-area {

@@ -217,10 +217,32 @@ async function testApiConnection() {
 
 async function testVerificationConnection() {
     const resultSpan = document.getElementById('testVerificationResult');
+    const endpoint = document.getElementById('set-verification_endpoint')?.value?.trim() || '';
+    const apiKey = document.getElementById('set-verification_api_key')?.value?.trim() || '';
+    const model = document.getElementById('set-verification_model')?.value?.trim() || '';
+    if (!endpoint) {
+        resultSpan.className = 'test-result error';
+        resultSpan.textContent = '失败 Base URL未配置';
+        return;
+    }
+    if (!apiKey) {
+        resultSpan.className = 'test-result error';
+        resultSpan.textContent = '失败 API密钥未配置';
+        return;
+    }
+    if (!model) {
+        resultSpan.className = 'test-result error';
+        resultSpan.textContent = '失败 请先选择核对模型';
+        return;
+    }
     resultSpan.textContent = '测试中...';
     resultSpan.className = 'test-result';
     try {
-        const resp = await fetch(`${API_BASE}/settings/test-verification`, { method: 'POST' });
+        const resp = await fetch(`${API_BASE}/settings/test-verification`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ endpoint, api_key: apiKey, model }),
+        });
         const data = await resp.json();
         if (data.status === 'ok') {
             resultSpan.className = 'test-result ok';

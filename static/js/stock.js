@@ -7,6 +7,8 @@ let currentKlineCount = 240;
 let currentChartType = 'candlestick';
 let currentPrevClose = null;  // 昨收价，用于分时图涨跌色参考
 let dragSrcEl = null;   // 当前拖拽的卡片
+let watchPoolCollapsed = localStorage.getItem('watch_pool_collapsed') !== 'false';
+const WATCH_POOL_GROUP = '观察池';
 
 const STOCK_SIGNAL_LABEL = {
   'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
@@ -40,7 +42,7 @@ function stockCardMetrics(s) {
   const cls = priceClass(s.change_pct);
   const pctSign = s.change_pct != null ? (s.change_pct >= 0 ? '+' : '') : '';
   const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
-  const dailyPnl = s.daily_pnl ? formatPnl(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(2) + '元') : '--');
+  const dailyPnl = s.daily_pnl ? formatPnl(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(3) + '元') : '--');
   const dailyPnlCls = s.daily_pnl ? priceClass(s.daily_pnl) : cls;
   const holdPnl = s.unrealized_pnl ? formatPnl(s.unrealized_pnl) : '--';
   const holdPnlCls = s.unrealized_pnl ? priceClass(s.unrealized_pnl) : '';
@@ -127,7 +129,9 @@ async function loadWatchlist() {
       if (sigData && sigData.signals) signals = sigData.signals;
     } catch (e) {}
 
-    listEl.innerHTML = '<div class="stock-card-list">' + stocks.map(s => renderStockCard(s, signals[s.code])).join('') + '</div>';
+    const coreStocks = stocks.filter(s => !isWatchPoolStock(s));
+    const poolStocks = stocks.filter(isWatchPoolStock);
+    listEl.innerHTML = renderWatchlistSections(coreStocks, poolStocks, signals);
   } catch (e) {
     console.error('loadWatchlist error:', e);
     listEl.innerHTML = panelState('加载失败，请刷新重试');
@@ -136,12 +140,44 @@ async function loadWatchlist() {
   initDragDrop();
 }
 
-function renderStockCard(s, signal) {
+function isWatchPoolStock(stock) {
+  return (stock.group_name || '').trim() === WATCH_POOL_GROUP;
+}
+
+function renderWatchlistSections(coreStocks, poolStocks, signals) {
+  const coreHtml = coreStocks.length
+    ? `<div class="stock-card-list" data-sortable="true">${coreStocks.map(s => renderStockCard(s, signals[s.code])).join('')}</div>`
+    : `<div class="watchlist-empty-note">暂无正式自选股，可以从观察池提升。</div>`;
+  const poolBody = watchPoolCollapsed
+    ? ''
+    : `<div class="stock-card-list watch-pool-list">${poolStocks.map(s => renderStockCard(s, signals[s.code], { pool: true })).join('')}</div>`;
+  const poolToggleLabel = watchPoolCollapsed ? '展开' : '折叠';
+  return `
+    <section class="watchlist-section">
+      <div class="watchlist-section-head">
+        <span>自选股</span>
+        <small>${coreStocks.length} 只</small>
+      </div>
+      ${coreHtml}
+    </section>
+    <section class="watchlist-section watch-pool-section ${watchPoolCollapsed ? 'collapsed' : ''}">
+      <button class="watchlist-section-head watchlist-toggle" type="button" onclick="toggleWatchPool(event)">
+        <span>观察池</span>
+        <small>${poolStocks.length} 只 · ${poolToggleLabel}</small>
+      </button>
+      ${poolBody || (watchPoolCollapsed ? '' : '<div class="watchlist-empty-note">暂无观察池股票。</div>')}
+    </section>`;
+}
+
+function renderStockCard(s, signal, options = {}) {
   const isActive = currentCode === s.code;
   const { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls } = stockCardMetrics(s);
   const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
+  const poolAction = options.pool
+    ? `<button class="btn-promote" onclick="event.stopPropagation();promoteWatchPoolStock('${escapeAttr(s.code)}')" title="提升为自选股">提升</button>`
+    : '';
   return `
-    <div class="stock-card ${isActive ? 'active' : ''}"
+    <div class="stock-card ${isActive ? 'active' : ''} ${options.pool ? 'watch-pool-card' : ''}"
          onclick="selectStock('${escapeAttr(s.code)}')"
          data-code="${escapeAttr(s.code)}">
       <div class="stock-card-inner">
@@ -164,24 +200,43 @@ function renderStockCard(s, signal) {
           </div>
           <div class="sc-data-row">
             <span class="sc-data-lbl">当日涨幅</span>
-            <span class="sc-data-val ${cls}">${pctSign}${s.change_pct != null ? s.change_pct.toFixed(2) : '--'}%</span>
+            <span class="sc-data-val ${cls}">${pctSign}${s.change_pct != null ? s.change_pct.toFixed(3) : '--'}%</span>
           </div>
           ${signalBadge(signal)}
         </div>
       </div>
       <div class="stock-card-bar ${barCls}"></div>
+      ${poolAction}
       <button class="btn-remove" onclick="event.stopPropagation();removeStock('${escapeAttr(s.code)}')" title="删除">×</button>
     </div>`;
+}
+
+function toggleWatchPool(event) {
+  event?.stopPropagation();
+  watchPoolCollapsed = !watchPoolCollapsed;
+  localStorage.setItem('watch_pool_collapsed', watchPoolCollapsed ? 'true' : 'false');
+  loadWatchlist();
+}
+
+async function promoteWatchPoolStock(code) {
+  try {
+    await API.put(`/api/watchlist/${code}`, { group_name: '默认' });
+    await loadWatchlist();
+    selectStock(code);
+    showToast('已提升为自选股', 'success');
+  } catch (e) {
+    console.error('promoteWatchPoolStock error:', e);
+    showToast('提升失败: ' + e.message, 'error');
+  }
 }
 /* ============================================================
    1a. 拖拽排序 — HTML5 Drag and Drop
    ============================================================ */
 function initDragDrop() {
-  const cards = document.querySelectorAll('.stock-card');
-  const list  = document.querySelector('.stock-card-list');
-  if (!list || cards.length === 0) return;
-
-  cards.forEach(card => {
+  document.querySelectorAll('.stock-card-list[data-sortable="true"]').forEach(list => {
+    const cards = list.querySelectorAll('.stock-card');
+    if (cards.length === 0) return;
+    cards.forEach(card => {
     const grip = card.querySelector('.sc-grip');
     if (!grip) return;
 
@@ -257,13 +312,14 @@ function initDragDrop() {
       saveReorder();
     });
   });
+  });
 }
 
 /* ============================================================
    1b. saveReorder — 保存自选股排序到后端
    ============================================================ */
 async function saveReorder() {
-  const cards = document.querySelectorAll('.stock-card');
+  const cards = document.querySelectorAll('.stock-card-list[data-sortable="true"] .stock-card');
   const items = [];
   cards.forEach((card, idx) => {
     items.push({ code: card.dataset.code, sort_order: idx + 1 });
@@ -316,19 +372,19 @@ async function loadStockDetail(code) {
     const changeEl = document.getElementById('d-change');
     priceEl.textContent = formatPrice(q.price);
     priceEl.className = 'quote-price ' + priceClass(q.change_pct);
-    changeEl.textContent = `${formatPct(q.change_pct)}  ${q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(2) : ''}`;
+    changeEl.textContent = `${formatPct(q.change_pct)}  ${q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(3) : ''}`;
     changeEl.className = 'quote-change ' + priceClass(q.change_pct);
 
     // 3×3 信息网格
-    setText('d-open',     q.open != null ? q.open.toFixed(2) : '--');
-    setText('d-high',     q.high != null ? q.high.toFixed(2) : '--');
+    setText('d-open',     q.open != null ? q.open.toFixed(3) : '--');
+    setText('d-high',     q.high != null ? q.high.toFixed(3) : '--');
     setText('d-amount',   formatAmount(q.amount));
-    setText('d-prev',     q.prev_close != null ? q.prev_close.toFixed(2) : '--');
-    setText('d-low',      q.low != null ? q.low.toFixed(2) : '--');
+    setText('d-prev',     q.prev_close != null ? q.prev_close.toFixed(3) : '--');
+    setText('d-low',      q.low != null ? q.low.toFixed(3) : '--');
     setText('d-volume',   formatVolume(q.volume));
     setText('d-mcap',     formatMarketCap(q.total_market_cap || q.circ_market_cap));
-    setText('d-pe',       q.pe != null ? q.pe.toFixed(2) : '--');
-    setText('d-turnover', q.turnover != null ? q.turnover.toFixed(2) + '%' : '--');
+    setText('d-pe',       q.pe != null ? q.pe.toFixed(3) : '--');
+    setText('d-turnover', q.turnover != null ? q.turnover.toFixed(3) + '%' : '--');
     // 高低价着色
     const highEl = document.getElementById('d-high');
     const lowEl  = document.getElementById('d-low');
@@ -344,7 +400,7 @@ async function loadStockDetail(code) {
       const dailyPnlEl = document.getElementById('d-daily-pnl');
       const dailyChgEl = document.getElementById('d-daily-change');
       if (pnlEl) {
-        pnlEl.textContent = formatPnl(q.unrealized_pnl) + (q.unrealized_pnl_pct ? ` (${q.unrealized_pnl_pct > 0 ? '+' : ''}${q.unrealized_pnl_pct.toFixed(2)}%)` : '');
+        pnlEl.textContent = formatPnl(q.unrealized_pnl) + (q.unrealized_pnl_pct ? ` (${q.unrealized_pnl_pct > 0 ? '+' : ''}${q.unrealized_pnl_pct.toFixed(3)}%)` : '');
         pnlEl.className = 'pnl-value ' + priceClass(q.unrealized_pnl);
       }
       if (dailyPnlEl) {
@@ -485,22 +541,22 @@ async function load7Layer(code) {
 function formatFundFlow(v) {
   if (v == null) return '--';
   const abs = Math.abs(v);
-  if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿';
-  if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万';
-  return v.toFixed(2);
+  if (abs >= 1e8) return (v / 1e8).toFixed(3) + '亿';
+  if (abs >= 1e4) return (v / 1e4).toFixed(3) + '万';
+  return v.toFixed(3);
 }
 
 function formatNorthFund(v) {
   if (v == null) return '--';
-  return (v / 1e8).toFixed(2);
+  return (v / 1e8).toFixed(3);
 }
 
 function formatMarginBal(v) {
   if (v == null) return '--';
   const abs = Math.abs(v);
-  if (abs >= 1e8) return (v / 1e8).toFixed(2);
-  if (abs >= 1e4) return (v / 1e4).toFixed(2);
-  return v.toFixed(2);
+  if (abs >= 1e8) return (v / 1e8).toFixed(3);
+  if (abs >= 1e4) return (v / 1e4).toFixed(3);
+  return v.toFixed(3);
 }
 
 function setLayerValue(id, value, unit, formatter) {
@@ -531,18 +587,26 @@ function toggleSearch() {
    ============================================================ */
 async function addStock() {
   const input = document.getElementById('searchInput');
+  const nameInput = document.getElementById('searchNameInput');
   const code = input.value.trim();
-  if (!code) return;
+  const name = nameInput?.value.trim() || '';
+  if (!/^\d{6}$/.test(code)) {
+    showToast('请输入 6 位股票代码', 'error');
+    input.focus();
+    return;
+  }
 
   try {
-    await API.post('/api/watchlist', { code, name: '', group: '默认' });
+    await API.post('/api/watchlist', { code, name, group_name: '默认' });
     input.value = '';
+    if (nameInput) nameInput.value = '';
     toggleSearch();
     await loadWatchlist();
     selectStock(code);
+    showToast('自选股已添加', 'success');
   } catch (e) {
     console.error('addStock error:', e);
-    alert('添加失败，请重试');
+    showToast('添加失败: ' + e.message, 'error');
   }
 }
 
@@ -604,7 +668,7 @@ function setIndex(key, d) {
   const chgEl  = document.getElementById(`idx-${key}-chg`);
   if (!valEl || !chgEl) return;
 
-  valEl.textContent = d.price != null ? d.price.toFixed(2) : '--';
+  valEl.textContent = d.price != null ? d.price.toFixed(3) : '--';
   chgEl.textContent = d.change_pct != null ? formatPct(d.change_pct) : '--';
 
   const cls = priceClass(d.change_pct);
@@ -637,7 +701,7 @@ async function loadSentiment() {
 
     // 北向资金（API已返回亿元单位）
     if (northEl && northbound.total_net != null) {
-      const val = Number(northbound.total_net).toFixed(2);
+      const val = Number(northbound.total_net).toFixed(3);
       northEl.textContent = val + '亿';
       northEl.className = 'sentiment-value ' + (northbound.total_net >= 0 ? 'up' : 'down');
     }
@@ -688,7 +752,7 @@ async function refreshQuotes() {
       // 当日涨幅
       const pctEl = el.querySelector('.sc-data-row:nth-child(3) .sc-data-val');
       if (pctEl) {
-        pctEl.textContent = `${pctSign}${s.change_pct != null ? s.change_pct.toFixed(2) : '--'}%`;
+        pctEl.textContent = `${pctSign}${s.change_pct != null ? s.change_pct.toFixed(3) : '--'}%`;
         pctEl.className = `sc-data-val ${cls}`;
       }
     });
@@ -703,18 +767,18 @@ async function refreshQuotes() {
         priceEl.className = 'quote-price ' + priceClass(q.change_pct);
       }
       if (changeEl) {
-        changeEl.textContent = `${formatPct(q.change_pct)}  ${q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(2) : ''}`;
+        changeEl.textContent = `${formatPct(q.change_pct)}  ${q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(3) : ''}`;
         changeEl.className = 'quote-change ' + priceClass(q.change_pct);
       }
-      setText('d-open',     q.open != null ? q.open.toFixed(2) : '--');
-      setText('d-high',     q.high != null ? q.high.toFixed(2) : '--');
+      setText('d-open',     q.open != null ? q.open.toFixed(3) : '--');
+      setText('d-high',     q.high != null ? q.high.toFixed(3) : '--');
       setText('d-amount',   formatAmount(q.amount));
-      setText('d-prev',     q.prev_close != null ? q.prev_close.toFixed(2) : '--');
-      setText('d-low',      q.low != null ? q.low.toFixed(2) : '--');
+      setText('d-prev',     q.prev_close != null ? q.prev_close.toFixed(3) : '--');
+      setText('d-low',      q.low != null ? q.low.toFixed(3) : '--');
       setText('d-volume',   formatVolume(q.volume));
       setText('d-mcap',     formatMarketCap(q.total_market_cap || q.circ_market_cap));
-      setText('d-pe',       q.pe != null ? q.pe.toFixed(2) : '--');
-      setText('d-turnover', q.turnover != null ? q.turnover.toFixed(2) + '%' : '--');
+      setText('d-pe',       q.pe != null ? q.pe.toFixed(3) : '--');
+      setText('d-turnover', q.turnover != null ? q.turnover.toFixed(3) + '%' : '--');
       // 高低价着色
       const highEl = document.getElementById('d-high');
       const lowEl  = document.getElementById('d-low');
@@ -729,7 +793,7 @@ async function refreshQuotes() {
         const dailyPnlEl = document.getElementById('d-daily-pnl');
         const dailyChgEl = document.getElementById('d-daily-change');
         if (pnlEl) {
-          pnlEl.textContent = formatPnl(q.unrealized_pnl) + (q.unrealized_pnl_pct ? ` (${q.unrealized_pnl_pct > 0 ? '+' : ''}${q.unrealized_pnl_pct.toFixed(2)}%)` : '');
+          pnlEl.textContent = formatPnl(q.unrealized_pnl) + (q.unrealized_pnl_pct ? ` (${q.unrealized_pnl_pct > 0 ? '+' : ''}${q.unrealized_pnl_pct.toFixed(3)}%)` : '');
           pnlEl.className = 'pnl-value ' + priceClass(q.unrealized_pnl);
         }
         if (dailyPnlEl) {
@@ -757,15 +821,15 @@ function setText(id, val) {
 
 function formatAmount(n) {
   if (n == null) return '--';
-  if (n >= 1e8)  return (n / 1e8).toFixed(2)  + '亿';
-  if (n >= 1e4)  return (n / 1e4).toFixed(2)  + '万';
-  return n.toFixed(2) + '万';
+  if (n >= 1e8)  return (n / 1e8).toFixed(3)  + '亿';
+  if (n >= 1e4)  return (n / 1e4).toFixed(3)  + '万';
+  return n.toFixed(3) + '万';
 }
 
 function formatVolume(n) {
   if (n == null) return '--';
-  if (n >= 1e8)  return (n / 1e8).toFixed(2)  + '亿手';
-  if (n >= 1e4)  return (n / 1e4).toFixed(2)  + '万手';
+  if (n >= 1e8)  return (n / 1e8).toFixed(3)  + '亿手';
+  if (n >= 1e4)  return (n / 1e4).toFixed(3)  + '万手';
   return n.toLocaleString() + '手';
 }
 
@@ -773,9 +837,9 @@ function formatVolume(n) {
 
 function formatMarketCap(n) {
   if (n == null) return '--';
-  if (n >= 1e12) return (n / 1e12).toFixed(2) + '万亿';
-  if (n >= 1e8)  return (n / 1e8).toFixed(2)  + '亿';
-  if (n >= 1e4)  return (n / 1e4).toFixed(2)  + '万';
+  if (n >= 1e12) return (n / 1e12).toFixed(3) + '万亿';
+  if (n >= 1e8)  return (n / 1e8).toFixed(3)  + '亿';
+  if (n >= 1e4)  return (n / 1e4).toFixed(3)  + '万';
   return n.toLocaleString();
 }
 
@@ -914,7 +978,7 @@ function updateCardsFromWS(quotesMap) {
 
     const pctEl = el.querySelector('.sc-data-row:nth-child(3) .sc-data-val');
     if (pctEl) {
-      pctEl.textContent = `${pctSign}${q.change_pct != null ? q.change_pct.toFixed(2) : '--'}%`;
+      pctEl.textContent = `${pctSign}${q.change_pct != null ? q.change_pct.toFixed(3) : '--'}%`;
       pctEl.className = `sc-data-val ${cls}`;
     }
   });
@@ -929,15 +993,15 @@ function updateCardsFromWS(quotesMap) {
       priceEl.className = 'quote-price ' + priceClass(q.change_pct);
     }
     if (changeEl) {
-      changeEl.textContent = `${formatPct(q.change_pct)}  ${q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(2) : ''}`;
+      changeEl.textContent = `${formatPct(q.change_pct)}  ${q.change != null ? (q.change >= 0 ? '+' : '') + q.change.toFixed(3) : ''}`;
       changeEl.className = 'quote-change ' + priceClass(q.change_pct);
     }
-    setText('d-open', q.open != null ? q.open.toFixed(2) : '--');
-    setText('d-high', q.high != null ? q.high.toFixed(2) : '--');
-    setText('d-low', q.low != null ? q.low.toFixed(2) : '--');
+    setText('d-open', q.open != null ? q.open.toFixed(3) : '--');
+    setText('d-high', q.high != null ? q.high.toFixed(3) : '--');
+    setText('d-low', q.low != null ? q.low.toFixed(3) : '--');
     setText('d-amount', formatAmount(q.amount));
     setText('d-volume', formatVolume(q.volume));
-    setText('d-turnover', q.turnover != null ? q.turnover.toFixed(2) + '%' : '--');
+    setText('d-turnover', q.turnover != null ? q.turnover.toFixed(3) + '%' : '--');
   }
 }
 
@@ -1171,7 +1235,7 @@ async function loadBuyPoints(code) {
       const statusText = p.status === 'pending' ? '待执行' : p.status === 'triggered' ? '已触发' : '已取消';
       const statusClass = p.status === 'pending' ? 'up' : p.status === 'triggered' ? 'down' : '';
       return `<tr>
-        <td style="font-family:var(--font-mono);font-weight:600;">${p.price.toFixed(2)}</td>
+        <td style="font-family:var(--font-mono);font-weight:600;">${p.price.toFixed(3)}</td>
         <td>${p.shares || '--'}</td>
         <td>${escapeHtml(p.reason || '--')}</td>
         <td><span class="badge ${statusClass === 'up' ? 'badge-up' : statusClass === 'down' ? 'badge-down' : 'badge-info'}">${statusText}</span></td>
@@ -1200,7 +1264,7 @@ function hideAddBuyPoint() {
 async function submitBuyPoint() {
   if (!currentCode) { alert('请先选择股票'); return; }
   const price = parseFloat(document.getElementById('bpPrice').value);
-  const shares = parseInt(document.getElementById('bpShares').value) || 0;
+  const shares = parseFloat(document.getElementById('bpShares').value) || 0;
   const reason = document.getElementById('bpReason').value.trim();
   if (!price || price <= 0) { alert('请输入有效价格'); return; }
   try {
@@ -1243,7 +1307,7 @@ async function loadResearch(code) {
         <div class="eps-title">盈利预测</div>
         <div class="eps-row"><span class="label">今年EPS</span><span class="value">${eps.eps_current_year ?? '--'}</span></div>
         <div class="eps-row"><span class="label">今年PE</span><span class="value">${eps.pe_current_year ?? '--'}</span></div>
-        <div class="eps-row"><span class="label">净利润</span><span class="value">${eps.net_profit ? (eps.net_profit / 1e8).toFixed(2) + '亿' : '--'}</span></div>
+        <div class="eps-row"><span class="label">净利润</span><span class="value">${eps.net_profit ? (eps.net_profit / 1e8).toFixed(3) + '亿' : '--'}</span></div>
         <div class="eps-row"><span class="label">分析师数</span><span class="value">${eps.analysts ?? '--'}</span></div>
       </div>`;
     }
@@ -1380,7 +1444,7 @@ function renderAnomalyCard(a, isNew) {
   const levelLabel = level === 'critical' ? '严重' : level === 'warning' ? '警告' : '提示';
   const name = escapeHtml(a.name || a.code || '');
   const timeStr = a.time ? escapeHtml(a.time.replace(/^\d{4}-/, '').replace(/:\d{2}$/, '')) : '';
-  const changeHtml = a.change_pct ? `<span class="anomaly-change ${a.change_pct >= 0 ? 'up' : 'down'}">${a.change_pct >= 0 ? '+' : ''}${(a.change_pct||0).toFixed(2)}%</span>` : '';
+  const changeHtml = a.change_pct ? `<span class="anomaly-change ${a.change_pct >= 0 ? 'up' : 'down'}">${a.change_pct >= 0 ? '+' : ''}${(a.change_pct||0).toFixed(3)}%</span>` : '';
   const priceHtml = a.price ? `<span class="anomaly-price">¥${a.price}</span>` : '';
   const typeLabel = {
     'volume_spike': '成交量异动',

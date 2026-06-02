@@ -49,6 +49,10 @@ log() {
   printf '[deploy] %s\n' "$*"
 }
 
+app_version() {
+  sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' "$ROOT_DIR/app_metadata.py" | head -n 1
+}
+
 die() {
   printf '[deploy] ERROR: %s\n' "$*" >&2
   exit 1
@@ -185,14 +189,17 @@ install_node_deps() {
 }
 
 build_and_check() {
-  run "$VENV_DIR/bin/python" -m compileall app.py api models repositories scheduler services schemas tests
+  run "$VENV_DIR/bin/python" -m compileall app.py api models repositories scheduler services schemas scripts tests
   if [[ "$RUN_TESTS" -eq 1 ]]; then
     run "$VENV_DIR/bin/python" -m unittest discover tests
   else
     log "Skipping Python tests"
   fi
+  run node --check static/js/app.js
   run node --check static/js/hermes.js
   run node --check static/js/stock.js
+  run "$VENV_DIR/bin/python" -m py_compile scripts/init_from_files.py scripts/batch_research.py
+  run node -e "const fs=require('fs'); const html=fs.readFileSync('installer/macos_x86/index.html','utf8'); const scripts=[...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]).join('\\n'); new Function(scripts);"
   run npm run typecheck
   run npm run build
 }
@@ -301,6 +308,7 @@ smoke_test() {
 main() {
   parse_args "$@"
   cd "$ROOT_DIR"
+  log "Deploying $APP_NAME v$(app_version)"
   check_platform
   check_tools
   prepare_env_file
@@ -308,7 +316,7 @@ main() {
   install_node_deps
   build_and_check
   init_database
-  chmod +x "$ROOT_DIR/scripts/run_macos_x86.sh"
+  chmod +x "$ROOT_DIR/scripts/run_macos_x86.sh" "$ROOT_DIR/scripts/init_from_files.py" "$ROOT_DIR/scripts/batch_research.py"
 
   if [[ "$INSTALL_SERVICE" -eq 1 ]]; then
     install_service

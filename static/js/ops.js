@@ -2,8 +2,8 @@ const OPS_API = '/api';
 
 function opsMoney(value) {
   const n = Number(value || 0);
-  if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(2)}万`;
-  return n.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+  if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(3)}万`;
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 }
 
 function opsPct(value) {

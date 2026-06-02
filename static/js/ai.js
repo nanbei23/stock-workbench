@@ -145,7 +145,7 @@ async function loadAIStockCards() {
             const barCls = cls;
             const pctSign = cp >= 0 ? '+' : '';
             const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
-            const dailyPnl = s.daily_pnl ? formatPnlJS(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(2) + '元') : '--');
+            const dailyPnl = s.daily_pnl ? formatPnlJS(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(3) + '元') : '--');
             const dailyPnlCls = s.daily_pnl ? (s.daily_pnl >= 0 ? 'up' : 'down') : cls;
             const holdPnl = s.unrealized_pnl ? formatPnlJS(s.unrealized_pnl) : '--';
             const holdPnlCls = s.unrealized_pnl ? (s.unrealized_pnl >= 0 ? 'up' : 'down') : '';
@@ -155,12 +155,12 @@ async function loadAIStockCards() {
                     <div class="ai-sc-check" onclick="event.stopPropagation()"><input type="checkbox" data-code="${escapeAttr(s.code)}" onchange="updateBatchBar()"></div>
                     <div class="sc-left">
                         <div><div class="sc-name">${escapeHtml(s.name||s.code)}</div><div class="sc-code">${escapeHtml(s.code)}</div></div>
-                        <div class="sc-price ${cls}">${(s.price??0).toFixed(2)}<span class="sc-price-unit">元</span></div>
+                        <div class="sc-price ${cls}">${(s.price??0).toFixed(3)}<span class="sc-price-unit">元</span></div>
                     </div>
                     <div class="sc-right">
                         <div class="sc-data-row"><span class="sc-data-lbl">当日盈亏</span><span class="sc-data-val ${dailyPnlCls}">${dailyPnl}</span></div>
                         <div class="sc-data-row"><span class="sc-data-lbl">持仓盈亏</span><span class="sc-data-val ${holdPnlCls}">${holdPnl}</span></div>
-                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨幅</span><span class="sc-data-val ${cls}">${pctSign}${cp.toFixed(2)}%</span></div>
+                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨幅</span><span class="sc-data-val ${cls}">${pctSign}${cp.toFixed(3)}%</span></div>
                     </div>
                 </div>
                 <div class="stock-card-bar ${barCls}"></div>
@@ -172,7 +172,7 @@ async function loadAIStockCards() {
 function formatPnlJS(val) {
     if (val == null) return '--';
     const sign = val >= 0 ? '+' : '';
-    return sign + val.toFixed(2) + '元';
+    return sign + val.toFixed(3) + '元';
 }
 
 function selectCard(code) {
@@ -238,7 +238,7 @@ async function loadIndices() {
 }
 function renderIndices(indices) {
     const bar = document.getElementById('indicesBar'); if (!bar||!indices.length) return;
-    bar.innerHTML = indices.map(i => `<div class="index-item"><span class="index-name">${escapeHtml(i.name)}</span><span class="index-price">${(i.price??0).toLocaleString()}</span><span class="index-change ${(i.change_pct??0)>=0?'price-up':'price-down'}">${(i.change_pct??0)>=0?'+':''}${(i.change_pct??0).toFixed(2)}%</span></div>`).join('');
+    bar.innerHTML = indices.map(i => `<div class="index-item"><span class="index-name">${escapeHtml(i.name)}</span><span class="index-price">${Number(i.price ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</span><span class="index-change ${(i.change_pct??0)>=0?'price-up':'price-down'}">${(i.change_pct??0)>=0?'+':''}${(i.change_pct??0).toFixed(3)}%</span></div>`).join('');
 }
 
 // === 模型模式 + 深度 ===
@@ -480,7 +480,7 @@ function loadReportIndex() {
             html += `<div class="index-item">
                 <span class="index-name">${escapeHtml(d.name||k)}</span>
                 <span class="index-price">${d.price.toLocaleString('zh-CN',{minimumFractionDigits:1,maximumFractionDigits:1})}</span>
-                <span class="index-change ${cls}">${sign}${chg.toFixed(2)}%</span>
+                <span class="index-change ${cls}">${sign}${chg.toFixed(3)}%</span>
             </div>`;
         }
         if (html) { bar.innerHTML = html; bar.style.display = 'flex'; }
@@ -637,7 +637,7 @@ function renderDashboard(r, container) {
     if (tp) {
         html += `<div class="dash-card">
             <div class="dash-card-label">目标价</div>
-            <div class="dash-card-value">¥${Number(tp).toFixed(2)}</div>
+            <div class="dash-card-value">¥${Number(tp).toFixed(3)}</div>
         </div>`;
     }
     // 置信度卡片
@@ -1079,7 +1079,7 @@ function renderAnomalies(a) {
     log.innerHTML=a.map(x=>{
         const levelLabel = x.level === 'critical' ? '严重' : x.level === 'warning' ? '预警' : '关注';
         const name = x.name || x.code;
-        const changeHtml = x.change_pct ? `<span class="anomaly-change ${x.change_pct>=0?'price-up':'price-down'}">${x.change_pct>=0?'+':''}${(x.change_pct||0).toFixed(2)}%</span>` : '';
+        const changeHtml = x.change_pct ? `<span class="anomaly-change ${x.change_pct>=0?'price-up':'price-down'}">${x.change_pct>=0?'+':''}${(x.change_pct||0).toFixed(3)}%</span>` : '';
         const timeStr = x.time ? new Date(x.time).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
         return `<div class="anomaly-item"><div class="anomaly-header"><span class="anomaly-level">${levelLabel} ${escapeHtml(x.anomaly_type||x.level||'')}</span><span class="anomaly-time">${escapeHtml(timeStr)}</span><span class="anomaly-stock">${escapeHtml(name)} ${escapeHtml(x.code || '')}</span>${changeHtml}</div><div class="anomaly-message">${escapeHtml(x.message||'')}</div></div>`;
     }).join('');
@@ -1219,7 +1219,7 @@ async function loadReportQuality() {
         el.innerHTML = `<div class="quality-stats">
             <div><span>事实通过率</span><strong>${(q.fact_check_pass_rate||0).toFixed(1)}%</strong></div>
             <div><span>幻觉项</span><strong class="${q.hallucination_count ? 'down' : 'up'}">${q.hallucination_count||0}</strong></div>
-            <div><span>后验收益</span><strong class="${(sr.avg_pnl_pct||0)>=0?'up':'down'}">${(sr.avg_pnl_pct||0)>=0?'+':''}${(sr.avg_pnl_pct||0).toFixed(2)}%</strong></div>
+            <div><span>后验收益</span><strong class="${(sr.avg_pnl_pct||0)>=0?'up':'down'}">${(sr.avg_pnl_pct||0)>=0?'+':''}${(sr.avg_pnl_pct||0).toFixed(3)}%</strong></div>
             <div><span>胜率</span><strong>${(sr.win_rate||0).toFixed(1)}%</strong></div>
         </div>
         <div class="quality-subtitle">模型复盘</div>
@@ -1231,7 +1231,7 @@ async function loadReportQuality() {
         <div class="quality-subtitle">信号后验</div>
         ${signalRows.length ? signalRows.map(r => `<div class="quality-report-row">
             <span>${escapeHtml(SIG_LABEL[(r.signal || '').toUpperCase()] || r.signal || 'UNKNOWN')}</span>
-            <b class="${(r.avg_pnl_pct || 0) >= 0 ? 'up' : 'down'}">${(r.avg_pnl_pct || 0) >= 0 ? '+' : ''}${Number(r.avg_pnl_pct || 0).toFixed(2)}%</b>
+            <b class="${(r.avg_pnl_pct || 0) >= 0 ? 'up' : 'down'}">${(r.avg_pnl_pct || 0) >= 0 ? '+' : ''}${Number(r.avg_pnl_pct || 0).toFixed(3)}%</b>
             <small>${Number(r.closed || 0)}/${Number(r.tracked || 0)}笔 · 胜率${Number(r.win_rate || 0).toFixed(1)}%</small>
         </div>`).join('') : '<div class="empty-row">暂无信号跟踪样本</div>'}
         <div class="quality-subtitle">最近报告</div>
@@ -1378,8 +1378,8 @@ async function loadEventsPanel() {
 
 function formatMoney(value) {
     const n = Number(value || 0);
-    if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(1)}万`;
-    return n.toFixed(0);
+    if (Math.abs(n) >= 10000) return `${(n / 10000).toFixed(3)}万`;
+    return n.toFixed(3);
 }
 async function restoreActiveTask() {
     try { const d=await aiTaskClient().activeTask(); if(d.task_id){currentTaskId=d.task_id;activeAnalysisCode=d.code; const dc=d.depth?{analysts:d.selected_analysts||DEPTH_CONFIG[d.depth]?.analysts||DEPTH_CONFIG.standard.analysts,debate_rounds:d.debate_rounds??1,risk_rounds:d.risk_rounds??1,label:DEPTH_CONFIG[d.depth]?.label||'\u6807\u51c6'}:DEPTH_CONFIG.standard; showProgressPanel(d.code,d.task_id,dc); if(d.stages){for(const[s,st] of Object.entries(d.stages)){const el=document.getElementById(`stage-${s}`);if(el&&st==='completed')el.className='avatar-card completed';}} startSSE(d.task_id); } } catch(e){}
@@ -1414,8 +1414,8 @@ function renderPerformanceTab(c) {
         <div class="perf-stat-card"><div class="stat-label">总跟踪</div><div class="stat-value">${s.total}</div></div>
         <div class="perf-stat-card"><div class="stat-label">持仓中</div><div class="stat-value">${s.open}</div></div>
         <div class="perf-stat-card"><div class="stat-label">胜率</div><div class="stat-value ${winRateClass}">${(s.win_rate*100).toFixed(1)}%</div></div>
-        <div class="perf-stat-card"><div class="stat-label">平均收益</div><div class="stat-value ${s.avg_pnl_pct>=0?'price-up':'price-down'}">${s.avg_pnl_pct>=0?'+':''}${s.avg_pnl_pct.toFixed(2)}%</div></div>
-        <div class="perf-stat-card"><div class="stat-label">超额收益</div><div class="stat-value ${s.avg_excess_return>=0?'price-up':'price-down'}">${s.avg_excess_return>=0?'+':''}${s.avg_excess_return.toFixed(2)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">平均收益</div><div class="stat-value ${s.avg_pnl_pct>=0?'price-up':'price-down'}">${s.avg_pnl_pct>=0?'+':''}${s.avg_pnl_pct.toFixed(3)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">超额收益</div><div class="stat-value ${s.avg_excess_return>=0?'price-up':'price-down'}">${s.avg_excess_return>=0?'+':''}${s.avg_excess_return.toFixed(3)}%</div></div>
         <div class="perf-stat-card"><div class="stat-label">平均持有</div><div class="stat-value">${Math.round(s.avg_hold_days)}天</div></div>
     </div>`;
 
@@ -1482,13 +1482,13 @@ function renderPerformanceTab(c) {
                         <span class="perf-tracking-signal ${sigClass}">${sigLabel}</span>
                     </div>
                     <div class="perf-tracking-detail">
-                        入场 ¥${r.entry_price.toFixed(2)} → 现价 ¥${currentPrice.toFixed(2)}
-                        ${r.target_price ? ` | 目标 ¥${r.target_price.toFixed(2)}` : ''}
+                        入场 ¥${r.entry_price.toFixed(3)} → 现价 ¥${currentPrice.toFixed(3)}
+                        ${r.target_price ? ` | 目标 ¥${r.target_price.toFixed(3)}` : ''}
                         | ${holdDays}天
                         ${r.exit_reason ? ` | ${r.exit_reason === 'signal_change' ? '信号反转' : r.exit_reason === 'stop_loss' ? '止损' : r.exit_reason === 'target_hit' ? '目标到达' : r.exit_reason === 'max_hold' ? '最大持有' : r.exit_reason}` : ''}
                     </div>
                 </div>
-                <div class="perf-tracking-pnl ${pnlCls}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</div>
+                <div class="perf-tracking-pnl ${pnlCls}">${pnl>=0?'+':''}${pnl.toFixed(3)}%</div>
                 ${r.status === 'open' ? `<button class="perf-btn-close" onclick="closeTracking(${r.id}, ${currentPrice})">平仓</button>` : ''}
             </div>`;
         }

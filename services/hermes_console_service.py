@@ -435,7 +435,7 @@ async def _find_last_hermes_trade(args: dict[str, Any]) -> int | None:
             params.append(args.get("direction"))
         if args.get("shares"):
             filters.append("shares = ?")
-            params.append(int(args.get("shares")))
+            params.append(round(float(args.get("shares")), 3))
         if args.get("price"):
             filters.append("ABS(price - ?) < 0.0001")
             params.append(float(args.get("price")))
@@ -1030,7 +1030,7 @@ def _llm_parse_prompt(text: str, context: list[dict[str, Any]], known_stocks: li
         "name": "股票名称；没有就空字符串",
         "direction": "buy | sell，仅 record_trade",
         "trade_action": "buy | sell，仅 create_conditional_order",
-        "shares": "股数整数；1手=100股；没有就 null",
+        "shares": "股数数字，最多三位小数；没有就 null",
         "price": "成交价/成本价，数字；没有就 null",
         "target_price": "条件单触发价，数字；没有就 null",
         "condition_type": "price_lte | price_gte | change_pct_gte | change_pct_lte",
@@ -1134,7 +1134,7 @@ async def _normalise_llm_intent(raw: dict[str, Any], text: str) -> dict[str, Any
         **stock,
         "reason": str(raw.get("reason") or "").strip(),
     }
-    shares = _coerce_int(raw.get("shares"))
+    shares = _coerce_decimal(raw.get("shares"))
     price = _coerce_float(raw.get("price"))
     target_price = _coerce_float(raw.get("target_price"))
     if action == "record_trade":
@@ -1293,8 +1293,8 @@ async def _query_position(intent: dict[str, Any]) -> dict[str, Any]:
         position = dict(row)
         name = position.get("name") or intent.get("name") or code
         answer = (
-            f"{name} {code} 现在持仓 {position.get('total_shares') or 0} 股，"
-            f"其中可用 {position.get('available_shares') or 0} 股，"
+            f"{name} {code} 现在持仓 {_fmt_decimal(position.get('total_shares'))} 股，"
+            f"其中可用 {_fmt_decimal(position.get('available_shares'))} 股，"
             f"均价 {float(position.get('avg_cost') or 0):.3f}。"
         )
         return {"answer": answer, **position}
@@ -1556,9 +1556,9 @@ def _draft_summary(action: str, payload: dict[str, Any]) -> str:
         return f"将 {stock} 加入自选股"
     if action == "record_trade":
         direction = "买入" if payload.get("direction") == "buy" else "卖出"
-        return f"{direction} {stock} {payload.get('shares') or 0} 股，价格 {payload.get('price') or '待补充'}"
+        return f"{direction} {stock} {_fmt_decimal(payload.get('shares'))} 股，价格 {payload.get('price') or '待补充'}"
     if action == "set_position":
-        return f"将 {stock} 当前持仓校准为 {payload.get('shares') or 0} 股"
+        return f"将 {stock} 当前持仓校准为 {_fmt_decimal(payload.get('shares'))} 股"
     if action == "create_conditional_order":
         action_label = "买入" if payload.get("trade_action") == "buy" else "卖出"
         cond = CONDITION_LABELS.get(payload.get("condition_type"), payload.get("condition_type"))
@@ -1683,7 +1683,7 @@ def _extract_code(text: str) -> str:
     return match.group(1) if match else ""
 
 
-def _extract_shares(text: str) -> int | None:
+def _extract_shares(text: str) -> float | None:
     match = re.search(r"(\d+(?:\.\d+)?)\s*(万股|手|股)", text)
     if match:
         value = float(match.group(1))
@@ -1698,7 +1698,7 @@ def _extract_shares(text: str) -> int | None:
         value *= 100
     elif unit == "万股":
         value *= 10000
-    return int(value)
+    return round(value, 3)
 
 
 def _extract_price(text: str) -> float | None:
@@ -1749,13 +1749,21 @@ def _extract_json_object(text: str) -> str:
     return value
 
 
-def _coerce_int(value) -> int | None:
+def _coerce_decimal(value) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return int(float(value))
+        return round(float(value), 3)
     except (TypeError, ValueError):
         return None
+
+
+def _fmt_decimal(value: Any) -> str:
+    try:
+        number = round(float(value or 0), 3)
+    except (TypeError, ValueError):
+        number = 0
+    return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
 def _coerce_float(value) -> float | None:

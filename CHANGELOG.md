@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+## 2.7.3 - 2026-06-02
+
+### Added
+
+- Added `scripts/init_from_files.py` for one-shot local database initialization from Markdown watchlist and trade-history files.
+- Added `scripts/batch_research.py` for offline, throttled batch research with dry-run, data-only, top-N, batching, and recent-report skipping.
+- Added `stock_data_snapshots` for seven-layer prefetch snapshots with validation records before batch AI analysis.
+- Added batch position-plan output generated from stored AI reports after full-chain research.
+- Added `docs/data_initialization_and_batch_research.md` with the full initialization and batch research execution sequence.
+- Added regression tests for file-based initialization, brokerage fee calculation, observation-pool import, and batch research dry-run/data-only safety.
+
+### Changed
+
+- Changed batch research defaults toward full-chain research: `--top-n 0` covers all selected stocks and `--depth standard` runs the complete analysis path.
+- Updated release metadata, package metadata, installer badge, release docs, and macOS x86 package default version to `2.7.3`.
+- Extended macOS x86 deployment checks to compile `scripts` and validate the new initialization and batch research scripts.
+
+### Fixed
+
+- Ensured the initialization flow ignores the incorrect reported initial capital in trade-history Markdown and instead reports an inferred initial capital from current cash and historical trade cash flows.
+
+## 2.7.2 - 2026-06-02
+
+### Added
+
+- Added database initialization controls to the Intel macOS installer page for Markdown watchlist import, cash balance, cash notes, and initial holdings.
+- Added Markdown table parsing for watchlist files using the `| # | 股票名称 | 代码 |` format.
+- Added installer page and onboarding frontend regression tests.
+
+### Changed
+
+- Updated release metadata, frontend cache versions, package metadata, docs, installer guide, and macOS x86 package default version to `2.7.2`.
+- Strengthened macOS x86 deployment checks to validate the global app script and installer page inline script.
+
+### Fixed
+
+- Fixed installer-page initialization so `file://` installer pages can call local write APIs for watchlist, cash balance, and initial trades.
+- Fixed onboarding modal usability by making the desktop dialog scrollable and adding a pasted Markdown fallback.
+
+## 2.7.1 - 2026-06-02
+
+### Added
+
+- Added onboarding asset initialization for cash balance and initial holdings.
+- Added Markdown watchlist import in the onboarding wizard, supporting `name + code` lines and duplicate skipping.
+
+### Changed
+
+- Updated release metadata, frontend cache versions, package metadata, docs, installer guide, and macOS x86 package default version to `2.7.1`.
+- Updated macOS x86 deploy and update scripts to print the app version from `app_metadata.py`.
+
+### Fixed
+
+- Fixed cash balance initialization on legacy settings tables without `updated_at`.
+- Fixed portfolio trade entry and onboarding initial holdings to preserve the selected account.
+- Fixed the left watchlist add form to use the correct `group_name` API contract and provide clearer feedback.
+
 ## 2.7.0 - 2026-05-31
 
 ### Added

@@ -1,4 +1,5 @@
 """策略引擎 — 复现 HTML v1.1 网格补仓逻辑"""
+import math
 import sqlite3
 from config import DB_PATH
 from models.portfolio import get_position_summary
@@ -24,7 +25,14 @@ def _fee(price, shares, is_sell=False):
     commission = max(amount * 0.0003, 5)
     stamp = amount * 0.0005 if is_sell else 0
     transfer = amount * 0.00001
-    return round(commission + stamp + transfer, 2)
+    return round(commission + stamp + transfer, 3)
+
+
+def _floor_to_lot(value, lot):
+    lot = float(lot or 0.001)
+    if lot <= 0:
+        lot = 0.001
+    return round(math.floor(float(value or 0) / lot) * lot, 3)
 
 
 def calc_plan_table(code6):
@@ -59,7 +67,7 @@ def calc_plan_table(code6):
 
     # --- 买入阶段 ---
     # 首次建仓：用全部预算买 entry 价格
-    first_shares = int(budget / entry / lot) * lot
+    first_shares = _floor_to_lot(budget / entry, lot)
     if first_shares <= 0:
         return []
 
@@ -71,9 +79,9 @@ def calc_plan_table(code6):
         'trigger_price': round(entry, 3),
         'action': 'buy',
         'shares': first_shares,
-        'amount': round(first_cost, 2),
+        'amount': round(first_cost, 3),
         'cumulative_shares': cum_shares,
-        'cumulative_cost': round(cum_cost, 2),
+        'cumulative_cost': round(cum_cost, 3),
         'avg_price': round(cum_cost / cum_shares, 4),
     })
 
@@ -85,13 +93,13 @@ def calc_plan_table(code6):
     while stage < max_stages:
         trigger = ref_price * (1 - drop_pct / 100)
         trigger = round(trigger, 3)
-        buy_shares = max(int(cum_shares * add_mult / lot) * lot, lot)
+        buy_shares = max(_floor_to_lot(cum_shares * add_mult, lot), lot)
         buy_amount = buy_shares * trigger + _fee(trigger, buy_shares)
 
         if spent + buy_amount > budget * 1.01:  # 允许 1% 误差
             # 预算不足，用剩余买
             remaining = budget - spent
-            buy_shares = int(remaining / trigger / lot) * lot
+            buy_shares = _floor_to_lot(remaining / trigger, lot)
             if buy_shares <= 0:
                 break
             buy_amount = buy_shares * trigger + _fee(trigger, buy_shares)
@@ -105,9 +113,9 @@ def calc_plan_table(code6):
             'trigger_price': trigger,
             'action': 'buy',
             'shares': buy_shares,
-            'amount': round(buy_amount, 2),
+            'amount': round(buy_amount, 3),
             'cumulative_shares': cum_shares,
-            'cumulative_cost': round(cum_cost, 2),
+            'cumulative_cost': round(cum_cost, 3),
             'avg_price': round(cum_cost / cum_shares, 4),
         })
 
@@ -122,7 +130,7 @@ def calc_plan_table(code6):
         avg = cum_cost / cum_shares
         sell_trigger = avg * (1 + bounce_pct / 100)
         sell_trigger = round(sell_trigger, 3)
-        sell_shares = int(cum_shares * sell_pct / 100 / lot) * lot
+        sell_shares = _floor_to_lot(cum_shares * sell_pct / 100, lot)
         if sell_shares <= 0:
             sell_shares = lot
         sell_shares = min(sell_shares, cum_shares)
@@ -133,9 +141,9 @@ def calc_plan_table(code6):
             'trigger_price': sell_trigger,
             'action': 'sell',
             'shares': sell_shares,
-            'amount': round(sell_amount, 2),
+            'amount': round(sell_amount, 3),
             'cumulative_shares': cum_shares - sell_shares,
-            'cumulative_cost': round(cum_cost - avg * sell_shares, 2),
+            'cumulative_cost': round(cum_cost - avg * sell_shares, 3),
             'avg_price': round(avg, 4),
         })
 
@@ -169,30 +177,30 @@ def calc_next_triggers(code6):
 
     # 未建仓 → 首次买入
     if shares <= 0:
-        first_shares = int(budget / entry / lot) * lot if budget > 0 and entry > 0 else 0
+        first_shares = _floor_to_lot(budget / entry, lot) if budget > 0 and entry > 0 else 0
         result['next_buy_price'] = round(entry, 3) if entry > 0 else None
         result['next_buy_shares'] = first_shares
-        result['next_buy_amount'] = round(first_shares * entry, 2) if first_shares > 0 else 0
+        result['next_buy_amount'] = round(first_shares * entry, 3) if first_shares > 0 else 0
         return result
 
     # 下一个买入触发价：用 last_buy_price 或 entry 作参考
     ref = pos['last_buy_price'] or entry
     next_buy_price = round(ref * (1 - drop_pct / 100), 3)
-    next_buy_shares = max(int(shares * add_mult / lot) * lot, lot)
+    next_buy_shares = max(_floor_to_lot(shares * add_mult, lot), lot)
     spent = cost_basis
     buy_amount = next_buy_shares * next_buy_price
     if spent + buy_amount > budget * 1.01:
         remaining = budget - spent
-        next_buy_shares = int(remaining / next_buy_price / lot) * lot
+        next_buy_shares = _floor_to_lot(remaining / next_buy_price, lot)
 
     if next_buy_shares > 0:
         result['next_buy_price'] = next_buy_price
         result['next_buy_shares'] = next_buy_shares
-        result['next_buy_amount'] = round(next_buy_shares * next_buy_price, 2)
+        result['next_buy_amount'] = round(next_buy_shares * next_buy_price, 3)
 
     # 卖出触发价
     next_sell_price = round(avg_price * (1 + bounce_pct / 100), 3) if avg_price > 0 else None
-    next_sell_shares = max(int(shares * sell_pct / 100 / lot) * lot, lot)
+    next_sell_shares = max(_floor_to_lot(shares * sell_pct / 100, lot), lot)
     next_sell_shares = min(next_sell_shares, shares)
 
     result['next_sell_price'] = next_sell_price
@@ -212,20 +220,20 @@ def calc_pnl(code6, current_price):
     cost = pos['cost_basis']
     avg = pos['avg_price']
 
-    market_value = round(current_price * shares, 2)
-    float_pnl = round(market_value - cost, 2)
+    market_value = round(current_price * shares, 3)
+    float_pnl = round(market_value - cost, 3)
     net_sell_fee = _fee(current_price, shares, is_sell=True)
-    net_sell_value = round(market_value - net_sell_fee, 2)
-    net_return_pct = round((net_sell_value - cost) / cost * 100, 2) if cost > 0 else 0
+    net_sell_value = round(market_value - net_sell_fee, 3)
+    net_return_pct = round((net_sell_value - cost) / cost * 100, 3) if cost > 0 else 0
 
     target_price = None
     rebound_pct = None
     if p and p.get('target_profit_pct') and avg > 0:
         target_price = round(avg * (1 + p['target_profit_pct'] / 100), 3)
     if p and p.get('low_water_manual') and p['low_water_manual'] > 0:
-        rebound_pct = round((current_price - p['low_water_manual']) / p['low_water_manual'] * 100, 2)
+        rebound_pct = round((current_price - p['low_water_manual']) / p['low_water_manual'] * 100, 3)
     elif shares > 0 and avg > 0:
-        rebound_pct = round((current_price - avg) / avg * 100, 2)
+        rebound_pct = round((current_price - avg) / avg * 100, 3)
 
     return {
         'market_value': market_value,

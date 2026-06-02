@@ -12,7 +12,7 @@ def _get_sync_db():
 
 def record_trade(code6, trade_type, price, shares, note=''):
     """记录买入/卖出"""
-    amount = round(price * shares, 2)
+    amount = round(price * shares, 3)
     db = _get_sync_db()
     try:
         db.execute(
@@ -98,7 +98,7 @@ def get_position_summary(code6):
     return {
         'shares': total_shares,
         'avg_price': round(avg_price, 4),
-        'cost_basis': round(total_cost, 2),
+        'cost_basis': round(total_cost, 3),
         'min_buy_price': min_buy_price,
         'last_buy_price': last_buy_price,
     }
@@ -150,10 +150,10 @@ def get_portfolio_overview():
                     historical_pnl += (s['price'] - avg_b) * s['shares']
 
         return {
-            'total_value': round(total_value, 2),
-            'total_cost': round(total_cost, 2),
-            'today_pnl': round(today_pnl, 2),
-            'historical_pnl': round(historical_pnl, 2),
+            'total_value': round(total_value, 3),
+            'total_cost': round(total_cost, 3),
+            'today_pnl': round(today_pnl, 3),
+            'historical_pnl': round(historical_pnl, 3),
         }
     finally:
         db.close()

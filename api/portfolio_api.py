@@ -52,22 +52,28 @@ class WatchlistAddRequest(BaseModel):
     notes: str = ""
 
 
+class WatchlistImportMdRequest(BaseModel):
+    content: str
+    group_name: str = "默认"
+
+
 class TradeAddRequest(BaseModel):
     code: str
     name: str = ""
     direction: str = "buy"
     price: float
-    shares: int
+    shares: float
     commission: float = 0
     stamp_tax: float = 0
     transfer_fee: float = 0
     notes: str = ""
     trade_time: Optional[str] = None
+    account_id: str = "default"
 
 
 class TradeEditRequest(BaseModel):
     price: Optional[float] = None
-    shares: Optional[int] = None
+    shares: Optional[float] = None
     commission: Optional[float] = None
     stamp_tax: Optional[float] = None
     transfer_fee: Optional[float] = None
@@ -102,6 +108,16 @@ async def add_to_watchlist(req: WatchlistAddRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/watchlist/import-md")
+async def import_watchlist_markdown(req: WatchlistImportMdRequest):
+    """从 Markdown 文本批量导入自选股。"""
+    try:
+        return await portfolio_service.import_watchlist_markdown(req.content, req.group_name)
+    except Exception as e:
+        logger.error("import_watchlist_markdown error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/watchlist/{code}")
 async def remove_from_watchlist(code: str):
     """删除自选股"""
@@ -115,6 +131,7 @@ async def remove_from_watchlist(code: str):
 
 
 class WatchlistUpdateRequest(BaseModel):
+    group_name: Optional[str] = None
     target_buy_price: Optional[float] = None
     target_sell_price: Optional[float] = None
     stop_loss_price: Optional[float] = None
@@ -290,7 +307,7 @@ class ConditionalOrderRequest(BaseModel):
     condition_type: str  # price_lte, price_gte, change_pct_gte, change_pct_lte
     target_price: float
     action: str  # buy, sell
-    shares: int = 0
+    shares: float = 0
     notes: str = ""
     expires_at: Optional[str] = None
 
@@ -330,7 +347,7 @@ class PendingPositionRequest(BaseModel):
     code: str
     name: str = ""
     target_buy_price: Optional[float] = None
-    plan_shares: int = 100
+    plan_shares: float = 100
     plan_total_cost: Optional[float] = None
     reason: str = ""
     strategy_state: str = "watch"
@@ -384,7 +401,7 @@ async def delete_pending_position(pid: int):
 class BuyPointRequest(BaseModel):
     code: str
     price: float
-    shares: int = 0
+    shares: float = 0
     reason: str = ""
     status: str = "pending"
 
@@ -441,7 +458,7 @@ class TradingPlanRequest(BaseModel):
     plan_type: str = "watch"         # watch / near_target / conditional
     target_price: Optional[float] = None
     condition_type: str = "price_lte"  # price_lte / price_gte / change_pct_gte / change_pct_lte
-    plan_shares: int = 100
+    plan_shares: float = 100
     plan_total_cost: Optional[float] = None
     reason: str = ""
     status: str = "pending"

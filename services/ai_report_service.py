@@ -212,9 +212,9 @@ async def get_quality_summary(limit: int = 50):
             "signal": item["signal"],
             "tracked": item["tracked"],
             "closed": closed_count,
-            "win_rate": round(item["wins"] / closed_count * 100, 2) if closed_count else 0,
-            "avg_pnl_pct": round(item["pnl_sum"] / closed_count, 2) if closed_count else 0,
-            "avg_excess_return": round(item["excess_sum"] / closed_count, 2) if closed_count else 0,
+            "win_rate": round(item["wins"] / closed_count * 100, 3) if closed_count else 0,
+            "avg_pnl_pct": round(item["pnl_sum"] / closed_count, 3) if closed_count else 0,
+            "avg_excess_return": round(item["excess_sum"] / closed_count, 3) if closed_count else 0,
         })
     model_stats = []
     for item in by_model.values():
@@ -223,21 +223,21 @@ async def get_quality_summary(limit: int = 50):
             "model_mode": item["model_mode"],
             "reports": item["reports"],
             "verified": verified_count,
-            "fact_check_pass_rate": round(item["accuracy_sum"] / verified_count, 2) if verified_count else 0,
+            "fact_check_pass_rate": round(item["accuracy_sum"] / verified_count, 3) if verified_count else 0,
             "hallucinations": item["hallucinations"],
         })
     best_model = max(model_stats, key=lambda item: (item["fact_check_pass_rate"], -item["hallucinations"], item["reports"]), default=None)
     return {
         "report_count": len(rows),
         "verified_count": verified,
-        "fact_check_pass_rate": round(sum(accuracies) / len(accuracies), 2) if accuracies else 0,
+        "fact_check_pass_rate": round(sum(accuracies) / len(accuracies), 3) if accuracies else 0,
         "hallucination_count": hallucinations,
         "signal_after_return": {
             "tracked": len(tracking_rows),
             "closed": len(closed),
-            "win_rate": round(wins / len(closed) * 100, 2) if closed else 0,
-            "avg_pnl_pct": round(avg_pnl, 2),
-            "avg_excess_return": round(avg_excess, 2),
+            "win_rate": round(wins / len(closed) * 100, 3) if closed else 0,
+            "avg_pnl_pct": round(avg_pnl, 3),
+            "avg_excess_return": round(avg_excess, 3),
         },
         "by_signal": sorted(signal_stats, key=lambda item: item["tracked"], reverse=True),
         "by_model_mode": sorted(model_stats, key=lambda item: item["reports"], reverse=True),

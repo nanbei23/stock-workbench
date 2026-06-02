@@ -55,7 +55,7 @@ def tool_specs() -> list[dict[str, Any]]:
                 "code": "6位A股代码",
                 "name": "股票名称，可空",
                 "direction": "buy | sell",
-                "shares": "正整数股数，1手=100股",
+                "shares": "正数股数，最多三位小数",
                 "price": "正数成交价",
             },
         },
@@ -66,7 +66,7 @@ def tool_specs() -> list[dict[str, Any]]:
             "args": {
                 "code": "6位A股代码",
                 "name": "股票名称，可空",
-                "shares": "非负整数目标持仓股数",
+                "shares": "非负目标持仓股数，最多三位小数",
                 "price": "可选校准价；缺失时使用已有持仓均价",
             },
         },
@@ -123,7 +123,7 @@ def risk_level_for_tool(tool: str, args: dict[str, Any] | None = None) -> str:
         return "high"
     if tool == "record_trade":
         direction = str(payload.get("direction") or "").strip()
-        shares = _coerce_non_negative_int(payload.get("shares")) or 0
+        shares = _coerce_non_negative_number(payload.get("shares")) or 0
         price = _coerce_positive_float(payload.get("price")) or 0
         if direction == "sell" or shares * price >= 100000:
             return "high"
@@ -246,7 +246,7 @@ def validate_tool_call(call: HermesToolCall) -> HermesToolValidation:
         direction = str(args.get("direction") or "").strip()
         if direction not in TRADE_DIRECTIONS:
             blockers.append("缺少交易方向 buy/sell")
-        shares = _coerce_positive_int(args.get("shares"))
+        shares = _coerce_positive_number(args.get("shares"))
         if not shares:
             blockers.append("缺少股数")
         price = _coerce_positive_float(args.get("price"))
@@ -254,7 +254,7 @@ def validate_tool_call(call: HermesToolCall) -> HermesToolValidation:
             blockers.append("缺少成交价")
         normalized.update({"direction": direction, "shares": shares, "price": price})
     elif tool == "set_position":
-        shares = _coerce_non_negative_int(args.get("shares"))
+        shares = _coerce_non_negative_number(args.get("shares"))
         if shares is None:
             blockers.append("缺少目标持仓股数")
         price = _coerce_positive_float(args.get("price"))
@@ -271,7 +271,7 @@ def validate_tool_call(call: HermesToolCall) -> HermesToolValidation:
         target_price = _coerce_positive_float(args.get("target_price"))
         if not target_price:
             blockers.append("缺少触发价格")
-        shares = _coerce_non_negative_int(args.get("shares"))
+        shares = _coerce_non_negative_number(args.get("shares"))
         normalized.update(
             {
                 "trade_action": trade_action,
@@ -320,7 +320,7 @@ async def execute_tool(tool: str, args: dict[str, Any], source_text: str = "") -
             condition_type=payload["condition_type"],
             target_price=float(payload["target_price"]),
             action=payload.get("trade_action") or "buy",
-            shares=int(payload.get("shares") or 0),
+            shares=float(payload.get("shares") or 0),
             notes="Hermes 对话台创建",
             expires_at=None,
         )
@@ -381,9 +381,9 @@ async def _preview_add_watchlist(payload: dict[str, Any]) -> dict[str, Any]:
 
 async def _preview_record_trade(payload: dict[str, Any]) -> dict[str, Any]:
     current = await _position_snapshot(payload["code"])
-    current_shares = int(current.get("total_shares") or 0)
+    current_shares = round(float(current.get("total_shares") or 0), 3)
     current_cost = float(current.get("avg_cost") or 0)
-    shares = int(payload["shares"])
+    shares = round(float(payload["shares"]), 3)
     price = float(payload["price"])
     direction = payload["direction"]
     warnings: list[str] = []
@@ -391,22 +391,22 @@ async def _preview_record_trade(payload: dict[str, Any]) -> dict[str, Any]:
     if direction == "buy":
         next_shares = current_shares + shares
         next_cost = ((current_shares * current_cost) + (shares * price)) / next_shares if next_shares else 0
-        summary = f"确认后持仓预计从 {current_shares} 股增加到 {next_shares} 股。"
+        summary = f"确认后持仓预计从 {_fmt_decimal(current_shares)} 股增加到 {_fmt_decimal(next_shares)} 股。"
     else:
         if shares > current_shares:
             warnings.append("卖出数量大于当前持仓，持仓重算时会归零。")
         next_shares = max(0, current_shares - shares)
         next_cost = current_cost if next_shares else 0
-        summary = f"确认后持仓预计从 {current_shares} 股减少到 {next_shares} 股。"
+        summary = f"确认后持仓预计从 {_fmt_decimal(current_shares)} 股减少到 {_fmt_decimal(next_shares)} 股。"
 
     return {
         "status": "ready",
         "summary": summary,
         "items": [
-            {"label": "当前持仓", "value": f"{current_shares} 股"},
+            {"label": "当前持仓", "value": f"{_fmt_decimal(current_shares)} 股"},
             {"label": "当前均价", "value": f"{current_cost:.4f}"},
-            {"label": "交易影响", "value": f"{'买入' if direction == 'buy' else '卖出'} {shares} 股 @ {price:g}"},
-            {"label": "预计持仓", "value": f"{next_shares} 股"},
+            {"label": "交易影响", "value": f"{'买入' if direction == 'buy' else '卖出'} {_fmt_decimal(shares)} 股 @ {price:g}"},
+            {"label": "预计持仓", "value": f"{_fmt_decimal(next_shares)} 股"},
             {"label": "预计均价", "value": f"{next_cost:.4f}"},
         ],
         "warnings": warnings,
@@ -415,8 +415,8 @@ async def _preview_record_trade(payload: dict[str, Any]) -> dict[str, Any]:
 
 async def _preview_set_position(payload: dict[str, Any]) -> dict[str, Any]:
     current = await _position_snapshot(payload["code"])
-    current_shares = int(current.get("total_shares") or 0)
-    target = int(payload["shares"])
+    current_shares = round(float(current.get("total_shares") or 0), 3)
+    target = round(float(payload["shares"]), 3)
     diff = target - current_shares
     avg_cost = float(current.get("avg_cost") or 0)
     price = payload.get("price") or avg_cost
@@ -424,11 +424,11 @@ async def _preview_set_position(payload: dict[str, Any]) -> dict[str, Any]:
     action = "无需调整" if diff == 0 else ("补买" if diff > 0 else "补卖")
     return {
         "status": "ready" if price or diff == 0 else "blocked",
-        "summary": f"确认后会通过差额交易把持仓从 {current_shares} 股校准到 {target} 股。",
+        "summary": f"确认后会通过差额交易把持仓从 {_fmt_decimal(current_shares)} 股校准到 {_fmt_decimal(target)} 股。",
         "items": [
-            {"label": "当前持仓", "value": f"{current_shares} 股"},
-            {"label": "目标持仓", "value": f"{target} 股"},
-            {"label": "差额动作", "value": f"{action} {abs(diff)} 股"},
+            {"label": "当前持仓", "value": f"{_fmt_decimal(current_shares)} 股"},
+            {"label": "目标持仓", "value": f"{_fmt_decimal(target)} 股"},
+            {"label": "差额动作", "value": f"{action} {_fmt_decimal(abs(diff))} 股"},
             {"label": "参考价格", "value": f"{float(price):g}" if price else "缺失"},
         ],
         "warnings": warnings,
@@ -468,7 +468,7 @@ async def _preview_conditional_order(payload: dict[str, Any]) -> dict[str, Any]:
         "items": [
             {"label": "方向", "value": "买入" if payload["trade_action"] == "buy" else "卖出"},
             {"label": "触发条件", "value": f"{payload['condition_type']} {payload['target_price']:g}"},
-            {"label": "计划股数", "value": f"{int(payload.get('shares') or 0)} 股"},
+            {"label": "计划股数", "value": f"{_fmt_decimal(payload.get('shares'))} 股"},
             {"label": "现有待执行", "value": f"{pending_count} 条"},
         ],
         "warnings": warnings,
@@ -486,11 +486,11 @@ async def _position_snapshot(code: str) -> dict[str, Any]:
 
 async def _execute_set_position(payload: dict[str, Any], source_text: str = "") -> dict[str, Any]:
     code = payload["code"]
-    target = int(payload["shares"])
+    target = round(float(payload["shares"]), 3)
     db = await get_db()
     try:
         row = await (await db.execute("SELECT * FROM portfolio WHERE code = ?", (code,))).fetchone()
-        current = int(row["total_shares"]) if row else 0
+        current = round(float(row["total_shares"]), 3) if row else 0
         avg_cost = float(row["avg_cost"]) if row and row["avg_cost"] else 0
     finally:
         await db.close()
@@ -517,7 +517,7 @@ def _trade_request(payload: dict[str, Any], source_text: str = "") -> SimpleName
         name=payload.get("name") or payload["code"],
         direction=payload["direction"],
         price=float(payload["price"]),
-        shares=int(payload["shares"]),
+        shares=float(payload["shares"]),
         commission=0,
         stamp_tax=0,
         transfer_fee=0,
@@ -531,17 +531,17 @@ def _normalize_code(value: Any) -> str:
     return code if re.fullmatch(r"[036]\d{5}", code) else ""
 
 
-def _coerce_positive_int(value: Any) -> int | None:
+def _coerce_positive_number(value: Any) -> float | None:
     try:
-        result = int(float(value))
+        result = round(float(value), 3)
     except (TypeError, ValueError):
         return None
     return result if result > 0 else None
 
 
-def _coerce_non_negative_int(value: Any) -> int | None:
+def _coerce_non_negative_number(value: Any) -> float | None:
     try:
-        result = int(float(value))
+        result = round(float(value), 3)
     except (TypeError, ValueError):
         return None
     return result if result >= 0 else None
@@ -560,6 +560,14 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _fmt_decimal(value: Any) -> str:
+    try:
+        number = round(float(value or 0), 3)
+    except (TypeError, ValueError):
+        number = 0
+    return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
 def compact_tool_context() -> str:

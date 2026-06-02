@@ -34,8 +34,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
 CREATE TABLE IF NOT EXISTS portfolio (
     code TEXT PRIMARY KEY,
     name TEXT,
-    total_shares INTEGER DEFAULT 0,
-    available_shares INTEGER DEFAULT 0,
+    total_shares REAL DEFAULT 0,
+    available_shares REAL DEFAULT 0,
     avg_cost REAL DEFAULT 0,
     current_price REAL DEFAULT 0,
     market_value REAL DEFAULT 0,
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS trades (
     name TEXT,
     direction TEXT NOT NULL,
     price REAL NOT NULL,
-    shares INTEGER NOT NULL,
+    shares REAL NOT NULL,
     amount REAL NOT NULL,
     commission REAL DEFAULT 0,
     stamp_tax REAL DEFAULT 0,
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS conditional_orders (
     condition_type TEXT NOT NULL,
     target_price REAL NOT NULL,
     action TEXT NOT NULL,
-    shares INTEGER,
+    shares REAL,
     status TEXT DEFAULT "pending",
     triggered_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -132,6 +132,18 @@ CREATE TABLE IF NOT EXISTS analysis_reports (
     model_mode TEXT DEFAULT 'balanced'
 );
 
+CREATE TABLE IF NOT EXISTS stock_data_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    name TEXT,
+    snapshot_json TEXT NOT NULL,
+    validation_json TEXT DEFAULT '{}',
+    summary_json TEXT DEFAULT '{}',
+    source TEXT DEFAULT 'batch_research',
+    run_id TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS anomaly_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
@@ -158,7 +170,7 @@ CREATE TABLE IF NOT EXISTS daily_pnl (
     total_pnl_pct REAL,
     pnl REAL,
     close_price REAL,
-    shares INTEGER,
+    shares REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (date, code6)
 );
@@ -185,7 +197,7 @@ CREATE TABLE IF NOT EXISTS pending_positions (
     code TEXT NOT NULL,
     name TEXT,
     target_buy_price REAL,
-    plan_shares INTEGER DEFAULT 100,
+    plan_shares REAL DEFAULT 100,
     plan_total_cost REAL,
     reason TEXT,
     strategy_state TEXT DEFAULT "watch",
@@ -201,7 +213,7 @@ CREATE TABLE IF NOT EXISTS trading_plans (
     plan_type TEXT NOT NULL DEFAULT 'watch', -- watch / near_target / conditional
     target_price REAL,
     condition_type TEXT DEFAULT 'price_lte', -- price_lte / price_gte / change_pct_gte / change_pct_lte
-    plan_shares INTEGER DEFAULT 100,
+    plan_shares REAL DEFAULT 100,
     plan_total_cost REAL,
     status TEXT DEFAULT 'pending',           -- pending / triggered / filled / cancelled
     reason TEXT,
@@ -215,7 +227,7 @@ CREATE TABLE IF NOT EXISTS buy_points (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
     price REAL NOT NULL,
-    shares INTEGER DEFAULT 0,
+    shares REAL DEFAULT 0,
     reason TEXT,
     status TEXT DEFAULT "pending",
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -279,7 +291,7 @@ CREATE TABLE IF NOT EXISTS ai_shadow_orders (
     fill_price REAL,
     target_price REAL,
     stop_loss_price REAL,
-    shares INTEGER DEFAULT 0,
+    shares REAL DEFAULT 0,
     confidence REAL,
     risk_score REAL,
     status TEXT DEFAULT 'pending',
@@ -296,7 +308,7 @@ CREATE TABLE IF NOT EXISTS ai_shadow_orders (
 CREATE TABLE IF NOT EXISTS ai_shadow_positions (
     code TEXT PRIMARY KEY,
     name TEXT,
-    total_shares INTEGER DEFAULT 0,
+    total_shares REAL DEFAULT 0,
     avg_cost REAL DEFAULT 0,
     current_price REAL DEFAULT 0,
     market_value REAL DEFAULT 0,
@@ -395,6 +407,8 @@ CREATE INDEX IF NOT EXISTS idx_trades_code_time ON trades(code, trade_time);
 CREATE INDEX IF NOT EXISTS idx_conditional_orders_status ON conditional_orders(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_conditional_orders_code_status ON conditional_orders(code, status);
 CREATE INDEX IF NOT EXISTS idx_analysis_reports_code_created ON analysis_reports(code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_code_created ON stock_data_snapshots(code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_run ON stock_data_snapshots(run_id, code);
 CREATE INDEX IF NOT EXISTS idx_anomaly_logs_code_created ON anomaly_logs(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_code_cached ON news_cache(code6, cached_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_url ON news_cache(url);
@@ -548,7 +562,7 @@ MIGRATIONS = [
             fill_price REAL,
             target_price REAL,
             stop_loss_price REAL,
-            shares INTEGER DEFAULT 0,
+            shares REAL DEFAULT 0,
             confidence REAL,
             risk_score REAL,
             status TEXT DEFAULT 'pending',
@@ -564,7 +578,7 @@ MIGRATIONS = [
         CREATE TABLE IF NOT EXISTS ai_shadow_positions (
             code TEXT PRIMARY KEY,
             name TEXT,
-            total_shares INTEGER DEFAULT 0,
+            total_shares REAL DEFAULT 0,
             avg_cost REAL DEFAULT 0,
             current_price REAL DEFAULT 0,
             market_value REAL DEFAULT 0,
@@ -580,6 +594,27 @@ MIGRATIONS = [
             ON ai_shadow_orders(code, status);
         CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_created
             ON ai_shadow_orders(created_at DESC);
+        """,
+    ),
+    (
+        7,
+        "stock_data_snapshots",
+        """
+        CREATE TABLE IF NOT EXISTS stock_data_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL,
+            name TEXT,
+            snapshot_json TEXT NOT NULL,
+            validation_json TEXT DEFAULT '{}',
+            summary_json TEXT DEFAULT '{}',
+            source TEXT DEFAULT 'batch_research',
+            run_id TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_code_created
+            ON stock_data_snapshots(code, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_run
+            ON stock_data_snapshots(run_id, code);
         """,
     ),
 ]

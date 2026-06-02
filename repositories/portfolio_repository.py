@@ -31,6 +31,17 @@ async def next_watchlist_sort_order(db):
     return (row[0] if row else 0) + 1
 
 
+async def fetch_watchlist_codes(db, codes: list[str]):
+    if not codes:
+        return set()
+    placeholders = ",".join("?" for _ in codes)
+    rows = await db.execute_fetchall(
+        f"SELECT code FROM watchlist WHERE code IN ({placeholders})",
+        codes,
+    )
+    return {row["code"] for row in rows}
+
+
 async def insert_watchlist_stock(db, req, sort_order: int):
     await db.execute(
         """
@@ -99,15 +110,16 @@ async def fetch_trades(db, code=None, account_id=None):
 
 
 async def insert_trade(db, req):
-    amount = round(req.price * req.shares, 2)
-    total_cost = round(amount + req.commission + req.stamp_tax + req.transfer_fee, 2)
+    account_id = getattr(req, "account_id", None) or "default"
+    amount = round(req.price * req.shares, 3)
+    total_cost = round(amount + req.commission + req.stamp_tax + req.transfer_fee, 3)
     trade_time = req.trade_time if req.trade_time else None
     await db.execute(
         """
         INSERT INTO trades (
             code, name, direction, price, shares, amount,
-            commission, stamp_tax, transfer_fee, total_cost, trade_time, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?)
+            commission, stamp_tax, transfer_fee, total_cost, trade_time, notes, account_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
         """,
         (
             req.code,
@@ -122,6 +134,7 @@ async def insert_trade(db, req):
             total_cost,
             trade_time,
             req.notes,
+            account_id,
         ),
     )
     await db.commit()
@@ -191,15 +204,16 @@ async def update_trade(db, trade_id: int, values: dict):
     await db.commit()
 
 
-async def recalc_portfolio(db, code: str):
+async def recalc_portfolio(db, code: str, account_id: str | None = None):
+    aid = account_id or "default"
     rows = await db.execute_fetchall(
         """
         SELECT direction, price, shares, amount, commission, stamp_tax, transfer_fee
         FROM trades
-        WHERE code = ?
+        WHERE code = ? AND account_id = ?
         ORDER BY trade_time ASC
         """,
-        (code,),
+        (code, aid),
     )
     total_shares = 0
     total_cost = 0.0
@@ -218,28 +232,33 @@ async def recalc_portfolio(db, code: str):
             total_shares = max(0, total_shares - trade["shares"])
             total_cost = avg_before * total_shares
 
-    avg_cost = round(total_cost / total_shares, 4) if total_shares > 0 else 0
+    total_shares = round(total_shares, 3)
+    avg_cost = round(total_cost / total_shares, 3) if total_shares > 0 else 0
     name_row = await (
-        await db.execute("SELECT name FROM trades WHERE code = ? LIMIT 1", (code,))
+        await db.execute(
+            "SELECT name FROM trades WHERE code = ? AND account_id = ? LIMIT 1",
+            (code, aid),
+        )
     ).fetchone()
     name = dict(name_row)["name"] if name_row else ""
     if total_shares > 0:
         await db.execute(
             """
-            INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost, updated_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost, updated_at, account_id)
+            VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
             ON CONFLICT(code) DO UPDATE SET
                 total_shares=excluded.total_shares,
                 available_shares=excluded.available_shares,
                 avg_cost=excluded.avg_cost,
-                updated_at=excluded.updated_at
+                updated_at=excluded.updated_at,
+                account_id=excluded.account_id
             """,
-            (code, name, total_shares, total_shares, avg_cost),
+            (code, name, total_shares, total_shares, avg_cost, aid),
         )
     else:
-        await db.execute("DELETE FROM portfolio WHERE code = ?", (code,))
+        await db.execute("DELETE FROM portfolio WHERE code = ? AND account_id = ?", (code, aid))
     await db.commit()
-    return {"code": code, "total_shares": total_shares, "avg_cost": avg_cost}
+    return {"code": code, "account_id": aid, "total_shares": total_shares, "avg_cost": avg_cost}
 
 
 async def fetch_positions(db, account_id=None):
@@ -294,29 +313,27 @@ async def set_cash_balance(db, account_id: str | None, balance: float, notes: st
     aid = account_id or "default"
     key = f"cash_balance_{aid}"
     current = await fetch_cash_and_fees(db, aid)
-    amount = round(float(balance) - float(current["cash"]), 2)
+    amount = round(float(balance) - float(current["cash"]), 3)
     direction = "deposit" if amount > 0 else "withdraw" if amount < 0 else "adjust"
     await db.execute(
         """
-        INSERT INTO settings (key, value, updated_at)
-        VALUES (?, ?, datetime('now'))
-        ON CONFLICT(key) DO UPDATE SET
-            value = excluded.value,
-            updated_at = excluded.updated_at
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
         """,
-        (key, str(round(float(balance), 2))),
+        (key, str(round(float(balance), 3))),
     )
     await db.execute(
         """
         INSERT INTO cash_ledger (account_id, direction, amount, balance_after, source, notes)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (aid, direction, amount, round(float(balance), 2), source, notes),
+        (aid, direction, amount, round(float(balance), 3), source, notes),
     )
     await db.commit()
     return {
         "account_id": aid,
-        "cash": round(float(balance), 2),
+        "cash": round(float(balance), 3),
         "amount": amount,
         "direction": direction,
         "source": source,

@@ -63,7 +63,7 @@
       </div>
     </div>
     <div class="cash-adjust-panel">
-      <input type="number" id="cashBalanceInput" step="0.01" placeholder="设置可用资金">
+      <input type="number" id="cashBalanceInput" step="0.001" placeholder="设置可用资金">
       <input type="text" id="cashBalanceNote" placeholder="备注，例如 初始入金 / 银证转入">
       <button class="btn btn-sm btn-primary" onclick="saveCashBalance()">保存现金</button>
       <button class="btn btn-sm btn-ghost" onclick="loadCashLedger()">查看流水</button>
@@ -116,7 +116,7 @@
           <div style="font-size:1.1rem;font-weight:600;font-family:var(--font-mono);" id="latestBuyPrice">--</div>
         </div>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
-          <input type="number" id="manualTargetPrice" step="0.01" placeholder="手动设目标价" style="width:120px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.85rem;">
+          <input type="number" id="manualTargetPrice" step="0.001" placeholder="手动设目标价" style="width:120px;padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.85rem;">
           <button class="btn btn-sm btn-primary" onclick="saveManualTargetPrice()">保存</button>
           <button class="btn btn-sm" style="background:#e74c3c;color:#fff;" onclick="clearStockTrades()">清空此股</button>
         </div>
@@ -201,7 +201,7 @@
         </div>
         <div class="form-group">
           <label>目标价</label>
-          <input type="number" id="planTargetPrice" step="0.01" placeholder="目标价格">
+          <input type="number" id="planTargetPrice" step="0.001" placeholder="目标价格">
         </div>
         <div class="form-group">
           <label>触发条件</label>
@@ -214,7 +214,7 @@
         </div>
         <div class="form-group">
           <label>计划股数</label>
-          <input type="number" id="planShares" step="100" value="100">
+          <input type="number" id="planShares" step="0.001" value="100">
         </div>
         <div class="form-group">
           <label>失效时间（可选）</label>
@@ -256,23 +256,23 @@
         </div>
         <div class="form-group">
           <label>价格</label>
-          <input type="number" id="tradePrice" step="0.01" placeholder="价格" required>
+          <input type="number" id="tradePrice" step="0.001" placeholder="价格" required>
         </div>
         <div class="form-group">
           <label>数量（股）</label>
-          <input type="number" id="tradeShares" step="100" placeholder="数量" required>
+          <input type="number" id="tradeShares" step="0.001" placeholder="数量" required>
         </div>
         <div class="form-group">
           <label>佣金</label>
-          <input type="number" id="tradeCommission" step="0.01" value="0">
+          <input type="number" id="tradeCommission" step="0.001" value="0">
         </div>
         <div class="form-group">
           <label>印花税</label>
-          <input type="number" id="tradeStampTax" step="0.01" value="0">
+          <input type="number" id="tradeStampTax" step="0.001" value="0">
         </div>
         <div class="form-group">
           <label>过户费</label>
-          <input type="number" id="tradeTransferFee" step="0.01" value="0">
+          <input type="number" id="tradeTransferFee" step="0.001" value="0">
         </div>
       </div>
       <div class="modal-actions">

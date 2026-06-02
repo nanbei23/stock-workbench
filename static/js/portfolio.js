@@ -130,12 +130,12 @@ async function apiPut(url, data) {
 // ── 格式化函数 ────────────────────────────────────────────
 function formatMoney(n) {
   if (n == null) return '--';
-  return '¥' + n.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return '¥' + n.toLocaleString('zh-CN', {minimumFractionDigits: 3, maximumFractionDigits: 3});
 }
 
 function formatPct(n) {
   if (n == null) return '--';
-  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+  return (n >= 0 ? '+' : '') + n.toFixed(3) + '%';
 }
 
 function formatTime(value) {
@@ -349,7 +349,7 @@ async function loadPortfolio() {
                 <div class="sc-code">${code}</div>
               </div>
               <div class="sc-price ${priceClass(p.change_pct)}">
-                ${p.price ? p.price.toFixed(2) : '--'}<span class="sc-price-unit">元</span>
+                ${p.price ? p.price.toFixed(3) : '--'}<span class="sc-price-unit">元</span>
               </div>
             </div>
             <div class="sc-right">
@@ -359,7 +359,7 @@ async function loadPortfolio() {
               </div>
               <div class="sc-data-row">
                 <span class="sc-data-lbl">成本</span>
-                <span class="sc-data-val">${p.avg_cost.toFixed(2)}</span>
+                <span class="sc-data-val">${p.avg_cost.toFixed(3)}</span>
               </div>
               <div class="sc-data-row">
                 <span class="sc-data-lbl">盈亏</span>
@@ -422,8 +422,8 @@ async function loadHoldingsTable() {
         <tr style="cursor:pointer;" onclick="showPositionDetail('${clickCode}')">
           <td><strong>${name}</strong><br><small class="text-muted">${code}</small></td>
           <td>${p.total_shares}</td>
-          <td>${p.avg_cost.toFixed(2)}</td>
-          <td class="${priceClass(p.change_pct)}">${p.price ? p.price.toFixed(2) : '--'}</td>
+          <td>${p.avg_cost.toFixed(3)}</td>
+          <td class="${priceClass(p.change_pct)}">${p.price ? p.price.toFixed(3) : '--'}</td>
           <td>${formatMoney(marketValue)}</td>
           <td>${weight}%</td>
           <td class="${dailyCls}">${formatMoney(dailyPnl)}</td>
@@ -465,7 +465,7 @@ async function loadTradingPlans() {
       const code = esc(p.code);
       const reason = esc(p.reason);
 
-      const distance = p.distance_pct != null ? (p.distance_pct >= 0 ? '+' : '') + p.distance_pct.toFixed(2) + '%' : '--';
+      const distance = p.distance_pct != null ? (p.distance_pct >= 0 ? '+' : '') + p.distance_pct.toFixed(3) + '%' : '--';
       const planCost = p.plan_total_cost ? formatMoney(p.plan_total_cost) : '--';
 
       return `
@@ -478,8 +478,8 @@ async function loadTradingPlans() {
             <span style="margin-left:auto;font-size:0.75rem;color:var(--text-secondary);">${typeText}</span>
           </div>
           <div class="order-body" style="display:flex;gap:16px;align-items:center;padding:8px 0;font-size:0.85rem;">
-            ${p.target_price ? `<span>目标价: <strong>${p.target_price.toFixed(2)}</strong></span>` : ''}
-            <span>现价: ${p.current_price ? '<strong>' + p.current_price.toFixed(2) + '</strong>' : '--'}</span>
+            ${p.target_price ? `<span>目标价: <strong>${p.target_price.toFixed(3)}</strong></span>` : ''}
+            <span>现价: ${p.current_price ? '<strong>' + p.current_price.toFixed(3) + '</strong>' : '--'}</span>
             ${p.target_price ? `<span>距离: <strong class="${p.distance_pct != null && p.distance_pct <= 0 ? 'up' : 'down'}">${distance}</strong></span>` : ''}
             <span>计划: ${p.plan_shares || '--'}股</span>
             <span>金额: ${planCost}</span>
@@ -518,7 +518,7 @@ async function submitPlan(e) {
   const plan_type = document.getElementById('planType').value;
   const target_price = parseFloat(document.getElementById('planTargetPrice').value) || null;
   const condition_type = document.getElementById('planCondType').value;
-  const plan_shares = parseInt(document.getElementById('planShares').value) || 100;
+  const plan_shares = parseFloat(document.getElementById('planShares').value) || 100;
   const reason = document.getElementById('planReason').value.trim();
   const expiresAtInput = document.getElementById('planExpiresAt');
   let expires_at = null;
@@ -581,10 +581,10 @@ async function loadTrades() {
           <td>${tradeTime}</td>
           <td><strong>${name}</strong></td>
           <td class="${dirClass}">${dirText}</td>
-          <td>${t.price.toFixed(2)}</td>
+          <td>${t.price.toFixed(3)}</td>
           <td>${t.shares}</td>
-          <td>¥${t.amount.toLocaleString()}</td>
-          <td>${totalCost > 0 ? '¥' + totalCost.toFixed(2) : '--'}</td>
+          <td>${formatMoney(t.amount)}</td>
+          <td>${totalCost > 0 ? '¥' + totalCost.toFixed(3) : '--'}</td>
           <td><button class="btn btn-sm btn-ghost" onclick="deleteTrade(${t.id})" title="删除此笔">删除</button></td>
         </tr>
       `;
@@ -598,8 +598,8 @@ async function loadTrades() {
 async function loadTradeStats(code) {
   try {
     const data = await portfolioGet(`/api/trades/stats/${code}`);
-    document.getElementById('lowestBuyPrice').textContent = data.lowest_buy_price ? data.lowest_buy_price.toFixed(2) : '--';
-    document.getElementById('latestBuyPrice').textContent = data.latest_buy_price ? data.latest_buy_price.toFixed(2) : '--';
+    document.getElementById('lowestBuyPrice').textContent = data.lowest_buy_price ? data.lowest_buy_price.toFixed(3) : '--';
+    document.getElementById('latestBuyPrice').textContent = data.latest_buy_price ? data.latest_buy_price.toFixed(3) : '--';
   } catch (e) {
     console.error('loadTradeStats error:', e);
   }
@@ -627,7 +627,7 @@ async function undoLastTrade() {
     return;
   }
   const last = _allTrades[0]; // trades are sorted by time DESC
-  if (!confirm(`确认撤销最近一笔交易？\n${last.name || last.code} ${last.direction === 'buy' ? '买入' : '卖出'} ${last.shares}股 @ ${last.price.toFixed(2)}`)) return;
+  if (!confirm(`确认撤销最近一笔交易？\n${last.name || last.code} ${last.direction === 'buy' ? '买入' : '卖出'} ${last.shares}股 @ ${last.price.toFixed(3)}`)) return;
   try {
     await apiDelete(`/api/trades/${last.id}`);
     await refreshAll();
@@ -816,7 +816,7 @@ async function loadDayDetailData(dateStr, popup) {
     const trades = data.trades || [];
 
     let totalPnl = dailyPnl ? (dailyPnl.total_pnl || 0) : 0;
-    let totalPnlText = totalPnl >= 0 ? '+' + totalPnl.toFixed(2) : totalPnl.toFixed(2);
+    let totalPnlText = totalPnl >= 0 ? '+' + totalPnl.toFixed(3) : totalPnl.toFixed(3);
 
     let html = `
       <div class="day-detail-header">
@@ -833,7 +833,7 @@ async function loadDayDetailData(dateStr, popup) {
         const cls = priceClass(amt);
         html += `<div class="day-detail-row">
           <span>${esc(s.name || s.code)}</span>
-          <span class="${cls}" style="font-family:var(--font-mono);">${amt >= 0 ? '+' : ''}${amt.toFixed(2)}</span>
+          <span class="${cls}" style="font-family:var(--font-mono);">${amt >= 0 ? '+' : ''}${amt.toFixed(3)}</span>
         </div>`;
       });
       html += '</div>';
@@ -847,7 +847,7 @@ async function loadDayDetailData(dateStr, popup) {
         html += `<div class="day-detail-row" style="font-size:0.8rem;">
           <span class="${cls}">${dir}</span>
           <span>${esc(t.name || t.code)}</span>
-          <span>${t.shares}股 × ${t.price.toFixed(2)}</span>
+          <span>${t.shares}股 × ${t.price.toFixed(3)}</span>
         </div>`;
       });
       html += '</div>';
@@ -896,7 +896,7 @@ async function submitTrade(e) {
   const name = document.getElementById('tradeName').value.trim();
   const direction = document.getElementById('tradeDir').value;
   const price = parseFloat(document.getElementById('tradePrice').value);
-  const shares = parseInt(document.getElementById('tradeShares').value);
+  const shares = parseFloat(document.getElementById('tradeShares').value);
   const commission = parseFloat(document.getElementById('tradeCommission').value) || 0;
   const stampTax = parseFloat(document.getElementById('tradeStampTax').value) || 0;
   const transferFee = parseFloat(document.getElementById('tradeTransferFee').value) || 0;
@@ -909,7 +909,8 @@ async function submitTrade(e) {
   try {
     const result = await portfolioPost('/api/trades', {
       code, name, direction, price, shares,
-      commission, stamp_tax: stampTax, transfer_fee: transferFee
+      commission, stamp_tax: stampTax, transfer_fee: transferFee,
+      account_id: selectedAccountId()
     });
     
     closeTradeModal();

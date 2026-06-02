@@ -104,11 +104,11 @@ function renderHotspotDetail(data, partial) {
     <span class="heat-pill ${directionClass(topic.trend_direction)}">${Number(topic.heat_score || 0)}</span>
   </div>
   <p>${escapeHtml(topic.reason || '暂无形成原因。')}</p>
-  <p>来源：${escapeHtml((topic.source_tags || []).join(' / ') || '本地聚合')} · 可信度 ${topic.reliability || '--'}${topic.market_metrics?.change_pct != null ? ` · 板块涨跌 ${Number(topic.market_metrics.change_pct || 0).toFixed(2)}%` : ''}</p>
+  <p>来源：${escapeHtml((topic.source_tags || []).join(' / ') || '本地聚合')} · 可信度 ${topic.reliability || '--'}${topic.market_metrics?.change_pct != null ? ` · 板块涨跌 ${Number(topic.market_metrics.change_pct || 0).toFixed(3)}%` : ''}</p>
   <div class="stock-chip-list">
     ${stocks.length ? stocks.map(item => `<a class="stock-chip" href="/?code=${escapeAttr(item.code || '')}">
       <span><b>${escapeHtml(item.name || item.code)}</b> <small>${escapeHtml(item.code || '')}</small></span>
-      <small>${item.holding ? '持仓' : '观察'} · ${escapeHtml(item.strategy_state || 'watch')}${item.change_pct != null ? ` · 涨跌 ${Number(item.change_pct || 0).toFixed(2)}%` : ''}${item.unrealized_pnl_pct != null ? ` · 持仓 ${Number(item.unrealized_pnl_pct || 0).toFixed(1)}%` : ''}</small>
+      <small>${item.holding ? '持仓' : '观察'} · ${escapeHtml(item.strategy_state || 'watch')}${item.change_pct != null ? ` · 涨跌 ${Number(item.change_pct || 0).toFixed(3)}%` : ''}${item.unrealized_pnl_pct != null ? ` · 持仓 ${Number(item.unrealized_pnl_pct || 0).toFixed(1)}%` : ''}</small>
     </a>`).join('') : hotspotEmpty('暂无关联自选或持仓标的')}
   </div>
   <div class="news-list">

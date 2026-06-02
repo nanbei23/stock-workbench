@@ -1,6 +1,6 @@
 {
   "name": "stock-workbench-local",
-  "version": "2.7.0",
+  "version": "2.7.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "playwright": "^1.60.0",
     "typescript": "^5.4.5",
     "vite": "^8.0.14"
   }

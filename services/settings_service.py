@@ -95,8 +95,16 @@ def get_all_settings():
 
 
 def bulk_update_settings(settings: dict):
-    repo.upsert_settings(settings)
-    return {"status": "ok", "updated": len(settings)}
+    existing = repo.fetch_settings()
+    sanitized = {}
+    secret_keys = {"api_key", "verification_api_key"}
+    for key, value in settings.items():
+        if key in secret_keys and str(value or "").strip() == "********":
+            if existing.get(key):
+                continue
+        sanitized[key] = value
+    repo.upsert_settings(sanitized)
+    return {"status": "ok", "updated": len(sanitized)}
 
 
 def reset_settings():

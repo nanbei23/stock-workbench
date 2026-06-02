@@ -321,7 +321,7 @@ async def condition_backtest(payload: dict):
         "trigger_count": len(triggers),
         "first_trigger": first,
         "last_price": last_price,
-        "post_trigger_return_pct": round((last_price - first["price"]) / first["price"] * 100, 2) if first and first["price"] else None,
+        "post_trigger_return_pct": round((last_price - first["price"]) / first["price"] * 100, 3) if first and first["price"] else None,
         "triggers": triggers[:20],
     }
 
@@ -346,9 +346,9 @@ async def risk_exposure():
         accounts.setdefault(account_id, {"id": account_id, "name": row.get("account_name") or account_id, "market_value": 0.0, "positions": 0})
         accounts[account_id]["market_value"] += value
         accounts[account_id]["positions"] += 1
-        positions.append({**row, "market_value_calc": round(value, 2), "bucket": (row.get("code") or "")[:2]})
+        positions.append({**row, "market_value_calc": round(value, 3), "bucket": (row.get("code") or "")[:2]})
     for item in positions:
-        item["weight_pct"] = round(item["market_value_calc"] / total * 100, 2) if total else 0
+        item["weight_pct"] = round(item["market_value_calc"] / total * 100, 3) if total else 0
     buckets = {}
     for item in positions:
         buckets[item["bucket"]] = buckets.get(item["bucket"], 0) + item["market_value_calc"]
@@ -361,10 +361,10 @@ async def risk_exposure():
         if pct >= 50:
             warnings.append(f"代码段 {bucket} 暴露超过 {pct:.1f}% ，建议检查行业/主题集中度")
     return {
-        "total_market_value": round(total, 2),
+        "total_market_value": round(total, 3),
         "accounts": list(accounts.values()),
         "positions": sorted(positions, key=lambda item: item["weight_pct"], reverse=True),
-        "buckets": [{"bucket": k, "market_value": round(v, 2), "weight_pct": round(v / total * 100, 2) if total else 0} for k, v in sorted(buckets.items())],
+        "buckets": [{"bucket": k, "market_value": round(v, 3), "weight_pct": round(v / total * 100, 3) if total else 0} for k, v in sorted(buckets.items())],
         "warnings": warnings,
     }
 
@@ -434,7 +434,7 @@ async def risk_center():
         "key": "position_concentration",
         "label": "单票集中度",
         "status": "warning" if top_weight > thresholds["max_position_pct"] else "ok",
-        "value": round(top_weight, 2),
+        "value": round(top_weight, 3),
         "limit": thresholds["max_position_pct"],
         "message": f"{top_position.get('name') or top_position.get('code')} 仓位 {top_weight:.1f}%" if top_position else "暂无持仓",
     })
@@ -445,7 +445,7 @@ async def risk_center():
         "key": "bucket_concentration",
         "label": "主题集中度",
         "status": "warning" if bucket_weight > thresholds["max_bucket_pct"] else "ok",
-        "value": round(bucket_weight, 2),
+        "value": round(bucket_weight, 3),
         "limit": thresholds["max_bucket_pct"],
         "message": f"代码段 {top_bucket.get('bucket')} 暴露 {bucket_weight:.1f}%" if top_bucket else "暂无暴露",
     })
@@ -454,7 +454,7 @@ async def risk_center():
         "key": "cash_buffer",
         "label": "现金缓冲",
         "status": "warning" if total_assets and cash_pct < thresholds["min_cash_pct"] else "ok",
-        "value": round(cash_pct, 2),
+        "value": round(cash_pct, 3),
         "limit": thresholds["min_cash_pct"],
         "message": f"现金占比 {cash_pct:.1f}%",
     })
@@ -468,7 +468,7 @@ async def risk_center():
         "key": "daily_loss",
         "label": "单日亏损线",
         "status": "warning" if daily_loss_pct > thresholds["daily_loss_pct"] else "ok",
-        "value": round(daily_loss_pct, 2),
+        "value": round(daily_loss_pct, 3),
         "limit": thresholds["daily_loss_pct"],
         "message": f"{latest_pnl.get('date') or '最近'} 单日亏损 {daily_loss_pct:.1f}%",
     })
@@ -477,7 +477,7 @@ async def risk_center():
     for row in pending_rows:
         amount = _safe_float(row.get("shares")) * _safe_float(row.get("target_price"))
         if amount > thresholds["max_pending_order_amount"]:
-            oversize_orders.append({**row, "amount": round(amount, 2)})
+            oversize_orders.append({**row, "amount": round(amount, 3)})
     checks.append({
         "key": "pending_order_amount",
         "label": "待执行计划金额",
@@ -505,10 +505,10 @@ async def risk_center():
         "ok": not warnings,
         "thresholds": thresholds,
         "summary": {
-            "total_assets": round(total_assets, 2),
-            "market_value": round(market_value, 2),
-            "cash": round(cash, 2),
-            "cash_pct": round(cash_pct, 2),
+            "total_assets": round(total_assets, 3),
+            "market_value": round(market_value, 3),
+            "cash": round(cash, 3),
+            "cash_pct": round(cash_pct, 3),
             "position_count": len(risk.get("positions", [])),
             "pending_order_count": len(pending_rows),
         },
@@ -559,9 +559,9 @@ async def portfolio_professional_summary():
     risk_accounts = {item.get("id"): item for item in risk.get("accounts", [])}
     for row in account_rows:
         if row.get("id") in risk_accounts:
-            row["market_value"] = round(_safe_float(risk_accounts[row["id"]].get("market_value")), 2)
+            row["market_value"] = round(_safe_float(risk_accounts[row["id"]].get("market_value")), 3)
             row["position_count"] = risk_accounts[row["id"]].get("positions", row.get("position_count", 0))
-        row["weight_pct"] = round(_safe_float(row.get("market_value")) / total * 100, 2) if total else 0
+        row["weight_pct"] = round(_safe_float(row.get("market_value")) / total * 100, 3) if total else 0
     return {
         "total_market_value": risk.get("total_market_value", 0),
         "accounts": account_rows,
@@ -748,7 +748,7 @@ def _add_stock_once(topic: dict, stock: dict):
 
 def _score_topic(topic: dict, amount: float, component: str, source: str, reason: str | None = None):
     topic["heat_score"] += amount
-    topic["score_components"][component] = round(topic["score_components"].get(component, 0) + amount, 2)
+    topic["score_components"][component] = round(topic["score_components"].get(component, 0) + amount, 3)
     if source and source not in topic["source_tags"]:
         topic["source_tags"].append(source)
     if reason and reason not in topic["reason_parts"]:
@@ -837,7 +837,7 @@ async def market_regime():
         notes.append(f"北向资金净流入 {north_net:.2f} 亿元。")
     if industry_sample:
         top = industry_sample[0]
-        notes.append(f"行业领涨：{top.get('name') or '--'} {round(_safe_float(top.get('change_pct')), 2)}%。")
+        notes.append(f"行业领涨：{top.get('name') or '--'} {round(_safe_float(top.get('change_pct')), 3)}%。")
     notes.extend(risk.get("warnings", [])[:3])
     if not freshness.get("ok"):
         notes.append("部分核心数据超过新鲜度阈值，盘中决策前建议先刷新。")
@@ -931,11 +931,11 @@ async def market_hotspots(limit: int = 12):
         _score_topic(topic, score, "industry_strength", "东方财富行业板块", f"{name} 板块涨跌幅 {change:.2f}%")
         topic["trend_direction"] = "up" if change > 0 else "down" if change < 0 else "flat"
         topic["market_metrics"] = {
-            "change_pct": round(change, 2),
+            "change_pct": round(change, 3),
             "up_count": up_count,
             "down_count": down_count,
             "lead_stock": row.get("lead_stock") or "",
-            "lead_change_pct": round(lead_change, 2),
+            "lead_change_pct": round(lead_change, 3),
         }
         if row.get("lead_stock"):
             _add_stock_once(topic, {
@@ -979,8 +979,8 @@ async def market_hotspots(limit: int = 12):
                     "code": code,
                     "name": row.get("name") or code,
                     "strategy_state": row.get("strategy_state") or "watch",
-                    "holding": _safe_int(row.get("total_shares")) > 0,
-                    "unrealized_pnl_pct": round(_safe_float(row.get("unrealized_pnl_pct")), 2),
+                    "holding": _safe_float(row.get("total_shares")) > 0,
+                    "unrealized_pnl_pct": round(_safe_float(row.get("unrealized_pnl_pct")), 3),
                     "has_anomaly": code in anomaly_codes,
                     "source": "local_watchlist",
                 })
@@ -1197,7 +1197,7 @@ async def strategy_lifecycle():
             "code": row.get("code"),
             "name": row.get("name") or row.get("code"),
             "source": "portfolio",
-            "detail": f"{row.get('total_shares') or 0} 股，浮盈亏 {round(_safe_float(row.get('unrealized_pnl_pct')), 2)}%",
+            "detail": f"{row.get('total_shares') or 0} 股，浮盈亏 {round(_safe_float(row.get('unrealized_pnl_pct')), 3)}%",
             "updated_at": row.get("updated_at"),
         }
         if _safe_float(row.get("unrealized_pnl_pct")) <= -5:
@@ -1209,7 +1209,7 @@ async def strategy_lifecycle():
             "code": row.get("code"),
             "name": row.get("name") or row.get("code"),
             "source": "signal_tracking",
-            "detail": f"{row.get('signal')} · 后验收益 {round(_safe_float(row.get('pnl_pct')), 2)}%",
+            "detail": f"{row.get('signal')} · 后验收益 {round(_safe_float(row.get('pnl_pct')), 3)}%",
             "updated_at": row.get("updated_at") or row.get("exit_date") or row.get("signal_date"),
         }
         if row.get("status") == "closed":
@@ -1469,7 +1469,7 @@ async def _portfolio_mismatches():
     for row in trade_rows:
         code = row["code"]
         item = expected.setdefault(code, {"code": code, "name": row.get("name") or code, "shares": 0, "cost": 0.0})
-        shares = int(row.get("shares") or 0)
+        shares = _safe_float(row.get("shares"))
         if row.get("direction") == "buy":
             item["shares"] += shares
             item["cost"] += float(row.get("amount") or 0) + float(row.get("commission") or 0) + float(row.get("stamp_tax") or 0) + float(row.get("transfer_fee") or 0)
@@ -1482,12 +1482,12 @@ async def _portfolio_mismatches():
     actual = {row["code"]: row for row in portfolio_rows}
     mismatches = []
     for code, item in expected.items():
-        expected_shares = int(item["shares"])
-        expected_cost = round(item["cost"] / expected_shares, 4) if expected_shares else 0
+        expected_shares = round(_safe_float(item["shares"]), 3)
+        expected_cost = round(item["cost"] / expected_shares, 3) if expected_shares else 0
         row = actual.get(code)
-        actual_shares = int(row.get("total_shares") or 0) if row else 0
-        actual_cost = round(float(row.get("avg_cost") or 0), 4) if row else 0
-        if expected_shares != actual_shares or abs(expected_cost - actual_cost) > 0.01:
+        actual_shares = round(_safe_float(row.get("total_shares")), 3) if row else 0
+        actual_cost = round(float(row.get("avg_cost") or 0), 3) if row else 0
+        if abs(expected_shares - actual_shares) > 0.001 or abs(expected_cost - actual_cost) > 0.001:
             mismatches.append({
                 "code": code,
                 "name": item.get("name") or (row.get("name") if row else code),
@@ -1497,14 +1497,14 @@ async def _portfolio_mismatches():
                 "actual_avg_cost": actual_cost,
             })
     for code, row in actual.items():
-        if code not in expected and int(row.get("total_shares") or 0) > 0:
+        if code not in expected and _safe_float(row.get("total_shares")) > 0:
             mismatches.append({
                 "code": code,
                 "name": row.get("name") or code,
                 "expected_shares": 0,
-                "actual_shares": int(row.get("total_shares") or 0),
+                "actual_shares": round(_safe_float(row.get("total_shares")), 3),
                 "expected_avg_cost": 0,
-                "actual_avg_cost": round(float(row.get("avg_cost") or 0), 4),
+                "actual_avg_cost": round(float(row.get("avg_cost") or 0), 3),
             })
     return mismatches
 
@@ -1611,7 +1611,7 @@ async def task_metrics():
         "total": len(rows),
         "by_status": by_status,
         "by_depth": by_depth,
-        "avg_elapsed": round(sum(elapsed) / len(elapsed), 2) if elapsed else 0,
+        "avg_elapsed": round(sum(elapsed) / len(elapsed), 3) if elapsed else 0,
         "recent_failures": failures[:5],
     }
 

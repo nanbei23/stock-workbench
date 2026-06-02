@@ -1,6 +1,6 @@
 # 炒股小牛马 Stock Workbench
 
-本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.7.0`。
+本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.7.3`。
 
 本项目面向个人研究和交易工作流辅助，不构成投资建议。所有写库操作都应由用户确认后执行。
 
@@ -83,6 +83,29 @@ scripts/deploy_macos_x86.sh
 
 脚本会安装依赖、构建前端、初始化数据库，并安装当前用户的 launchd 服务。详细说明见 [docs/deploy_macos_x86.md](docs/deploy_macos_x86.md)。
 
+### 自用数据初始化与批量研究
+
+`v2.7.3` 起可以用脚本跳过页面初始化：
+
+```bash
+.venv312/bin/python scripts/init_from_files.py \
+  --watchlist '/Users/yuxuanfeng/Downloads/自选股清单 (1)' \
+  --trades '/Users/yuxuanfeng/Downloads/交易历史 (1)' \
+  --cash '253,375.68' \
+  --reset \
+  --apply
+```
+
+空仓后做候选研究时，先 dry-run；全量执行时会先拉七层数据写库，再跑完整 AI 分析并生成建仓建议：
+
+```bash
+.venv312/bin/python scripts/batch_research.py --group all --top-n 0
+.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --skip-recent-days 0 --data-only --apply
+.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --skip-recent-days 0 --batch-size 2 --snapshot-concurrency 3 --depth standard --apply
+```
+
+完整步骤见 [docs/data_initialization_and_batch_research.md](docs/data_initialization_and_batch_research.md)。
+
 ## Hermes 写库安全模型
 
 Hermes 只允许通过受控工具写入本地数据库：
@@ -139,8 +162,9 @@ stock-workbench-local/
 ## 开发命令
 
 ```bash
-python -m compileall app.py api models repositories scheduler services schemas tests
+python -m compileall app.py api models repositories scheduler services schemas scripts tests
 python -m unittest discover tests
+python -m py_compile scripts/init_from_files.py scripts/batch_research.py
 node --check static/js/hermes.js
 node --check static/js/shadow.js
 npm run typecheck

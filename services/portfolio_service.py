@@ -1,7 +1,9 @@
 """Portfolio business operations."""
 
+import re
 import uuid
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 
@@ -25,14 +27,14 @@ def _enrich_position(position: dict, quote: dict):
     position["name"] = quote.get("name", position.get("name", ""))
     if position["avg_cost"] and position["price"]:
         position["unrealized_pnl"] = round(
-            (position["price"] - position["avg_cost"]) * position["total_shares"], 2
+            (position["price"] - position["avg_cost"]) * position["total_shares"], 3
         )
         position["unrealized_pnl_pct"] = round(
-            (position["price"] - position["avg_cost"]) / position["avg_cost"] * 100, 2
+            (position["price"] - position["avg_cost"]) / position["avg_cost"] * 100, 3
         )
     if position["prev_close"] and position["price"]:
         position["daily_pnl"] = round(
-            (position["price"] - position["prev_close"]) * position["total_shares"], 2
+            (position["price"] - position["prev_close"]) * position["total_shares"], 3
         )
 
 
@@ -84,7 +86,7 @@ async def get_watchlist():
                 stock["unrealized_pnl"] = 0
                 stock["unrealized_pnl_pct"] = 0
             stock["daily_pnl"] = (
-                round((stock["price"] - stock["prev_close"]) * stock["total_shares"], 2)
+                round((stock["price"] - stock["prev_close"]) * stock["total_shares"], 3)
                 if stock["prev_close"] and stock["total_shares"] and stock["price"]
                 else 0
             )
@@ -98,6 +100,135 @@ async def add_to_watchlist(req):
 
     stock = await _with_db(_add)
     return {"status": "ok", "stock": stock}
+
+
+def _is_markdown_table_separator(cells):
+    if not cells:
+        return False
+    return all(re.fullmatch(r":?-{2,}:?", cell.replace(" ", "")) for cell in cells if cell)
+
+
+def _is_markdown_table_header(cells):
+    labels = {cell.strip().lower() for cell in cells}
+    return "代码" in labels and ("股票名称" in labels or "名称" in labels or "股票" in labels)
+
+
+def _clean_watchlist_name(value: str):
+    name = re.sub(r"^[\s#>*+\-•·\d.、\[\]xX]+", "", value or "")
+    name = re.sub(r"[()（）【】\[\]{}]", " ", name)
+    name = re.sub(r"[+|,，:：;；/\\]+", " ", name)
+    name = re.sub(r"[*_`~]", "", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def _parse_watchlist_table_row(line: str):
+    if "|" not in line:
+        return None
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    cells = [cell for cell in cells if cell]
+    if _is_markdown_table_header(cells) or _is_markdown_table_separator(cells):
+        return {"skip": True}
+
+    code_idx = next((idx for idx, cell in enumerate(cells) if re.fullmatch(r"\d{6}", cell)), None)
+    if code_idx is None:
+        return None
+
+    name_candidates = []
+    if code_idx > 0:
+        name_candidates.extend(cells[:code_idx])
+    if code_idx + 1 < len(cells):
+        name_candidates.extend(cells[code_idx + 1:])
+    name = ""
+    for candidate in reversed(name_candidates):
+        cleaned = _clean_watchlist_name(candidate)
+        if cleaned and not re.fullmatch(r"\d+", cleaned) and cleaned not in {"#", "序号", "代码"}:
+            name = cleaned
+            break
+    return {"code": cells[code_idx], "name": name or cells[code_idx]}
+
+
+def parse_watchlist_markdown(content: str):
+    items = []
+    invalid_lines = []
+    seen = set()
+    duplicates = 0
+    for raw_line in str(content or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        table_item = _parse_watchlist_table_row(line)
+        if table_item and table_item.get("skip"):
+            continue
+        if table_item and table_item.get("code"):
+            code = table_item["code"]
+            if code in seen:
+                duplicates += 1
+                continue
+            seen.add(code)
+            items.append({"code": code, "name": table_item["name"]})
+            continue
+        match = re.search(r"(?<!\d)(\d{6})(?!\d)", line)
+        if not match:
+            invalid_lines.append(line)
+            continue
+        code = match.group(1)
+        if code in seen:
+            duplicates += 1
+            continue
+        seen.add(code)
+        name = f"{line[:match.start()]} {line[match.end():]}"
+        name = _clean_watchlist_name(name)
+        items.append({"code": code, "name": name or code})
+    return {"items": items, "duplicates": duplicates, "invalid_lines": invalid_lines}
+
+
+async def import_watchlist_markdown(content: str, group_name: str = "默认"):
+    parsed = parse_watchlist_markdown(content)
+    items = parsed["items"]
+    if not items:
+        return {
+            "status": "ok",
+            "imported": 0,
+            "duplicates": parsed["duplicates"],
+            "invalid": len(parsed["invalid_lines"]),
+            "items": [],
+            "invalid_lines": parsed["invalid_lines"],
+        }
+
+    async def _import(db):
+        existing = await repo.fetch_watchlist_codes(db, [item["code"] for item in items])
+        sort_order = await repo.next_watchlist_sort_order(db)
+        imported = []
+        duplicate_count = parsed["duplicates"]
+        for item in items:
+            if item["code"] in existing:
+                duplicate_count += 1
+                continue
+            req = SimpleNamespace(
+                code=item["code"],
+                name=item["name"],
+                group_name=group_name or "默认",
+                strategy_state="watch",
+                target_buy_price=None,
+                target_sell_price=None,
+                stop_loss_price=None,
+                notes="初始化向导 Markdown 导入",
+            )
+            stock = await repo.insert_watchlist_stock(db, req, sort_order)
+            imported.append(stock)
+            existing.add(item["code"])
+            sort_order += 1
+        return imported, duplicate_count
+
+    imported, duplicate_count = await _with_db(_import)
+    return {
+        "status": "ok",
+        "imported": len(imported),
+        "duplicates": duplicate_count,
+        "invalid": len(parsed["invalid_lines"]),
+        "items": imported,
+        "invalid_lines": parsed["invalid_lines"],
+    }
 
 
 async def remove_from_watchlist(code: str):
@@ -114,6 +245,7 @@ async def update_watchlist(code: str, req):
     updates = {
         key: value
         for key, value in {
+            "group_name": req.group_name,
             "target_buy_price": req.target_buy_price,
             "target_sell_price": req.target_sell_price,
             "stop_loss_price": req.stop_loss_price,
@@ -153,7 +285,7 @@ async def get_trades(code=None, account_id=None):
 async def add_trade(req):
     async def _add(db):
         await repo.insert_trade(db, req)
-        return await repo.recalc_portfolio(db, req.code)
+        return await repo.recalc_portfolio(db, req.code, getattr(req, "account_id", None) or "default")
 
     return {"status": "ok", "trade": await _with_db(_add)}
 
@@ -172,7 +304,7 @@ async def delete_trade(trade_id: int):
         if not trade:
             raise HTTPException(status_code=404, detail="未找到交易记录")
         await repo.delete_trade(db, trade_id)
-        portfolio = await repo.recalc_portfolio(db, trade["code"])
+        portfolio = await repo.recalc_portfolio(db, trade["code"], trade.get("account_id") or "default")
         return trade, portfolio
 
     _, portfolio = await _with_db(_delete)
@@ -206,16 +338,16 @@ async def edit_trade(trade_id: int, req):
             "notes": req.notes if req.notes is not None else trade.get("notes", ""),
             "direction": req.direction if req.direction is not None else trade["direction"],
         }
-        values["amount"] = round(values["price"] * values["shares"], 2)
+        values["amount"] = round(values["price"] * values["shares"], 3)
         values["total_cost"] = round(
             values["amount"]
             + values["commission"]
             + values["stamp_tax"]
             + values["transfer_fee"],
-            2,
+            3,
         )
         await repo.update_trade(db, trade_id, values)
-        return await repo.recalc_portfolio(db, trade["code"])
+        return await repo.recalc_portfolio(db, trade["code"], trade.get("account_id") or "default")
 
     portfolio = await _with_db(_edit)
     return {"status": "ok", "trade_id": trade_id, "portfolio": portfolio}
@@ -261,17 +393,17 @@ async def get_portfolio_overview(account_id=None):
     cash = cash_and_fees["cash"]
     total_assets = total_market_value + cash
     return {
-        "total_assets": round(total_assets, 2),
-        "market_value": round(total_market_value, 2),
-        "cash": round(cash, 2),
+        "total_assets": round(total_assets, 3),
+        "market_value": round(total_market_value, 3),
+        "cash": round(cash, 3),
         "cash_source": cash_and_fees.get("cash_source") or "unset",
-        "total_cost": round(total_cost, 2),
-        "daily_pnl": round(total_daily_pnl, 2),
-        "unrealized_pnl": round(total_unrealized_pnl, 2),
-        "daily_pnl_pct": round(total_daily_pnl / total_assets * 100, 2) if total_assets else 0,
-        "unrealized_pnl_pct": round(total_unrealized_pnl / total_cost * 100, 2) if total_cost else 0,
-        "total_commission": round(cash_and_fees["total_commission"], 2),
-        "total_stamp_tax": round(cash_and_fees["total_stamp_tax"], 2),
+        "total_cost": round(total_cost, 3),
+        "daily_pnl": round(total_daily_pnl, 3),
+        "unrealized_pnl": round(total_unrealized_pnl, 3),
+        "daily_pnl_pct": round(total_daily_pnl / total_assets * 100, 3) if total_assets else 0,
+        "unrealized_pnl_pct": round(total_unrealized_pnl / total_cost * 100, 3) if total_cost else 0,
+        "total_commission": round(cash_and_fees["total_commission"], 3),
+        "total_stamp_tax": round(cash_and_fees["total_stamp_tax"], 3),
     }
 
 
@@ -319,7 +451,7 @@ def _planned_total_cost(price, shares, explicit_total=None):
     if explicit_total is not None:
         return explicit_total
     if price and shares:
-        return round(price * shares, 2)
+        return round(price * shares, 3)
     return None
 
 
@@ -368,7 +500,7 @@ async def get_pnl_calendar(year=None, month=None, code=None):
         "month": m,
         "code": code,
         "days": days,
-        "total_pnl": round(total_pnl, 2),
+        "total_pnl": round(total_pnl, 3),
         "win_days": win_days,
         "loss_days": loss_days,
         "trade_days": trade_days,

@@ -24,7 +24,13 @@ function shadowNum(value, digits = 2) {
 function shadowMoney(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return '--';
-  return `${n >= 0 ? '' : '-'}¥${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  return `${n >= 0 ? '' : '-'}¥${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 3 })}`;
+}
+
+function shadowShares(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return '--';
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
 function shadowClass(value) {
@@ -37,7 +43,7 @@ function shadowClass(value) {
 function shadowPct(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '--';
-  return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+  return `${n > 0 ? '+' : ''}${n.toFixed(3)}%`;
 }
 
 function signalText(signal) {
@@ -350,7 +356,7 @@ function renderShadowPositions(data) {
   el.innerHTML = rows.map(row => `
     <tr>
       <td><b>${escapeHtml(row.name || row.code)}</b><br><span class="muted">${escapeHtml(row.code)}</span></td>
-      <td>${Number(row.total_shares || 0).toLocaleString()}</td>
+      <td>${shadowShares(row.total_shares)}</td>
       <td>${shadowNum(row.avg_cost, 3)}</td>
       <td>${shadowNum(row.current_price, 3)}</td>
       <td class="${shadowClass(row.unrealized_pnl)}">${shadowMoney(row.unrealized_pnl)}<br><span class="muted">${shadowNum(row.unrealized_pnl_pct)}%</span></td>
@@ -369,9 +375,9 @@ function renderShadowComparison(data) {
     <tr>
       <td><b>${escapeHtml(row.name || row.code)}</b><br><span class="muted">${escapeHtml(row.code)}</span></td>
       <td>${shadowNum(row.price, 3)}</td>
-      <td>${Number(row.shadow_shares || 0).toLocaleString()}<br><span class="muted">均价 ${shadowNum(row.shadow_avg_cost, 3)}</span></td>
-      <td>${Number(row.real_shares || 0).toLocaleString()}<br><span class="muted">均价 ${shadowNum(row.real_avg_cost, 3)}</span></td>
-      <td class="${shadowClass(row.share_gap)}">${Number(row.share_gap || 0).toLocaleString()}</td>
+      <td>${shadowShares(row.shadow_shares)}<br><span class="muted">均价 ${shadowNum(row.shadow_avg_cost, 3)}</span></td>
+      <td>${shadowShares(row.real_shares)}<br><span class="muted">均价 ${shadowNum(row.real_avg_cost, 3)}</span></td>
+      <td class="${shadowClass(row.share_gap)}">${shadowShares(row.share_gap)}</td>
       <td class="${shadowClass(row.shadow_unrealized_pnl)}">${shadowMoney(row.shadow_unrealized_pnl)}</td>
       <td class="${shadowClass(row.real_unrealized_pnl)}">${shadowMoney(row.real_unrealized_pnl)}</td>
       <td class="${shadowClass(row.pnl_gap)}">${shadowMoney(row.pnl_gap)}</td>
@@ -396,7 +402,7 @@ function renderShadowOrders(data) {
         <td><b>${escapeHtml(order.name || order.code)}</b><br><span class="muted">${escapeHtml(order.code)}</span></td>
         <td><span class="shadow-signal ${action}">${actionText(order.action)}</span></td>
         <td>${escapeHtml(signalText(order.signal))}</td>
-        <td>${Number(order.shares || 0).toLocaleString()}</td>
+        <td>${shadowShares(order.shares)}</td>
         <td>${order.fill_price ? shadowNum(order.fill_price, 3) : '<span class="muted">待补价</span>'}</td>
         <td>${order.target_price ? shadowNum(order.target_price, 3) : '<span class="muted">--</span>'}</td>
         <td class="${shadowClass(returnPct)}">${returnPct == null ? '<span class="muted">--</span>' : shadowPct(returnPct)}</td>

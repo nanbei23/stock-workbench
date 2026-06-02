@@ -8,7 +8,13 @@ log() {
   printf '[update] %s\n' "$*"
 }
 
+app_version() {
+  sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' "$ROOT_DIR/app_metadata.py" | head -n 1
+}
+
 cd "$ROOT_DIR"
+
+log "Current app version: v$(app_version)"
 
 log "Creating pre-update backup"
 if [[ -x "$ROOT_DIR/.venv312/bin/python" ]]; then
@@ -26,6 +32,7 @@ fi
 
 log "Pulling latest code"
 git pull --ff-only
+log "Pulled app version: v$(app_version)"
 
 log "Deploying updated app"
 "$ROOT_DIR/scripts/deploy_macos_x86.sh" --install-service
@@ -33,4 +40,4 @@ log "Deploying updated app"
 log "Restarting launchd service"
 launchctl kickstart -k "gui/$(id -u)/$SERVICE_ID" >/dev/null 2>&1 || true
 
-log "Update complete"
+log "Update complete: v$(app_version)"

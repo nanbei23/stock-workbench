@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -35,6 +36,13 @@ async def lifespan(app: FastAPI):
     logger.info("Service stopped")
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^(null|http://127\.0\.0\.1(:\d+)?|http://localhost(:\d+)?)$",
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 # 静态文件 + 模板
 app.mount("/static", StaticFiles(directory="static"), name="static")

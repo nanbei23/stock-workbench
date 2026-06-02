@@ -48,7 +48,7 @@ async def get_monthly_pnl(year, month):
 
         # 四舍五入
         for d in calendar:
-            calendar[d]['total_pnl'] = round(calendar[d]['total_pnl'], 2)
+            calendar[d]['total_pnl'] = round(calendar[d]['total_pnl'], 3)
 
         return calendar
     finally:
@@ -90,13 +90,13 @@ async def get_pnl_stats(start_date, end_date):
             elif dp < 0:
                 loss += 1
             if dp > best['pnl']:
-                best = {'date': r['date'], 'pnl': round(dp, 2)}
+                best = {'date': r['date'], 'pnl': round(dp, 3)}
             if dp < worst['pnl']:
-                worst = {'date': r['date'], 'pnl': round(dp, 2)}
+                worst = {'date': r['date'], 'pnl': round(dp, 3)}
 
         days = win + loss
         return {
-            'total_pnl': round(total, 2),
+            'total_pnl': round(total, 3),
             'win_days': win,
             'loss_days': loss,
             'win_rate': round(win / days * 100, 1) if days > 0 else 0,

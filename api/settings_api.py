@@ -26,6 +26,12 @@ class SettingsBulkUpdate(BaseModel):
     settings: dict
 
 
+class VerificationTestRequest(BaseModel):
+    endpoint: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
 class ImportData(BaseModel):
     watchlist: Optional[list] = None
     portfolio: Optional[list] = None
@@ -104,15 +110,19 @@ async def test_api_connection():
 # ── 测试旁观者核对连接 ──
 
 @router.post("/settings/test-verification")
-async def test_verification_connection():
+async def test_verification_connection(req: VerificationTestRequest | None = None):
     """测试旁观者核对模型API连接"""
     cfg = settings_service.verification_test_config()
-    model = cfg["model"]
-    endpoint = cfg["endpoint"]
-    api_key = cfg["api_key"]
+    model = (req.model if req else "") or cfg["model"]
+    endpoint = (req.endpoint if req else "") or cfg["endpoint"]
+    api_key = (req.api_key if req else "") or cfg["api_key"]
 
     if not api_key:
         return {"status": "error", "message": "API密钥未配置"}
+    if not endpoint:
+        return {"status": "error", "message": "Base URL未配置"}
+    if not model:
+        return {"status": "error", "message": "核对模型未配置"}
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -223,7 +233,18 @@ async def fetch_models(req: FetchModelsReq):
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                message = resp.text[:200]
+                try:
+                    payload = resp.json()
+                    err = payload.get("error") if isinstance(payload, dict) else None
+                    if isinstance(err, dict):
+                        message = err.get("message") or message
+                    elif err:
+                        message = str(err)
+                except ValueError:
+                    pass
+                raise HTTPException(resp.status_code, detail=f"模型接口返回 {resp.status_code}: {message}")
             data = resp.json()
         # 解析 OpenAI 格式 {"data": [{"id": "model-name", ...}, ...]}
         models = []
@@ -233,8 +254,10 @@ async def fetch_models(req: FetchModelsReq):
             models = [m if isinstance(m, str) else m.get("id", "") for m in data]
             models = [m for m in models if m]
         return {"status": "ok", "models": sorted(models)}
+    except HTTPException:
+        raise
     except httpx.ConnectError:
-        raise HTTPException(400, detail="无法连接到API端点，请检查地址是否正确")
+        raise HTTPException(400, detail=f"无法连接到模型接口 {url}，请检查 Base URL 或网络")
     except httpx.TimeoutException:
         raise HTTPException(408, detail="连接超时")
     except Exception as e:

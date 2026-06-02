@@ -47,9 +47,9 @@ async def _get_northbound_summary() -> dict:
         sz_net = nb_data.get("sz_net", 0) or 0
         total = sh_net + sz_net
         return {
-            "sh_connect": round(sh_net, 2),
-            "sz_connect": round(sz_net, 2),
-            "total": round(total, 2),
+            "sh_connect": round(sh_net, 3),
+            "sz_connect": round(sz_net, 3),
+            "total": round(total, 3),
             "direction": "net_in" if total >= 0 else "net_out",
         }
     except Exception as e:

@@ -20,8 +20,9 @@ npm ci
 ## 3. Static Checks
 
 ```bash
-python -m compileall app.py api models repositories scheduler services schemas tests
+python -m compileall app.py api models repositories scheduler services schemas scripts tests
 python -m unittest discover tests
+python -m py_compile scripts/init_from_files.py scripts/batch_research.py
 node --check static/js/hermes.js
 node --check static/js/shadow.js
 npm run typecheck
@@ -56,6 +57,14 @@ Check these APIs:
 - [ ] `GET /api/market-regime`
 - [ ] `GET /api/hotspots?limit=12`
 
+Check release scripts:
+
+- [ ] `.venv312/bin/python scripts/init_from_files.py --help`
+- [ ] `.venv312/bin/python scripts/batch_research.py --help`
+- [ ] `.venv312/bin/python scripts/init_from_files.py --watchlist <file> --trades <file> --cash <cash> --reset` dry-run does not write the database.
+- [ ] `.venv312/bin/python scripts/batch_research.py --group 默认 --top-n 5` dry-run does not submit AI tasks.
+- [ ] `.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --data-only --apply` writes validated seven-layer snapshots before AI submission.
+
 ## 5. Hermes Safety Checks
 
 - [ ] Query-only prompt returns an answer without a write draft.
@@ -69,6 +78,6 @@ Check these APIs:
 
 ```bash
 git add .
-git commit -m "Release v2.7.0"
-git tag v2.7.0
+git commit -m "Release v2.7.3"
+git tag v2.7.3
 ```

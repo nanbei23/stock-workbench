@@ -47,10 +47,10 @@ async def get_quote(code: str):
         if avg_cost and total_shares and price:
             result["avg_cost"] = avg_cost
             result["total_shares"] = total_shares
-            result["unrealized_pnl"] = round((price - avg_cost) * total_shares, 2)
-            result["unrealized_pnl_pct"] = round((price - avg_cost) / avg_cost * 100, 2)
+            result["unrealized_pnl"] = round((price - avg_cost) * total_shares, 3)
+            result["unrealized_pnl_pct"] = round((price - avg_cost) / avg_cost * 100, 3)
         if prev_close and total_shares and price:
-            result["daily_pnl"] = round((price - prev_close) * total_shares, 2)
+            result["daily_pnl"] = round((price - prev_close) * total_shares, 3)
     return result
 
 

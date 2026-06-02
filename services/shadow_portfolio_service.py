@@ -70,14 +70,14 @@ def _signal_action(signal: str | None) -> str | None:
     return None
 
 
-def _order_fee(action: str, price: float, shares: int) -> float:
+def _order_fee(action: str, price: float, shares: float) -> float:
     amount = max(price, 0) * max(shares, 0)
     if amount <= 0:
         return 0.0
     fee = amount * (COMMISSION_RATE + TRANSFER_FEE_RATE)
     if action == "sell":
         fee += amount * STAMP_TAX_RATE
-    return round(fee, 2)
+    return round(fee, 3)
 
 
 def _shadow_filters(alias: str = "ar", window: str = "all", model_mode: str | None = None, depth: str | None = None):
@@ -104,8 +104,8 @@ def _directional_return_pct(order: dict[str, Any], current_price: float | None) 
     if not fill_price or fill_price <= 0 or not current_price or current_price <= 0:
         return None
     if order.get("action") == "sell":
-        return round((fill_price - current_price) / fill_price * 100, 2)
-    return round((current_price - fill_price) / fill_price * 100, 2)
+        return round((fill_price - current_price) / fill_price * 100, 3)
+    return round((current_price - fill_price) / fill_price * 100, 3)
 
 
 def _confidence_bucket(confidence: float | None) -> tuple[str, str]:
@@ -148,11 +148,11 @@ def _finalize_stats(bucket: dict[str, Any]) -> dict[str, Any]:
     confidence_count = bucket.pop("_confidence_count", 0)
     bucket["count"] = count
     bucket["wins"] = wins
-    bucket["hit_rate"] = round(wins / count * 100, 2) if count else 0.0
-    bucket["avg_return_pct"] = round(return_sum / count, 2) if count else 0.0
-    bucket["avg_confidence"] = round(confidence_sum / confidence_count * 100, 2) if confidence_count else None
+    bucket["hit_rate"] = round(wins / count * 100, 3) if count else 0.0
+    bucket["avg_return_pct"] = round(return_sum / count, 3) if count else 0.0
+    bucket["avg_confidence"] = round(confidence_sum / confidence_count * 100, 3) if confidence_count else None
     bucket["calibration_gap"] = (
-        round(bucket["hit_rate"] - bucket["avg_confidence"], 2)
+        round(bucket["hit_rate"] - bucket["avg_confidence"], 3)
         if bucket["avg_confidence"] is not None else None
     )
     return bucket
@@ -189,12 +189,11 @@ def _stop_loss(raw: dict[str, Any]) -> float | None:
     return None
 
 
-def _shares_for_report(action: str, signal: str, raw: dict[str, Any], confidence: float | None, risk_score: float | None) -> int:
+def _shares_for_report(action: str, signal: str, raw: dict[str, Any], confidence: float | None, risk_score: float | None) -> float:
     explicit = raw.get("shares") or raw.get("plan_shares") or raw.get("quantity")
     try:
         if explicit:
-            shares = int(float(explicit))
-            return max(0, shares // 100 * 100)
+            return max(0, round(float(explicit), 3))
     except (TypeError, ValueError):
         pass
 
@@ -367,7 +366,7 @@ async def recalc_positions(db=None) -> dict[str, Any]:
                     "source_order_ids": [],
                 },
             )
-            shares = int(order.get("shares") or 0)
+            shares = _num(order.get("shares")) or 0
             price = float(order.get("fill_price") or order.get("suggested_price") or 0)
             if shares <= 0 or price <= 0:
                 continue
@@ -418,10 +417,10 @@ async def recalc_positions(db=None) -> dict[str, Any]:
                     book["total_shares"],
                     round(book["avg_cost"], 4),
                     round(price, 4),
-                    round(market_value, 2),
-                    round(unrealized, 2),
-                    round(unrealized_pct, 2),
-                    round(book["realized_pnl"], 2),
+                    round(market_value, 3),
+                    round(unrealized, 3),
+                    round(unrealized_pct, 3),
+                    round(book["realized_pnl"], 3),
                     json.dumps(book["source_order_ids"], ensure_ascii=False),
                 ),
             )
@@ -431,10 +430,10 @@ async def recalc_positions(db=None) -> dict[str, Any]:
             "positions": len(active),
             "simulation": {
                 "initial_cash": ASSUMED_INITIAL_CASH,
-                "cash": round(cash, 2),
-                "total_fees": round(total_fees, 2),
+                "cash": round(cash, 3),
+                "total_fees": round(total_fees, 3),
                 "slippage_pct": ASSUMED_SLIPPAGE_PCT,
-                "max_single_position_pct": round(MAX_SINGLE_POSITION_PCT * 100, 2),
+                "max_single_position_pct": round(MAX_SINGLE_POSITION_PCT * 100, 3),
                 "warnings": constraint_warnings[:8],
             },
         }
@@ -459,7 +458,7 @@ async def _fill_pending_orders(db) -> int:
     for row in pending:
         quote_price = _num((quotes.get(row["code"]) or {}).get("price"))
         price = _num(row.get("suggested_price")) or quote_price
-        shares = int(row.get("shares") or 0)
+        shares = _num(row.get("shares")) or 0
         if not price or price <= 0 or shares <= 0:
             continue
         await db.execute(
@@ -520,7 +519,7 @@ async def list_orders(limit: int = 100, window: str = "all", model_mode: str | N
             current_price = _num(quote.get("price"))
             order["current_price"] = current_price
             order["directional_return_pct"] = _directional_return_pct(order, current_price)
-            order["estimated_fee"] = _order_fee(order.get("action"), _num(order.get("fill_price") or order.get("suggested_price")) or 0, int(order.get("shares") or 0))
+            order["estimated_fee"] = _order_fee(order.get("action"), _num(order.get("fill_price") or order.get("suggested_price")) or 0, _num(order.get("shares")) or 0)
         return {"count": len(orders), "orders": orders}
     finally:
         await db.close()
@@ -566,7 +565,7 @@ async def comparison() -> dict[str, Any]:
         price = float(quote.get("price") or 0)
         s = shadow_map.get(code, {})
         r = real_map.get(code, {})
-        real_shares = int(r.get("total_shares") or 0)
+        real_shares = _num(r.get("total_shares")) or 0
         real_avg = float(r.get("avg_cost") or 0)
         real_value = price * real_shares if price else float(r.get("market_value") or 0)
         real_pnl = (price - real_avg) * real_shares if price and real_avg else float(r.get("unrealized_pnl") or 0)
@@ -580,21 +579,21 @@ async def comparison() -> dict[str, Any]:
             "code": code,
             "name": s.get("name") or r.get("name") or quote.get("name") or code,
             "price": price,
-            "shadow_shares": int(s.get("total_shares") or 0),
+            "shadow_shares": _num(s.get("total_shares")) or 0,
             "shadow_avg_cost": float(s.get("avg_cost") or 0),
-            "shadow_market_value": round(shadow_value, 2),
-            "shadow_unrealized_pnl": round(shadow_pnl, 2),
+            "shadow_market_value": round(shadow_value, 3),
+            "shadow_unrealized_pnl": round(shadow_pnl, 3),
             "real_shares": real_shares,
             "real_avg_cost": real_avg,
-            "real_market_value": round(real_value, 2),
-            "real_unrealized_pnl": round(real_pnl, 2),
-            "share_gap": int(s.get("total_shares") or 0) - real_shares,
-            "pnl_gap": round(shadow_pnl - real_pnl, 2),
+            "real_market_value": round(real_value, 3),
+            "real_unrealized_pnl": round(real_pnl, 3),
+            "share_gap": round((_num(s.get("total_shares")) or 0) - real_shares, 3),
+            "pnl_gap": round(shadow_pnl - real_pnl, 3),
         })
 
-    totals = {key: round(value, 2) for key, value in totals.items()}
-    totals["market_value_gap"] = round(totals["shadow_market_value"] - totals["real_market_value"], 2)
-    totals["pnl_gap"] = round(totals["shadow_unrealized_pnl"] - totals["real_unrealized_pnl"], 2)
+    totals = {key: round(value, 3) for key, value in totals.items()}
+    totals["market_value_gap"] = round(totals["shadow_market_value"] - totals["real_market_value"], 3)
+    totals["pnl_gap"] = round(totals["shadow_unrealized_pnl"] - totals["real_unrealized_pnl"], 3)
     return {"totals": totals, "count": len(rows), "rows": rows}
 
 
@@ -608,8 +607,8 @@ async def execution_deviation() -> dict[str, Any]:
         "aligned": {"label": "仓位基本一致", "count": 0, "pnl_gap": 0.0, "rows": []},
     }
     for row in comp["rows"]:
-        shadow_shares = int(row.get("shadow_shares") or 0)
-        real_shares = int(row.get("real_shares") or 0)
+        shadow_shares = _num(row.get("shadow_shares")) or 0
+        real_shares = _num(row.get("real_shares")) or 0
         if shadow_shares > 0 and real_shares == 0:
             key = "ai_only"
         elif real_shares > 0 and shadow_shares == 0:
@@ -631,7 +630,7 @@ async def execution_deviation() -> dict[str, Any]:
             "key": key,
             "label": item["label"],
             "count": item["count"],
-            "pnl_gap": round(item["pnl_gap"], 2),
+            "pnl_gap": round(item["pnl_gap"], 3),
             "rows": item["rows"],
         })
     rows.sort(key=lambda item: abs(item["pnl_gap"]), reverse=True)
@@ -723,8 +722,8 @@ async def calibration(limit: int = 200, window: str = "all", model_mode: str | N
     return {
         "summary": {
             "evaluated": evaluated_count,
-            "hit_rate": round(wins / evaluated_count * 100, 2) if evaluated_count else 0.0,
-            "avg_return_pct": round(total_return / evaluated_count, 2) if evaluated_count else 0.0,
+            "hit_rate": round(wins / evaluated_count * 100, 3) if evaluated_count else 0.0,
+            "avg_return_pct": round(total_return / evaluated_count, 3) if evaluated_count else 0.0,
             "brier_score": round(brier_sum / evaluated_count, 4) if evaluated_count else None,
             "positive": wins,
             "negative": evaluated_count - wins,
@@ -790,9 +789,9 @@ async def summary() -> dict[str, Any]:
         },
         "positions": {
             "count": len(positions),
-            "market_value": round(market_value, 2),
-            "unrealized_pnl": round(unrealized, 2),
-            "unrealized_pnl_pct": round(unrealized / (market_value - unrealized) * 100, 2)
+            "market_value": round(market_value, 3),
+            "unrealized_pnl": round(unrealized, 3),
+            "unrealized_pnl_pct": round(unrealized / (market_value - unrealized) * 100, 3)
             if market_value and market_value != unrealized else 0,
         },
         "comparison": comp["totals"],

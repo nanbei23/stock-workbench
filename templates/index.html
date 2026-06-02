@@ -97,8 +97,11 @@
 
   <!-- 搜索框（默认隐藏） -->
   <div class="stock-search" id="searchBox" style="display:none;">
-    <input type="text" id="searchInput" placeholder="输入股票代码..."
+    <input type="text" id="searchInput" maxlength="6" inputmode="numeric" placeholder="股票代码，例如 000001"
            onkeydown="if(event.key==='Enter')addStock()">
+    <input type="text" id="searchNameInput" placeholder="股票名称，可选"
+           onkeydown="if(event.key==='Enter')addStock()">
+    <button type="button" class="btn btn-sm btn-primary" onclick="addStock()">保存自选</button>
   </div>
 
   <!-- 股票列表 -->
@@ -419,7 +422,7 @@
 {% block scripts %}
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/js/chart.js"></script>
-<script src="/static/js/stock.js?v=2.7.0"></script>
+<script src="/static/js/stock.js?v=2.7.3"></script>
 <script src="/static/js/strategy.js"></script>
 <script>
 function switchDetail(name) {
@@ -460,9 +463,9 @@ async function loadOverview(code) {
     const quote = await API.get(`/api/quote/${code}`);
     if (quote) {
       // 基本面
-      document.getElementById('o-pe').textContent = quote.pe_ttm != null ? quote.pe_ttm.toFixed(2) : '--';
-      document.getElementById('o-pb').textContent = quote.pb != null ? quote.pb.toFixed(2) : '--';
-      document.getElementById('o-turnover').textContent = quote.turnover_rate != null ? quote.turnover_rate.toFixed(2) + '%' : '--';
+      document.getElementById('o-pe').textContent = quote.pe_ttm != null ? quote.pe_ttm.toFixed(3) : '--';
+      document.getElementById('o-pb').textContent = quote.pb != null ? quote.pb.toFixed(3) : '--';
+      document.getElementById('o-turnover').textContent = quote.turnover_rate != null ? quote.turnover_rate.toFixed(3) + '%' : '--';
       document.getElementById('o-mcap').textContent = quote.market_cap != null ? formatMarketCap(quote.market_cap) : '--';
     }
 
@@ -476,11 +479,11 @@ async function loadOverview(code) {
       const ma5 = calculateMA(closes, 5);
       const ma20 = calculateMA(closes, 20);
 
-      document.getElementById('o-rsi').textContent = rsi != null ? rsi.toFixed(2) : '--';
+      document.getElementById('o-rsi').textContent = rsi != null ? rsi.toFixed(3) : '--';
       document.getElementById('o-macd').textContent = macd != null ? macd.toFixed(4) : '--';
-      document.getElementById('o-kdj').textContent = kdj != null ? kdj.toFixed(2) : '--';
-      document.getElementById('o-ma5').textContent = ma5 != null ? ma5.toFixed(2) : '--';
-      document.getElementById('o-ma20').textContent = ma20 != null ? ma20.toFixed(2) : '--';
+      document.getElementById('o-kdj').textContent = kdj != null ? kdj.toFixed(3) : '--';
+      document.getElementById('o-ma5').textContent = ma5 != null ? ma5.toFixed(3) : '--';
+      document.getElementById('o-ma20').textContent = ma20 != null ? ma20.toFixed(3) : '--';
     }
 
     // 获取AI信号
@@ -493,11 +496,11 @@ async function loadOverview(code) {
       };
       document.getElementById('o-signal').textContent = sigLabel[sig.signal] || sig.signal;
       document.getElementById('o-signal-date').textContent = sig.signal_date || '--';
-      document.getElementById('o-entry-price').textContent = sig.entry_price != null ? '¥' + sig.entry_price.toFixed(2) : '--';
+      document.getElementById('o-entry-price').textContent = sig.entry_price != null ? '¥' + sig.entry_price.toFixed(3) : '--';
       
       // 计算盈亏
       if (quote && quote.price && sig.entry_price) {
-        const pnl = ((quote.price - sig.entry_price) / sig.entry_price * 100).toFixed(2);
+        const pnl = ((quote.price - sig.entry_price) / sig.entry_price * 100).toFixed(3);
         const pnlEl = document.getElementById('o-signal-pnl');
         pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl + '%';
         pnlEl.className = 'value ' + (pnl >= 0 ? 'up' : 'down');

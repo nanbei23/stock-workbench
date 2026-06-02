@@ -43,7 +43,7 @@ class ModelHelperTests(unittest.TestCase):
                     code TEXT NOT NULL,
                     direction TEXT NOT NULL,
                     price REAL NOT NULL,
-                    shares INTEGER NOT NULL,
+                    shares REAL NOT NULL,
                     amount REAL NOT NULL,
                     total_cost REAL DEFAULT 0,
                     notes TEXT,
@@ -54,7 +54,7 @@ class ModelHelperTests(unittest.TestCase):
                     code6 TEXT DEFAULT '',
                     pnl REAL,
                     close_price REAL,
-                    shares INTEGER,
+                    shares REAL,
                     PRIMARY KEY (date, code6)
                 );
                 CREATE TABLE settings (
@@ -79,7 +79,7 @@ class ModelHelperTests(unittest.TestCase):
                     condition_type TEXT NOT NULL,
                     target_price REAL NOT NULL,
                     action TEXT NOT NULL,
-                    shares INTEGER,
+                    shares REAL,
                     status TEXT DEFAULT 'pending',
                     triggered_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

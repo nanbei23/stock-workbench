@@ -98,8 +98,8 @@ function renderPerformance(c) {
         <div class="perf-stat-card"><div class="stat-label">总跟踪</div><div class="stat-value">${s.total}</div></div>
         <div class="perf-stat-card"><div class="stat-label">持仓中</div><div class="stat-value">${s.open}</div></div>
         <div class="perf-stat-card"><div class="stat-label">胜率</div><div class="stat-value ${winRateClass}">${(s.win_rate*100).toFixed(1)}%</div></div>
-        <div class="perf-stat-card"><div class="stat-label">平均收益</div><div class="stat-value ${s.avg_pnl_pct>=0?'price-up':'price-down'}">${s.avg_pnl_pct>=0?'+':''}${s.avg_pnl_pct.toFixed(2)}%</div></div>
-        <div class="perf-stat-card"><div class="stat-label">超额收益</div><div class="stat-value ${s.avg_excess_return>=0?'price-up':'price-down'}">${s.avg_excess_return>=0?'+':''}${s.avg_excess_return.toFixed(2)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">平均收益</div><div class="stat-value ${s.avg_pnl_pct>=0?'price-up':'price-down'}">${s.avg_pnl_pct>=0?'+':''}${s.avg_pnl_pct.toFixed(3)}%</div></div>
+        <div class="perf-stat-card"><div class="stat-label">超额收益</div><div class="stat-value ${s.avg_excess_return>=0?'price-up':'price-down'}">${s.avg_excess_return>=0?'+':''}${s.avg_excess_return.toFixed(3)}%</div></div>
         <div class="perf-stat-card"><div class="stat-label">平均持有</div><div class="stat-value">${Math.round(s.avg_hold_days)}天</div></div>
     </div>`;
 
@@ -166,13 +166,13 @@ function renderPerformance(c) {
                         <span class="perf-tracking-signal ${sigClass}">${sigLabel}</span>
                     </div>
                     <div class="perf-tracking-detail">
-                        入场 ¥${r.entry_price.toFixed(2)} → 现价 ¥${currentPrice.toFixed(2)}
-                        ${r.target_price ? ` | 目标 ¥${r.target_price.toFixed(2)}` : ''}
+                        入场 ¥${r.entry_price.toFixed(3)} → 现价 ¥${currentPrice.toFixed(3)}
+                        ${r.target_price ? ` | 目标 ¥${r.target_price.toFixed(3)}` : ''}
                         | ${holdDays}天
                         ${r.exit_reason ? ` | ${r.exit_reason === 'signal_change' ? '信号反转' : r.exit_reason === 'stop_loss' ? '止损' : r.exit_reason === 'target_hit' ? '目标到达' : r.exit_reason === 'max_hold' ? '最大持有' : r.exit_reason}` : ''}
                     </div>
                 </div>
-                <div class="perf-tracking-pnl ${pnlCls}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</div>
+                <div class="perf-tracking-pnl ${pnlCls}">${pnl>=0?'+':''}${pnl.toFixed(3)}%</div>
                 ${r.status === 'open' ? `<button class="perf-btn-close" onclick="closeTracking(${r.id}, ${currentPrice})">平仓</button>` : ''}
             </div>`;
         }

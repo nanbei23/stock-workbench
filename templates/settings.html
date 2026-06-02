@@ -429,7 +429,7 @@
           <div class="setting-hint">单日涨跌幅超过此值触发异动提醒</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-change_threshold" step="0.5" min="1" max="20">
+          <input type="number" class="setting-input" id="set-change_threshold" step="0.001" min="1" max="20">
           <span class="setting-unit">%</span>
         </div>
       </div>
@@ -439,7 +439,7 @@
           <div class="setting-hint">成交量超过近5日均量的倍数</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-volume_threshold" step="0.5" min="1" max="20">
+          <input type="number" class="setting-input" id="set-volume_threshold" step="0.001" min="1" max="20">
           <span class="setting-unit">倍</span>
         </div>
       </div>
@@ -449,7 +449,7 @@
           <div class="setting-hint">分钟净流入/流出超过此值</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-northbound_threshold" step="1" min="1" max="100">
+          <input type="number" class="setting-input" id="set-northbound_threshold" step="0.001" min="1" max="100">
           <span class="setting-unit">亿/分钟</span>
         </div>
       </div>
@@ -796,7 +796,7 @@
           <div class="setting-hint">运营中心用于识别个股过度集中</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-risk_max_position_pct" step="1" min="1" max="100">
+          <input type="number" class="setting-input" id="set-risk_max_position_pct" step="0.001" min="1" max="100">
           <span class="setting-unit">%</span>
         </div>
       </div>
@@ -806,7 +806,7 @@
           <div class="setting-hint">按代码段粗略识别行业/主题集中风险</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-risk_max_bucket_pct" step="1" min="1" max="100">
+          <input type="number" class="setting-input" id="set-risk_max_bucket_pct" step="0.001" min="1" max="100">
           <span class="setting-unit">%</span>
         </div>
       </div>
@@ -816,7 +816,7 @@
           <div class="setting-hint">低于该比例会提示仓位过满</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-risk_min_cash_pct" step="1" min="0" max="100">
+          <input type="number" class="setting-input" id="set-risk_min_cash_pct" step="0.001" min="0" max="100">
           <span class="setting-unit">%</span>
         </div>
       </div>
@@ -826,7 +826,7 @@
           <div class="setting-hint">最近交易日亏损超过该比例时提示降风险</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-risk_daily_loss_pct" step="0.5" min="0" max="30">
+          <input type="number" class="setting-input" id="set-risk_daily_loss_pct" step="0.001" min="0" max="30">
           <span class="setting-unit">%</span>
         </div>
       </div>
@@ -836,7 +836,7 @@
           <div class="setting-hint">条件单/计划单超过该金额时进入预警</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-risk_max_pending_order_amount" step="1000" min="0">
+          <input type="number" class="setting-input" id="set-risk_max_pending_order_amount" step="0.001" min="0">
           <span class="setting-unit">元</span>
         </div>
       </div>
@@ -846,7 +846,7 @@
           <div class="setting-hint">持仓估值更新时间超过该小时数时进入数据新鲜度提示</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-risk_quote_stale_hours" step="1" min="1">
+          <input type="number" class="setting-input" id="set-risk_quote_stale_hours" step="0.001" min="1">
           <span class="setting-unit">小时</span>
         </div>
       </div>
@@ -863,7 +863,7 @@
           <div class="setting-hint">万3 = 0.03%</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-commission_rate" step="0.0001" min="0">
+          <input type="number" class="setting-input" id="set-commission_rate" step="0.001" min="0">
           <span class="setting-unit">（小数）</span>
         </div>
       </div>
@@ -872,7 +872,7 @@
           <div class="setting-label">单笔最低佣金</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-commission_min" step="1" min="0">
+          <input type="number" class="setting-input" id="set-commission_min" step="0.001" min="0">
           <span class="setting-unit">元</span>
         </div>
       </div>
@@ -882,7 +882,7 @@
           <div class="setting-hint">0.5‰ = 0.05%</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-stamp_tax_rate" step="0.0001" min="0">
+          <input type="number" class="setting-input" id="set-stamp_tax_rate" step="0.001" min="0">
           <span class="setting-unit">（小数）</span>
         </div>
       </div>
@@ -891,7 +891,7 @@
           <div class="setting-label">过户费</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-transfer_fee_rate" step="0.00001" min="0">
+          <input type="number" class="setting-input" id="set-transfer_fee_rate" step="0.001" min="0">
           <span class="setting-unit">（小数）</span>
         </div>
       </div>
@@ -978,5 +978,5 @@
   </div>
 </div>
 
-<script src="/static/js/settings.js?v=2.7.0"></script>
+<script src="/static/js/settings.js?v=2.7.3"></script>
 {% endblock %}

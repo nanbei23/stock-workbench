@@ -39,9 +39,9 @@ window.apiGet = apiGet;
 window.apiPost = apiPost;
 window.requestJson = requestJson;
 
-function formatMoney(n) { return n == null ? '--' : n.toLocaleString('zh-CN', {style:'currency',currency:'CNY'}); }
-function formatPct(n) { return n == null ? '--' : (n >= 0 ? '+' : '') + n.toFixed(2) + '%'; }
-function formatPrice(n) { return n == null ? '--' : n.toFixed(2); }
+function formatMoney(n) { return n == null ? '--' : n.toLocaleString('zh-CN', {style:'currency',currency:'CNY', minimumFractionDigits: 3, maximumFractionDigits: 3}); }
+function formatPct(n) { return n == null ? '--' : (n >= 0 ? '+' : '') + n.toFixed(3) + '%'; }
+function formatPrice(n) { return n == null ? '--' : n.toFixed(3); }
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -66,8 +66,8 @@ function safeUrl(value) {
 function formatPnl(n) {
   if (n == null || n === 0) return '--';
   const sign = n > 0 ? '+' : '';
-  if (Math.abs(n) >= 10000) return sign + (n / 10000).toFixed(2) + '万';
-  return sign + n.toFixed(2);
+  if (Math.abs(n) >= 10000) return sign + (n / 10000).toFixed(3) + '万';
+  return sign + n.toFixed(3);
 }
 
 function priceClass(change) {
@@ -229,8 +229,39 @@ function renderOnboardingPanel(data) {
             </div>
           `).join('')}
         </div>
+        <div class="onboarding-assets">
+          <div class="onboarding-section-title">初始化自选股</div>
+          <div class="onboarding-import-row">
+            <input type="file" id="onboardingWatchlistMd" accept=".md,.markdown,text/markdown,text/plain">
+            <button type="button" class="btn-secondary mini" data-action="import-watchlist-md">读取并导入</button>
+          </div>
+          <textarea id="onboardingWatchlistMdText" class="onboarding-md-text" rows="4" placeholder="如果文件选择器不可用，也可以直接粘贴 Markdown 内容。&#10;贵州茅台 600519&#10;平安银行 000001"></textarea>
+          <p class="onboarding-hint">支持每行“股票名称 股票代码”或“股票名称+股票代码”，例如：贵州茅台 600519。</p>
+        </div>
+        <div class="onboarding-assets">
+          <div class="onboarding-section-title">初始化资产</div>
+          <div class="onboarding-form-grid">
+            <label>
+              <span>可用资金</span>
+              <input type="number" min="0" step="0.001" id="onboardingCash" placeholder="例如 100000">
+            </label>
+            <label>
+              <span>资金备注</span>
+              <input type="text" id="onboardingCashNote" placeholder="例如 初始资金 / 银证转入">
+            </label>
+          </div>
+          <div class="onboarding-position-head">
+            <span>初始持仓</span>
+            <button type="button" class="btn-secondary mini" data-action="add-position-row">添加一行</button>
+          </div>
+          <div class="onboarding-position-list" id="onboardingPositionRows">
+            ${renderOnboardingPositionRow()}
+          </div>
+          <p class="onboarding-hint">初始持仓会按“买入交易”写入交易流水，并自动生成持仓成本。只填现金也可以。</p>
+        </div>
         <footer class="onboarding-actions">
-          <a class="btn-secondary" href="/portfolio">持仓现金</a>
+          <button class="btn-primary" type="button" data-action="save-assets">保存资产初始化</button>
+          <a class="btn-secondary" href="/portfolio">打开持仓页</a>
           <a class="btn-secondary" href="/settings">打开设置</a>
           <button class="btn-secondary" type="button" data-action="hide">稍后</button>
           <button class="btn-primary" type="button" data-action="complete">完成向导</button>
@@ -240,32 +271,74 @@ function renderOnboardingPanel(data) {
     const style = document.createElement('style');
     style.id = 'onboardingStyles';
     style.textContent = `
-      #onboardingPanel{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;}
+      #onboardingPanel{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;}
       .onboarding-backdrop{position:absolute;inset:0;background:rgba(3,8,17,.62);backdrop-filter:blur(10px);}
-      .onboarding-card{position:relative;width:min(560px,100%);border:1px solid rgba(111,168,220,.24);background:#0d1623;border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.42);padding:22px;color:#e9eef7;}
+      .onboarding-card{position:relative;width:min(760px,100%);max-height:calc(100vh - 40px);overflow:auto;border:1px solid rgba(111,168,220,.24);background:#0d1623;border-radius:12px;box-shadow:0 24px 80px rgba(0,0,0,.42);padding:22px;color:#e9eef7;}
       .onboarding-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;}
       .onboarding-kicker{font-size:.78rem;color:#6fa8dc;margin-bottom:6px;}
       .onboarding-head h2{font-size:1.35rem;margin:0;letter-spacing:0;}
       .onboarding-icon-btn{width:32px;height:32px;border:1px solid rgba(255,255,255,.12);background:#111d2b;color:#b8c3d7;border-radius:8px;font-size:1.1rem;cursor:pointer;}
       .onboarding-progress{height:6px;background:#111d2b;border-radius:999px;overflow:hidden;margin-bottom:16px;}
       .onboarding-progress span{display:block;height:100%;background:#6fa8dc;border-radius:999px;}
-      .onboarding-steps{display:grid;gap:10px;}
+      .onboarding-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
       .onboarding-step{display:flex;gap:12px;align-items:flex-start;padding:11px 12px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:#0a111c;}
       .onboarding-dot{width:10px;height:10px;border-radius:50%;margin-top:5px;background:#f2b84b;flex:0 0 auto;}
       .onboarding-step.done .onboarding-dot{background:#52b788;}
       .onboarding-step strong{display:block;font-size:.92rem;margin-bottom:3px;}
       .onboarding-step p{margin:0;color:#8794aa;font-size:.82rem;line-height:1.5;}
+      .onboarding-assets{margin-top:14px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:#0a111c;padding:13px;}
+      .onboarding-section-title{font-size:.9rem;font-weight:800;color:#e9eef7;margin-bottom:10px;}
+      .onboarding-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
+      .onboarding-assets label span{display:block;font-size:.74rem;color:#8794aa;margin-bottom:5px;}
+      .onboarding-assets input{width:100%;height:36px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:#101a28;color:#e9eef7;padding:0 10px;font-size:.86rem;}
+      .onboarding-md-text{width:100%;margin-top:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:#101a28;color:#e9eef7;padding:9px 10px;font-size:.84rem;line-height:1.5;resize:vertical;min-height:84px;}
+      .onboarding-import-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;}
+      .onboarding-import-row input[type="file"]{padding:7px 10px;}
+      .onboarding-assets input:focus,.onboarding-md-text:focus{outline:none;border-color:#6fa8dc;}
+      .onboarding-position-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:6px 0 8px;color:#e9eef7;font-weight:700;font-size:.84rem;}
+      .onboarding-position-list{display:grid;gap:8px;}
+      .onboarding-position-row{display:grid;grid-template-columns:1fr 1.2fr .9fr .9fr 32px;gap:8px;align-items:end;}
+      .onboarding-remove-row{height:36px;border:1px solid rgba(255,255,255,.12);background:#101a28;color:#8794aa;border-radius:8px;cursor:pointer;}
+      .onboarding-hint{margin:9px 0 0;color:#8794aa;font-size:.76rem;line-height:1.5;}
       .onboarding-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:18px;}
       .onboarding-actions a,.onboarding-actions button{height:36px;padding:0 14px;border-radius:8px;border:1px solid rgba(255,255,255,.12);display:inline-flex;align-items:center;text-decoration:none;font-size:.86rem;cursor:pointer;}
+      .onboarding-actions .btn-primary:first-child{margin-right:auto;}
       .onboarding-actions .btn-secondary{background:#101a28;color:#b8c3d7;}
+      .onboarding-assets .btn-secondary.mini{height:30px;padding:0 10px;border:1px solid rgba(255,255,255,.12);background:#101a28;color:#b8c3d7;border-radius:8px;font-size:.78rem;cursor:pointer;}
       .onboarding-actions .btn-primary{background:#6fa8dc;color:#06101d;border-color:#6fa8dc;font-weight:700;}
-      @media (max-width:640px){#onboardingPanel{align-items:flex-end;padding:12px}.onboarding-card{padding:18px}.onboarding-actions{justify-content:stretch}.onboarding-actions a,.onboarding-actions button{flex:1;justify-content:center;}}
+      @media (max-width:760px){.onboarding-steps{grid-template-columns:1fr}.onboarding-form-grid,.onboarding-position-row{grid-template-columns:1fr}.onboarding-remove-row{grid-column:span 1;justify-self:start;width:42px}}
+      @media (max-width:640px){#onboardingPanel{align-items:flex-end;padding:12px}.onboarding-card{padding:18px;max-height:calc(100vh - 24px);overflow:auto}.onboarding-import-row{grid-template-columns:1fr}.onboarding-actions{justify-content:stretch}.onboarding-actions a,.onboarding-actions button{flex:1;justify-content:center}.onboarding-actions .btn-primary:first-child{margin-right:0;flex-basis:100%;}}
     `;
     document.head.appendChild(style);
     document.body.appendChild(overlay);
     overlay.addEventListener('click', async event => {
         const action = event.target?.dataset?.action;
         if (!action) return;
+        if (action === 'add-position-row') {
+            document.getElementById('onboardingPositionRows')?.insertAdjacentHTML('beforeend', renderOnboardingPositionRow());
+        }
+        if (action === 'remove-position-row') {
+            const rows = overlay.querySelectorAll('.onboarding-position-row');
+            if (rows.length > 1) event.target.closest('.onboarding-position-row')?.remove();
+            else {
+                const row = event.target.closest('.onboarding-position-row');
+                row?.querySelectorAll('input').forEach(input => { input.value = ''; });
+            }
+        }
+        if (action === 'save-assets') {
+            try {
+                await saveOnboardingAssets(overlay);
+            } catch (e) {
+                showToast(e.message || '资产初始化保存失败', 'error');
+            }
+        }
+        if (action === 'import-watchlist-md') {
+            try {
+                await importOnboardingWatchlistMarkdown(overlay);
+            } catch (e) {
+                showToast(e.message || '自选股导入失败', 'error');
+            }
+        }
         if (action === 'hide') {
             sessionStorage.setItem('onboarding_hidden', '1');
             overlay.remove();
@@ -280,6 +353,107 @@ function renderOnboardingPanel(data) {
             }
         }
     });
+}
+
+function renderOnboardingPositionRow() {
+    return `
+      <div class="onboarding-position-row">
+        <label><span>股票代码</span><input type="text" class="onboarding-pos-code" inputmode="numeric" maxlength="6" placeholder="000001"></label>
+        <label><span>股票名称</span><input type="text" class="onboarding-pos-name" placeholder="可选"></label>
+        <label><span>成本价</span><input type="number" class="onboarding-pos-cost" min="0" step="0.001" placeholder="10.50"></label>
+        <label><span>数量</span><input type="number" class="onboarding-pos-shares" min="0" step="0.001" placeholder="1000"></label>
+        <button type="button" class="onboarding-remove-row" title="删除此行" data-action="remove-position-row">×</button>
+      </div>
+    `;
+}
+
+async function saveOnboardingAssets(overlay) {
+    const cashInput = overlay.querySelector('#onboardingCash');
+    const cashNote = overlay.querySelector('#onboardingCashNote');
+    const cashRaw = cashInput?.value?.trim();
+    let savedCash = false;
+    let savedPositions = 0;
+
+    if (cashRaw) {
+        const balance = Number(cashRaw);
+        if (!Number.isFinite(balance) || balance < 0) {
+            showToast('可用资金必须是大于等于 0 的数字', 'error');
+            return;
+        }
+        await API.post('/api/portfolio/cash-balance', {
+            account_id: currentAccountId || 'default',
+            balance,
+            notes: cashNote?.value?.trim() || '初始化向导录入',
+        });
+        savedCash = true;
+    }
+
+    for (const row of overlay.querySelectorAll('.onboarding-position-row')) {
+        const code = row.querySelector('.onboarding-pos-code')?.value?.trim();
+        const name = row.querySelector('.onboarding-pos-name')?.value?.trim();
+        const cost = Number(row.querySelector('.onboarding-pos-cost')?.value || 0);
+        const shares = Number(row.querySelector('.onboarding-pos-shares')?.value || 0);
+        if (!code && !cost && !shares && !name) continue;
+        if (!/^\d{6}$/.test(code || '')) {
+            showToast('持仓股票代码需要 6 位数字', 'error');
+            return;
+        }
+        if (!Number.isFinite(cost) || cost <= 0) {
+            showToast(`${code} 的成本价必须大于 0`, 'error');
+            return;
+        }
+        if (!Number.isFinite(shares) || shares <= 0) {
+            showToast(`${code} 的数量必须大于 0，最多支持三位小数`, 'error');
+            return;
+        }
+        await API.post('/api/trades', {
+            code,
+            name: name || code,
+            direction: 'buy',
+            price: cost,
+            shares,
+            commission: 0,
+            stamp_tax: 0,
+            transfer_fee: 0,
+            account_id: currentAccountId || 'default',
+            notes: '初始化向导录入初始持仓',
+        });
+        savedPositions += 1;
+    }
+
+    if (!savedCash && !savedPositions) {
+        showToast('请至少填写可用资金或一条持仓', 'warning');
+        return;
+    }
+    sessionStorage.removeItem('onboarding_hidden');
+    showToast(`初始化已保存：资金 ${savedCash ? '已更新' : '未填写'}，持仓 ${savedPositions} 条`, 'success');
+    const fresh = await API.get('/api/settings/onboarding');
+    overlay.remove();
+    document.getElementById('onboardingStyles')?.remove();
+    if (!fresh.completed && fresh.pending_count) renderOnboardingPanel(fresh);
+}
+
+async function importOnboardingWatchlistMarkdown(overlay) {
+    const input = overlay.querySelector('#onboardingWatchlistMd');
+    const textInput = overlay.querySelector('#onboardingWatchlistMdText');
+    const file = input?.files?.[0];
+    const pastedContent = textInput?.value?.trim();
+    if (!file && !pastedContent) {
+        showToast('请先选择 Markdown 文件，或直接粘贴 Markdown 内容', 'warning');
+        return;
+    }
+    const content = file ? await file.text() : pastedContent;
+    if (!content.trim()) {
+        showToast('Markdown 内容为空', 'warning');
+        return;
+    }
+    const result = await API.post('/api/watchlist/import-md', {
+        content,
+        group_name: '默认',
+    });
+    showToast(`自选股导入完成：新增 ${result.imported || 0} 条，重复 ${result.duplicates || 0} 条，无效 ${result.invalid || 0} 行`, 'success');
+    if (input) input.value = '';
+    if (textInput) textInput.value = '';
 }
 
 function toggleGlobalHermesPanel(force) {

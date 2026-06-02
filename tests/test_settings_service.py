@@ -3,7 +3,8 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -82,6 +83,15 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertTrue(completed["completed"])
         self.assertTrue(result["completed"])
 
+    def test_bulk_update_keeps_existing_secret_when_mask_placeholder_submitted(self):
+        settings_service.update_setting("verification_api_key", "sk-real")
+
+        settings_service.bulk_update_settings({"verification_api_key": "********", "verification_endpoint": "https://api.example.com/v1"})
+        settings = settings_service.get_all_settings()
+
+        self.assertEqual(settings["verification_api_key"], "sk-real")
+        self.assertEqual(settings["verification_endpoint"], "https://api.example.com/v1")
+
 
 class SettingsApiTests(unittest.TestCase):
     def setUp(self):
@@ -99,6 +109,37 @@ class SettingsApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["value"], "30")
         get_setting.assert_called_once_with("refresh_interval")
+
+    def test_verification_connection_uses_inline_form_config(self):
+        class FakeClient:
+            def __init__(self, timeout=None):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                self.url = url
+                self.headers = headers
+                self.json = json
+                return SimpleNamespace(
+                    status_code=200,
+                    json=lambda: {"choices": [{"message": {"content": "pong"}}]},
+                    text='{"choices":[]}',
+                )
+
+        with patch("services.settings_service.verification_test_config", return_value={"model": "", "endpoint": "", "api_key": ""}), \
+             patch("api.settings_api.httpx.AsyncClient", FakeClient):
+            resp = self.client.post(
+                "/api/settings/test-verification",
+                json={"endpoint": "https://api.example.com/v1", "api_key": "sk-inline", "model": "verifier"},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "ok")
 
 
 if __name__ == "__main__":

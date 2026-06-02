@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>炒股小牛马 macOS 安装向导</title>
   <style>
-    :root{color-scheme:dark;--bg:#07101c;--panel:#0d1826;--line:#1d3047;--text:#e7eef8;--muted:#8797ad;--accent:#6fa8dc;--ok:#52b788;--warn:#f2b84b}
+    :root{color-scheme:dark;--bg:#07101c;--panel:#0d1826;--line:#1d3047;--text:#e7eef8;--muted:#8797ad;--accent:#6fa8dc;--ok:#52b788;--warn:#f2b84b;--danger:#e07a5f}
     *{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;background:var(--bg);color:var(--text)}
     .shell{max-width:920px;margin:0 auto;padding:28px 18px 40px}.hero{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:22px}
     h1{margin:0 0 8px;font-size:30px;letter-spacing:0}p{margin:0;color:var(--muted);line-height:1.6}.badge{border:1px solid var(--line);border-radius:999px;padding:7px 10px;color:var(--accent);white-space:nowrap}
@@ -14,7 +14,12 @@
     code{display:block;margin-top:10px;padding:12px;border-radius:8px;background:#050b14;border:1px solid #18263a;color:#dce8f7;white-space:pre-wrap;line-height:1.5}
     .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}button,a.btn{border:1px solid var(--line);background:#10243a;color:var(--text);border-radius:8px;padding:9px 12px;text-decoration:none;cursor:pointer;font-size:14px}
     button.primary,a.primary{background:var(--accent);border-color:var(--accent);color:#06101c;font-weight:700}.note{margin-top:18px;border-left:3px solid var(--warn);background:#121722;padding:12px 14px;border-radius:8px;color:#d4deed}
-    .ok{color:var(--ok)}@media(max-width:720px){.hero{display:block}.badge{display:inline-flex;margin-top:12px}.step{grid-template-columns:1fr}.num{width:30px;height:30px}}
+    .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.field{display:grid;gap:6px}.field.full{grid-column:1/-1}.field span{font-size:13px;color:var(--muted)}
+    input,textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:#081321;color:var(--text);padding:10px 11px;font-size:14px}textarea{min-height:104px;line-height:1.5;resize:vertical}
+    input:focus,textarea:focus{outline:none;border-color:var(--accent)}.position-list{display:grid;gap:8px;margin-top:10px}.position-row{display:grid;grid-template-columns:1fr 1.2fr .9fr .9fr 38px;gap:8px;align-items:end}
+    .asset-box{margin-top:16px;border:1px solid var(--line);border-radius:10px;background:#091525;padding:14px}.asset-box h3{margin:0 0 6px;font-size:16px;letter-spacing:0}.asset-box p{font-size:13px}
+    .mini{padding:7px 10px;font-size:13px}.status{margin-top:10px;color:var(--muted);font-size:13px;line-height:1.6}.status.ok{color:var(--ok)}.status.error{color:var(--danger)}
+    .ok{color:var(--ok)}@media(max-width:720px){.hero{display:block}.badge{display:inline-flex;margin-top:12px}.step{grid-template-columns:1fr}.num{width:30px;height:30px}.form-grid,.position-row{grid-template-columns:1fr}.field.full{grid-column:auto}}
   </style>
 </head>
 <body>
@@ -24,7 +29,7 @@
         <h1>炒股小牛马 macOS 安装向导</h1>
         <p>目标平台：Intel x86_64 macOS 12 Monterey。这个页面会引导你完成依赖检查、安装、启动和验证。</p>
       </div>
-      <div class="badge">v2.7.0 · 页面式 Step 安装包</div>
+      <div class="badge">v2.7.3 · 页面式 Step 安装包</div>
     </section>
 
     <section class="steps">
@@ -58,13 +63,60 @@ npm -v</code>
         <div class="num">4</div>
         <div>
           <h2>打开工作台</h2>
-          <p>安装完成后打开本地地址。如果 8000 端口被占用，重新执行部署脚本并指定其他端口。</p>
+          <p>安装完成后打开本地地址。如果 8000 端口被占用，重新执行部署脚本并指定其他端口。下面的数据库初始化区域会连接这个本地地址写入自选股、资金和初始持仓。</p>
           <code>http://127.0.0.1:8000</code>
           <div class="actions"><a class="btn primary" href="http://127.0.0.1:8000">打开工作台</a></div>
         </div>
       </article>
       <article class="step">
         <div class="num">5</div>
+        <div>
+          <h2>数据库初始化</h2>
+          <p>确认工作台已经启动后，在这里导入 Markdown 自选股清单，并完成资产初始化。Markdown 支持表格格式：<b>| # | 股票名称 | 代码 |</b>。</p>
+          <div class="form-grid">
+            <label class="field full">
+              <span>本地 API 地址</span>
+              <input id="installerApiBase" value="http://127.0.0.1:8000" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>自选股 Markdown 文件</span>
+              <input type="file" id="installerWatchlistMd" accept=".md,.markdown,text/markdown,text/plain">
+            </label>
+            <label class="field full">
+              <span>也可以直接粘贴 Markdown</span>
+              <textarea id="installerWatchlistMdText" placeholder="| # | 股票名称 | 代码 |&#10;|---|---------|------|&#10;| 1 | 深科技 | 000021 |"></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button onclick="testInstallerApi()">测试连接</button>
+            <button class="primary" onclick="importInstallerWatchlist()">导入自选股</button>
+          </div>
+          <div class="status" id="installerWatchlistStatus">等待连接本地服务。</div>
+          <div class="asset-box">
+            <h3>资产初始化</h3>
+            <p>填写可用资金和初始持仓股。保存后会直接写入本机 SQLite：可用资金写入现金余额和现金流水，持仓股按买入交易写入并自动生成持仓成本。</p>
+            <div class="form-grid">
+              <label class="field">
+                <span>可用资金</span>
+                <input type="number" min="0" step="0.001" id="installerCash" placeholder="例如 100000">
+              </label>
+              <label class="field">
+                <span>资金备注</span>
+                <input id="installerCashNote" placeholder="例如 初始资金 / 银证转入">
+              </label>
+            </div>
+            <p style="margin-top:12px">初始持仓股</p>
+            <div class="position-list" id="installerPositionRows"></div>
+            <div class="actions">
+              <button class="mini" onclick="addInstallerPositionRow()">添加持仓行</button>
+              <button class="primary" onclick="saveInstallerAssets()">保存资金和持仓</button>
+            </div>
+            <div class="status" id="installerAssetStatus">可只保存资金，也可以同时保存多条持仓。</div>
+          </div>
+        </div>
+      </article>
+      <article class="step">
+        <div class="num">6</div>
         <div>
           <h2>升级和恢复</h2>
           <p>后续版本可双击 <b>升级.command</b>。升级前会尝试备份数据库；恢复入口在“设置 -> 数据管理”。</p>
@@ -76,6 +128,109 @@ npm -v</code>
   </main>
   <script>
     function copyText(text){navigator.clipboard?.writeText(text);alert('已复制：'+text)}
+    function installerApiBase(){
+      return (document.getElementById('installerApiBase').value || 'http://127.0.0.1:8000').replace(/\/+$/,'');
+    }
+    function setInstallerStatus(id,message,type){
+      const el=document.getElementById(id);
+      if(!el)return;
+      el.textContent=message;
+      el.className='status '+(type||'');
+    }
+    async function installerRequest(path,options){
+      const resp=await fetch(installerApiBase()+path,options);
+      const text=await resp.text();
+      let data={};
+      if(text){
+        try{data=JSON.parse(text)}catch(_){throw new Error('接口返回非 JSON：'+text.slice(0,80))}
+      }
+      if(!resp.ok)throw new Error(data.detail||data.message||('HTTP '+resp.status));
+      return data;
+    }
+    async function testInstallerApi(){
+      try{
+        await installerRequest('/api/settings/onboarding',{method:'GET'});
+        setInstallerStatus('installerWatchlistStatus','本地服务连接正常，可以初始化数据库。','ok');
+      }catch(e){
+        setInstallerStatus('installerWatchlistStatus','连接失败：'+e.message,'error');
+      }
+    }
+    function addInstallerPositionRow(){
+      const rows=document.getElementById('installerPositionRows');
+      rows.insertAdjacentHTML('beforeend',`
+        <div class="position-row">
+          <label class="field"><span>股票代码</span><input class="installer-pos-code" maxlength="6" inputmode="numeric" placeholder="000001"></label>
+          <label class="field"><span>股票名称</span><input class="installer-pos-name" placeholder="可选"></label>
+          <label class="field"><span>成本价</span><input class="installer-pos-cost" type="number" min="0" step="0.001" placeholder="10.50"></label>
+          <label class="field"><span>数量</span><input class="installer-pos-shares" type="number" min="0" step="0.001" placeholder="1000"></label>
+          <button class="mini" onclick="removeInstallerPositionRow(this)">删除</button>
+        </div>`);
+    }
+    function removeInstallerPositionRow(btn){
+      const rows=[...document.querySelectorAll('.position-row')];
+      if(rows.length>1)btn.closest('.position-row').remove();
+      else btn.closest('.position-row').querySelectorAll('input').forEach(input=>input.value='');
+    }
+    async function importInstallerWatchlist(){
+      const file=document.getElementById('installerWatchlistMd').files[0];
+      const pasted=document.getElementById('installerWatchlistMdText').value.trim();
+      if(!file&&!pasted){
+        setInstallerStatus('installerWatchlistStatus','请先选择 Markdown 文件，或粘贴 Markdown 内容。','error');
+        return;
+      }
+      try{
+        const content=file?await file.text():pasted;
+        const result=await installerRequest('/api/watchlist/import-md',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({content,group_name:'默认'})
+        });
+        setInstallerStatus('installerWatchlistStatus',`导入完成：新增 ${result.imported||0} 条，重复 ${result.duplicates||0} 条，无效 ${result.invalid||0} 行。`,'ok');
+        document.getElementById('installerWatchlistMd').value='';
+        document.getElementById('installerWatchlistMdText').value='';
+      }catch(e){
+        setInstallerStatus('installerWatchlistStatus','导入失败：'+e.message,'error');
+      }
+    }
+    async function saveInstallerAssets(){
+      const cashRaw=document.getElementById('installerCash').value.trim();
+      const cashNote=document.getElementById('installerCashNote').value.trim();
+      let savedCash=false;
+      let savedPositions=0;
+      try{
+        if(cashRaw){
+          const balance=Number(cashRaw);
+          if(!Number.isFinite(balance)||balance<0)throw new Error('可用资金必须是大于等于 0 的数字');
+          await installerRequest('/api/portfolio/cash-balance',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({account_id:'default',balance,notes:cashNote||'安装向导初始化'})
+          });
+          savedCash=true;
+        }
+        for(const row of document.querySelectorAll('.position-row')){
+          const code=row.querySelector('.installer-pos-code').value.trim();
+          const name=row.querySelector('.installer-pos-name').value.trim();
+          const cost=Number(row.querySelector('.installer-pos-cost').value||0);
+          const shares=Number(row.querySelector('.installer-pos-shares').value||0);
+          if(!code&&!name&&!cost&&!shares)continue;
+          if(!/^\d{6}$/.test(code))throw new Error('持仓股票代码需要 6 位数字');
+          if(!Number.isFinite(cost)||cost<=0)throw new Error(code+' 的成本价必须大于 0');
+          if(!Number.isFinite(shares)||shares<=0)throw new Error(code+' 的数量必须大于 0，最多支持三位小数');
+          await installerRequest('/api/trades',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({code,name:name||code,direction:'buy',price:cost,shares,commission:0,stamp_tax:0,transfer_fee:0,account_id:'default',notes:'安装向导初始化持仓'})
+          });
+          savedPositions+=1;
+        }
+        if(!savedCash&&!savedPositions)throw new Error('请至少填写可用资金或一条持仓');
+        setInstallerStatus('installerAssetStatus',`保存完成：资金 ${savedCash?'已更新':'未填写'}，持仓 ${savedPositions} 条。`,'ok');
+      }catch(e){
+        setInstallerStatus('installerAssetStatus','保存失败：'+e.message,'error');
+      }
+    }
+    addInstallerPositionRow();
   </script>
 </body>
 </html>
