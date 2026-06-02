@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import re
 import sqlite3
 import sys
@@ -20,6 +21,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -27,7 +30,7 @@ if str(ROOT) not in sys.path:
 from config import DB_PATH  # noqa: E402
 from data.quote import get_batch_quotes  # noqa: E402
 from models.database import SCHEMA  # noqa: E402
-from scheduler.ta_bridge import PIPELINE_STAGES  # noqa: E402
+from scheduler.ai_engine import extract_confidence, extract_risk_score, extract_signal, extract_target_price  # noqa: E402
 from services import ai_analysis_service, ai_task_service  # noqa: E402
 
 
@@ -83,6 +86,11 @@ def _recent_report_codes(conn: sqlite3.Connection, days: int) -> set[str]:
         (f"-{days} days",),
     ).fetchall()
     return {row["code"] for row in rows}
+
+
+def recent_report_codes(db_path: Path, days: int) -> set[str]:
+    with _connect(db_path) as conn:
+        return _recent_report_codes(conn, days)
 
 
 def load_candidates(
@@ -176,6 +184,273 @@ def _clip_text(value: Any, limit: int = 20000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...[truncated]"
+
+
+def _chat_completions_url(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def _settings_map(db_path: Path) -> dict[str, str]:
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    return {row["key"]: row["value"] for row in rows}
+
+
+def _snapshot_llm_config(db_path: Path, *, model_tier: str = "deep") -> dict[str, str]:
+    settings = _settings_map(db_path)
+    provider = (settings.get("llm_provider") or "deepseek").upper()
+    api_key = (
+        settings.get("api_key")
+        or os.environ.get(f"{provider}_API_KEY")
+        or os.environ.get("DEEPSEEK_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or ""
+    )
+    model = settings.get("deep_think_model" if model_tier == "deep" else "quick_think_model") or ""
+    if not model:
+        model = settings.get("quick_think_model") or settings.get("deep_think_model") or ""
+    return {
+        "base_url": settings.get("custom_endpoint") or "",
+        "api_key": api_key,
+        "model": model,
+    }
+
+
+def _latest_snapshot(db_path: Path, code: str) -> dict[str, Any] | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, code, name, snapshot_json, validation_json, summary_json, created_at
+            FROM stock_data_snapshots
+            WHERE code = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (code,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "code": row["code"],
+        "name": row["name"],
+        "snapshot": json.loads(row["snapshot_json"] or "{}"),
+        "validation": json.loads(row["validation_json"] or "{}"),
+        "summary": json.loads(row["summary_json"] or "{}"),
+        "created_at": row["created_at"],
+    }
+
+
+def _has_complete_snapshot(db_path: Path, code: str) -> bool:
+    row = _latest_snapshot(db_path, code)
+    return bool(row and (row.get("validation") or {}).get("ok"))
+
+
+def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any]) -> str:
+    snapshot = snapshot_row["snapshot"]
+    validation = snapshot_row["validation"]
+    payload = {
+        "stock": {"code": stock.code, "name": stock.name, "group": stock.group_name},
+        "quote": stock.quote,
+        "snapshot_id": snapshot_row["id"],
+        "validation": validation,
+        "layers": {
+            layer: snapshot.get(layer)
+            for layer in SNAPSHOT_LAYERS
+        },
+    }
+    return f"""你是一个严谨的 A 股研究 Agent。请只基于下方已入库七层数据快照生成分析报告，禁止自行联网，禁止编造快照没有提供的数据。
+
+输出必须是 JSON 对象，不要 Markdown，不要解释。字段如下：
+{{
+  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "confidence": 0.0,
+  "risk_score": 0.0,
+  "market_report": "技术和价格行为分析",
+  "sentiment_report": "情绪和社交舆情分析",
+  "news_report": "新闻舆情分析",
+  "fundamentals_report": "基本面分析",
+  "policy_report": "政策和宏观相关性分析",
+  "hot_money_report": "资金和游资线索分析",
+  "lockup_report": "解禁、减持、股东变化风险分析",
+  "investment_debate": "多空双方辩论摘要",
+  "risk_debate": "激进、保守、中性三类风控观点",
+  "trader_plan": "如果需要建仓，给出分批、触发、止损、失效条件；如果不建仓，说明等待条件",
+  "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
+}}
+
+约束：
+- confidence 为 0 到 1。
+- risk_score 为 0 到 100，数值越高风险越高。
+- 如果快照完整性校验不是 ok，必须降低置信度并在 final_decision 中说明缺失项。
+- 不允许出现“根据最新网络数据”等未提供来源的话。
+
+七层数据快照：
+{_clip_text(payload, 28000)}
+"""
+
+
+def _parse_llm_json(text: str) -> dict[str, Any]:
+    stripped = (text or "").strip()
+    if not stripped:
+        return {}
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", stripped)
+        if not match:
+            return {"final_decision": stripped}
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {"final_decision": stripped}
+
+
+async def _call_snapshot_llm(prompt: str, config: dict[str, str], *, timeout_seconds: int) -> dict[str, Any]:
+    if not config.get("base_url"):
+        raise RuntimeError("AI 引擎 Base URL 未配置，无法生成快照报告")
+    if not config.get("api_key"):
+        raise RuntimeError("AI 引擎 API Key 未配置，无法生成快照报告")
+    if not config.get("model"):
+        raise RuntimeError("AI 引擎模型未配置，无法生成快照报告")
+    async with httpx.AsyncClient(timeout=max(30, timeout_seconds)) as client:
+        resp = await client.post(
+            _chat_completions_url(config["base_url"]),
+            headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+            json={
+                "model": config["model"],
+                "messages": [
+                    {"role": "system", "content": "你是严谨的 A 股研究报告生成器，只输出 JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 4000,
+            },
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"快照报告模型请求失败 HTTP {resp.status_code}: {resp.text[:240]}")
+    data = resp.json()
+    content = data["choices"][0]["message"]["content"]
+    return _parse_llm_json(content)
+
+
+def _text_value(result: dict[str, Any], key: str) -> str:
+    value = result.get(key)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value or "")
+
+
+def _normalise_snapshot_result(result: dict[str, Any]) -> dict[str, Any]:
+    final_decision = _text_value(result, "final_decision")
+    trader_plan = _text_value(result, "trader_plan")
+    parse_text = "\n".join([final_decision, trader_plan, json.dumps(result, ensure_ascii=False, default=_json_default)])
+    signal = str(result.get("signal") or "").upper().strip()
+    valid_signals = POSITIVE_SIGNALS | WATCH_SIGNALS | {"SELL", "STRONG_SELL", "UNDERWEIGHT"}
+    if signal not in valid_signals:
+        signal = extract_signal(parse_text)
+    confidence = _float_or_none(result.get("confidence"))
+    if confidence is None:
+        confidence = extract_confidence(parse_text)
+    if confidence is not None and confidence > 1:
+        confidence = round(confidence / 100, 3)
+    risk_score = _float_or_none(result.get("risk_score"))
+    if risk_score is None:
+        risk_score = extract_risk_score(parse_text)
+    if risk_score is not None and risk_score <= 1:
+        risk_score = round(risk_score * 100, 3)
+    return {
+        **result,
+        "signal": signal or "HOLD",
+        "confidence": round(confidence, 3) if confidence is not None else None,
+        "risk_score": round(risk_score, 3) if risk_score is not None else None,
+        "target_price": extract_target_price(parse_text),
+    }
+
+
+def _save_snapshot_report(
+    db_path: Path,
+    item: RankedCandidate,
+    result: dict[str, Any],
+    snapshot_row: dict[str, Any],
+    *,
+    run_id: str,
+    duration_seconds: float,
+    model: str,
+) -> int:
+    normalized = _normalise_snapshot_result(result)
+    raw_state = {
+        "source": "snapshot_report",
+        "run_id": run_id,
+        "code": item.code,
+        "name": item.name,
+        "signal": normalized["signal"],
+        "confidence": normalized.get("confidence"),
+        "risk_score": normalized.get("risk_score"),
+        "target_price": normalized.get("target_price"),
+        "snapshot_id": snapshot_row["id"],
+        "snapshot_created_at": snapshot_row["created_at"],
+        "model": model,
+    }
+    market_snapshot = {
+        "snapshot_id": snapshot_row["id"],
+        "validation": snapshot_row["validation"],
+        "summary": snapshot_row["summary"],
+    }
+    task_id = f"snapshot-{run_id}-{item.code}"
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO analysis_reports
+                (task_id, code, signal, confidence, risk_score,
+                 market_report, sentiment_report, news_report, fundamentals_report,
+                 policy_report, hot_money_report, lockup_report,
+                 investment_debate, risk_debate, final_decision, trader_plan,
+                 raw_state, duration_seconds, market_snapshot, fact_check,
+                 depth, model_mode)
+            VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                item.code,
+                normalized["signal"],
+                normalized.get("confidence"),
+                normalized.get("risk_score"),
+                _text_value(normalized, "market_report"),
+                _text_value(normalized, "sentiment_report"),
+                _text_value(normalized, "news_report"),
+                _text_value(normalized, "fundamentals_report"),
+                _text_value(normalized, "policy_report"),
+                _text_value(normalized, "hot_money_report"),
+                _text_value(normalized, "lockup_report"),
+                _text_value(normalized, "investment_debate"),
+                _text_value(normalized, "risk_debate"),
+                _text_value(normalized, "final_decision"),
+                _text_value(normalized, "trader_plan"),
+                json.dumps(raw_state, ensure_ascii=False),
+                round(duration_seconds, 3),
+                json.dumps(market_snapshot, ensure_ascii=False, default=_json_default),
+                json.dumps(
+                    {
+                        "source": "stock_data_snapshots",
+                        "snapshot_id": snapshot_row["id"],
+                        "validation": snapshot_row["validation"],
+                    },
+                    ensure_ascii=False,
+                ),
+                "snapshot",
+                "snapshot_report",
+            ),
+        )
+        conn.commit()
+        report_id = conn.execute("SELECT id FROM analysis_reports WHERE task_id = ?", (task_id,)).fetchone()["id"]
+    return int(report_id)
 
 
 async def _invoke_tool(tool: Any, payload: dict[str, Any]) -> dict[str, Any]:
@@ -412,6 +687,57 @@ async def submit_batches(
     return completed
 
 
+async def submit_snapshot_reports(
+    db_path: Path,
+    candidates: list[RankedCandidate],
+    *,
+    run_id: str,
+    concurrency: int,
+    model_tier: str,
+    timeout_seconds: int,
+) -> list[RankedCandidate]:
+    config = _snapshot_llm_config(db_path, model_tier=model_tier)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def worker(item: RankedCandidate) -> None:
+        async with semaphore:
+            snapshot_row = _latest_snapshot(db_path, item.code)
+            if not snapshot_row:
+                item.status = "failed"
+                item.error = "缺少已入库七层快照，请先执行 --data-only --apply"
+                return
+            validation = snapshot_row.get("validation") or {}
+            if not validation.get("ok"):
+                item.status = "failed"
+                item.error = f"七层快照不完整：{json.dumps(validation, ensure_ascii=False)}"
+                return
+            started = datetime.now()
+            try:
+                result = await _call_snapshot_llm(
+                    _snapshot_prompt(item, snapshot_row),
+                    config,
+                    timeout_seconds=timeout_seconds,
+                )
+                report_id = _save_snapshot_report(
+                    db_path,
+                    item,
+                    result,
+                    snapshot_row,
+                    run_id=run_id,
+                    duration_seconds=(datetime.now() - started).total_seconds(),
+                    model=config.get("model", ""),
+                )
+                item.task_id = f"report:{report_id}"
+                item.status = "completed"
+                item.error = None
+            except Exception as exc:
+                item.status = "failed"
+                item.error = str(exc)
+
+    await asyncio.gather(*(worker(item) for item in candidates))
+    return candidates
+
+
 def _float_or_none(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -598,8 +924,9 @@ def write_outputs(output_dir: Path, summary: dict[str, Any]) -> dict[str, str]:
         f"- 模式：{summary['mode']}",
         f"- 候选股票：{summary['candidate_count']}",
         f"- 计划分析：{summary['planned_count']}",
+        f"- 跳过已有报告：{summary.get('skipped_existing_reports', 0)}",
         f"- 已提交：{summary['submitted_count']}",
-        f"- 七层快照：保存 {summary['snapshots']['saved']} / 完整 {summary['snapshots']['complete']} / 不完整 {summary['snapshots']['incomplete']} / 失败 {summary['snapshots']['failed']}",
+        f"- 七层快照：复用 {summary['snapshots'].get('reused', 0)} / 保存 {summary['snapshots']['saved']} / 完整 {summary['snapshots']['complete']} / 不完整 {summary['snapshots']['incomplete']} / 失败 {summary['snapshots']['failed']}",
         "",
         "## 候选列表",
         "",
@@ -633,25 +960,36 @@ async def run_batch_research(
     poll_interval: float = 5.0,
     timeout_seconds: int = 1800,
     snapshot_concurrency: int = 3,
+    analysis_mode: str = "snapshot",
+    analysis_concurrency: int = 1,
+    snapshot_model_tier: str = "deep",
+    refresh_snapshots: bool = False,
     plan_top_n: int = 10,
 ) -> dict[str, Any]:
     ensure_schema(db_path)
     run_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    stocks = load_candidates(
+    all_stocks = load_candidates(
         db_path,
         group=group,
         include_observation=include_observation,
-        skip_recent_days=skip_recent_days,
+        skip_recent_days=0,
     )
     if limit > 0:
-        stocks = stocks[:limit]
-    quotes = await fetch_quotes_for(stocks)
-    candidates = rank_candidates(stocks, quotes, top_n=top_n)
+        all_stocks = all_stocks[:limit]
+    quotes = await fetch_quotes_for(all_stocks)
+    ranked_scope = rank_candidates(all_stocks, quotes, top_n=top_n)
+    recent_codes = recent_report_codes(db_path, skip_recent_days)
+    candidates = [item for item in ranked_scope if item.code not in recent_codes]
+    skipped_existing_reports = len(ranked_scope) - len(candidates)
     selected_stocks = [
         StockCandidate(item.code, item.name, item.group_name, item.sort_order)
         for item in candidates
     ]
-    mode = "dry_run" if dry_run else "data_only" if data_only else "full_chain"
+    plan_stocks = [
+        StockCandidate(item.code, item.name, item.group_name, item.sort_order)
+        for item in ranked_scope
+    ]
+    mode = "dry_run" if dry_run else "data_only" if data_only else f"{analysis_mode}_analysis"
     snapshot_summary = {
         "requested": 0,
         "saved": 0,
@@ -660,31 +998,62 @@ async def run_batch_research(
         "failed": 0,
         "run_id": run_id,
         "concurrency": max(1, snapshot_concurrency),
+        "reused": 0,
     }
     if not dry_run and selected_stocks:
-        snapshot_summary = await prefetch_seven_layer_snapshots(
-            db_path,
-            selected_stocks,
-            run_id=run_id,
-            trade_date=trade_date or date.today().isoformat(),
-            concurrency=snapshot_concurrency,
-        )
+        snapshot_targets = selected_stocks
+        reused_snapshots = 0
+        if analysis_mode == "snapshot" and not data_only and not refresh_snapshots:
+            snapshot_targets = [stock for stock in selected_stocks if not _has_complete_snapshot(db_path, stock.code)]
+            reused_snapshots = len(selected_stocks) - len(snapshot_targets)
+        if snapshot_targets:
+            snapshot_summary = await prefetch_seven_layer_snapshots(
+                db_path,
+                snapshot_targets,
+                run_id=run_id,
+                trade_date=trade_date or date.today().isoformat(),
+                concurrency=snapshot_concurrency,
+            )
+            snapshot_summary["reused"] = reused_snapshots
+        else:
+            snapshot_summary = {
+                "requested": len(selected_stocks),
+                "saved": 0,
+                "complete": reused_snapshots,
+                "incomplete": 0,
+                "failed": 0,
+                "failed_items": [],
+                "incomplete_items": [],
+                "run_id": run_id,
+                "concurrency": max(1, snapshot_concurrency),
+                "reused": reused_snapshots,
+            }
     if not dry_run and not data_only and candidates:
-        candidates = await submit_batches(
-            candidates,
-            batch_size=batch_size,
-            trade_date=trade_date or date.today().isoformat(),
-            depth=depth,
-            debate_rounds=debate_rounds,
-            risk_rounds=risk_rounds,
-            poll_interval=poll_interval,
-            timeout_seconds=timeout_seconds,
-        )
+        if analysis_mode == "tradingagents":
+            candidates = await submit_batches(
+                candidates,
+                batch_size=batch_size,
+                trade_date=trade_date or date.today().isoformat(),
+                depth=depth,
+                debate_rounds=debate_rounds,
+                risk_rounds=risk_rounds,
+                poll_interval=poll_interval,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            candidates = await submit_snapshot_reports(
+                db_path,
+                candidates,
+                run_id=run_id,
+                concurrency=analysis_concurrency,
+                model_tier=snapshot_model_tier,
+                timeout_seconds=timeout_seconds,
+            )
 
     position_plan = None
     position_plan_outputs = {}
-    if not dry_run and not data_only and selected_stocks:
-        position_plan = build_position_plan(db_path, selected_stocks, top_n=plan_top_n)
+    if not dry_run and not data_only and plan_stocks:
+        position_plan = build_position_plan(db_path, plan_stocks, top_n=plan_top_n)
         position_plan_outputs = write_position_plan(output_dir, position_plan)
 
     summary = {
@@ -694,13 +1063,19 @@ async def run_batch_research(
         "group": group,
         "include_observation": include_observation,
         "skip_recent_days": skip_recent_days,
-        "candidate_count": len(stocks),
+        "candidate_count": len(all_stocks),
+        "ranked_scope_count": len(ranked_scope),
         "planned_count": len(candidates),
+        "skipped_existing_reports": skipped_existing_reports,
         "submitted_count": sum(1 for item in candidates if item.task_id),
         "depth": depth,
         "debate_rounds": debate_rounds,
         "risk_rounds": risk_rounds,
         "batch_size": batch_size,
+        "analysis_mode": analysis_mode,
+        "analysis_concurrency": analysis_concurrency,
+        "snapshot_model_tier": snapshot_model_tier,
+        "refresh_snapshots": refresh_snapshots,
         "snapshots": snapshot_summary,
         "position_plan": position_plan,
         "position_plan_outputs": position_plan_outputs,
@@ -727,6 +1102,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--snapshot-concurrency", type=int, default=3, help="七层数据快照并发数")
+    parser.add_argument(
+        "--analysis-mode",
+        default="snapshot",
+        choices=["snapshot", "tradingagents"],
+        help="snapshot=读取已入库七层快照生成报告；tradingagents=走原生 TradingAgents 在线链路",
+    )
+    parser.add_argument("--analysis-concurrency", type=int, default=1, help="snapshot 模式下并发生成报告数")
+    parser.add_argument("--snapshot-model-tier", default="deep", choices=["quick", "deep"], help="snapshot 模式使用快速或深度模型")
+    parser.add_argument("--refresh-snapshots", action="store_true", help="snapshot 分析前强制重新拉取七层快照")
     parser.add_argument("--plan-top-n", type=int, default=10, help="建仓建议最多给多少只买入候选")
     parser.add_argument("--data-only", action="store_true", help="只拉行情和生成候选报告，不提交 AI")
     parser.add_argument("--apply", action="store_true", help="实际提交 AI 任务；不传默认 dry-run")
@@ -754,6 +1138,10 @@ async def async_main() -> int:
         poll_interval=args.poll_interval,
         timeout_seconds=args.timeout_seconds,
         snapshot_concurrency=args.snapshot_concurrency,
+        analysis_mode=args.analysis_mode,
+        analysis_concurrency=args.analysis_concurrency,
+        snapshot_model_tier=args.snapshot_model_tier,
+        refresh_snapshots=args.refresh_snapshots,
         plan_top_n=args.plan_top_n,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
