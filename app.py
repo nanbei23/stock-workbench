@@ -107,6 +107,7 @@ from api.hermes_api import router as hermes_router
 from api.shadow_api import router as shadow_router
 from api.performance_api import router as performance_router
 from api.batch_report_api import router as batch_report_router
+from api.position_plan_api import router as position_plan_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -122,6 +123,7 @@ app.include_router(hermes_router, prefix="/api")
 app.include_router(shadow_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
 app.include_router(batch_report_router, prefix="/api")
+app.include_router(position_plan_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")

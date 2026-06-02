@@ -188,6 +188,17 @@ CREATE TABLE IF NOT EXISTS batch_jobs (
     payload_json TEXT DEFAULT '{}',
     result_json TEXT DEFAULT '{}',
     error TEXT,
+    worker_id TEXT,
+    heartbeat_at TEXT,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_until TEXT,
+    pause_requested INTEGER DEFAULT 0,
+    paused_at TEXT,
+    input_snapshot_json TEXT DEFAULT '{}',
+    quality_json TEXT DEFAULT '{}',
+    post_actions_json TEXT DEFAULT '{}',
+    runtime_json TEXT DEFAULT '{}',
     created_at TEXT DEFAULT (datetime('now')),
     started_at TEXT,
     completed_at TEXT,
@@ -201,14 +212,119 @@ CREATE TABLE IF NOT EXISTS batch_job_items (
     name TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     snapshot_id INTEGER,
+    locked_snapshot_id INTEGER,
     report_id INTEGER,
     task_id TEXT,
     error TEXT,
+    error_type TEXT,
+    next_retry_at TEXT,
+    lease_owner TEXT,
+    lease_token TEXT,
+    lease_until TEXT,
+    quality_json TEXT DEFAULT '{}',
     retry_count INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     started_at TEXT,
     completed_at TEXT,
     updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS batch_job_item_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    job_id TEXT NOT NULL,
+    role_key TEXT NOT NULL,
+    role_name TEXT,
+    step_order INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    content TEXT DEFAULT '',
+    error TEXT,
+    error_type TEXT,
+    next_retry_at TEXT,
+    input_hash TEXT,
+    model_config_json TEXT DEFAULT '{}',
+    duration_ms INTEGER,
+    token_usage_json TEXT DEFAULT '{}',
+    retry_count INTEGER DEFAULT 0,
+    heartbeat_at TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(item_id, role_key)
+);
+
+CREATE TABLE IF NOT EXISTS batch_job_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    item_id INTEGER,
+    step_id INTEGER,
+    level TEXT NOT NULL DEFAULT 'info',
+    event TEXT NOT NULL,
+    message TEXT,
+    data_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS batch_job_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    artifact_type TEXT NOT NULL,
+    title TEXT,
+    path TEXT,
+    data_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS position_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT UNIQUE NOT NULL,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    adoption_status TEXT NOT NULL DEFAULT 'draft',
+    stage TEXT NOT NULL DEFAULT 'final',
+    parent_plan_id TEXT,
+    context_strategy TEXT NOT NULL DEFAULT 'auto',
+    source_report_ids TEXT DEFAULT '[]',
+    candidate_count INTEGER DEFAULT 0,
+    selected_count INTEGER DEFAULT 0,
+    model_strategy TEXT DEFAULT 'single',
+    model_config_json TEXT DEFAULT '{}',
+    role_models_json TEXT DEFAULT '{}',
+    cash_snapshot_json TEXT DEFAULT '{}',
+    portfolio_snapshot_json TEXT DEFAULT '{}',
+    summary TEXT,
+    risk_controls_json TEXT DEFAULT '[]',
+    role_discussion_json TEXT DEFAULT '[]',
+    recommendations_json TEXT DEFAULT '[]',
+    review_result_json TEXT DEFAULT '{}',
+    output_markdown TEXT,
+    output_json TEXT DEFAULT '{}',
+    batch_job_id TEXT,
+    confirmed_at TEXT,
+    confirmed_by TEXT,
+    confirmed_snapshot_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS position_plan_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT,
+    action TEXT NOT NULL DEFAULT 'watch',
+    suggested_amount REAL DEFAULT 0,
+    position_pct REAL DEFAULT 0,
+    suggested_shares REAL DEFAULT 0,
+    confidence REAL,
+    risk_score REAL,
+    reason TEXT,
+    entry_plan TEXT,
+    stop_loss TEXT,
+    risk_note TEXT,
+    source_report_id INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS anomaly_logs (
@@ -478,6 +594,14 @@ CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_code_created ON stock_data_s
 CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_run ON stock_data_snapshots(run_id, code);
 CREATE INDEX IF NOT EXISTS idx_batch_report_jobs_status_created ON batch_report_jobs(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_batch_report_items_job_status ON batch_report_items(job_id, status);
+CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_item_order ON batch_job_item_steps(item_id, step_order);
+CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_job_status ON batch_job_item_steps(job_id, status);
+CREATE INDEX IF NOT EXISTS idx_batch_job_logs_job_created ON batch_job_logs(job_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_batch_job_artifacts_job_created ON batch_job_artifacts(job_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_position_plans_status_created ON position_plans(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_position_plans_stage_created ON position_plans(stage, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_position_plan_items_plan ON position_plan_items(plan_id);
+CREATE INDEX IF NOT EXISTS idx_position_plan_items_code ON position_plan_items(code);
 CREATE INDEX IF NOT EXISTS idx_anomaly_logs_code_created ON anomaly_logs(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_code_cached ON news_cache(code6, cached_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_url ON news_cache(url);
@@ -742,6 +866,17 @@ MIGRATIONS = [
             payload_json TEXT DEFAULT '{}',
             result_json TEXT DEFAULT '{}',
             error TEXT,
+            worker_id TEXT,
+            heartbeat_at TEXT,
+            lease_owner TEXT,
+            lease_token TEXT,
+            lease_until TEXT,
+            pause_requested INTEGER DEFAULT 0,
+            paused_at TEXT,
+            input_snapshot_json TEXT DEFAULT '{}',
+            quality_json TEXT DEFAULT '{}',
+            post_actions_json TEXT DEFAULT '{}',
+            runtime_json TEXT DEFAULT '{}',
             created_at TEXT DEFAULT (datetime('now')),
             started_at TEXT,
             completed_at TEXT,
@@ -754,14 +889,65 @@ MIGRATIONS = [
             name TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             snapshot_id INTEGER,
+            locked_snapshot_id INTEGER,
             report_id INTEGER,
             task_id TEXT,
             error TEXT,
+            error_type TEXT,
+            next_retry_at TEXT,
+            lease_owner TEXT,
+            lease_token TEXT,
+            lease_until TEXT,
+            quality_json TEXT DEFAULT '{}',
             retry_count INTEGER DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now')),
             started_at TEXT,
             completed_at TEXT,
             updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS batch_job_item_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            job_id TEXT NOT NULL,
+            role_key TEXT NOT NULL,
+            role_name TEXT,
+            step_order INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            content TEXT DEFAULT '',
+            error TEXT,
+            error_type TEXT,
+            next_retry_at TEXT,
+            input_hash TEXT,
+            model_config_json TEXT DEFAULT '{}',
+            duration_ms INTEGER,
+            token_usage_json TEXT DEFAULT '{}',
+            retry_count INTEGER DEFAULT 0,
+            heartbeat_at TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(item_id, role_key)
+        );
+        CREATE TABLE IF NOT EXISTS batch_job_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            item_id INTEGER,
+            step_id INTEGER,
+            level TEXT NOT NULL DEFAULT 'info',
+            event TEXT NOT NULL,
+            message TEXT,
+            data_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS batch_job_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            artifact_type TEXT NOT NULL,
+            title TEXT,
+            path TEXT,
+            data_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_batch_jobs_type_status_created
             ON batch_jobs(job_type, status, created_at DESC);
@@ -769,6 +955,109 @@ MIGRATIONS = [
             ON batch_job_items(job_id, status);
         CREATE INDEX IF NOT EXISTS idx_batch_job_items_code
             ON batch_job_items(code);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_item_order
+            ON batch_job_item_steps(item_id, step_order);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_job_status
+            ON batch_job_item_steps(job_id, status);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_logs_job_created
+            ON batch_job_logs(job_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_artifacts_job_created
+            ON batch_job_artifacts(job_id, created_at DESC);
+        """,
+    ),
+    (
+        10,
+        "position_plans",
+        """
+        CREATE TABLE IF NOT EXISTS position_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id TEXT UNIQUE NOT NULL,
+            title TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            adoption_status TEXT NOT NULL DEFAULT 'draft',
+            stage TEXT NOT NULL DEFAULT 'final',
+            parent_plan_id TEXT,
+            context_strategy TEXT NOT NULL DEFAULT 'auto',
+            source_report_ids TEXT DEFAULT '[]',
+            candidate_count INTEGER DEFAULT 0,
+            selected_count INTEGER DEFAULT 0,
+            model_strategy TEXT DEFAULT 'single',
+            model_config_json TEXT DEFAULT '{}',
+            role_models_json TEXT DEFAULT '{}',
+            cash_snapshot_json TEXT DEFAULT '{}',
+            portfolio_snapshot_json TEXT DEFAULT '{}',
+            summary TEXT,
+            risk_controls_json TEXT DEFAULT '[]',
+            role_discussion_json TEXT DEFAULT '[]',
+            recommendations_json TEXT DEFAULT '[]',
+            review_result_json TEXT DEFAULT '{}',
+            output_markdown TEXT,
+            output_json TEXT DEFAULT '{}',
+            batch_job_id TEXT,
+            confirmed_at TEXT,
+            confirmed_by TEXT,
+            confirmed_snapshot_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS position_plan_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            action TEXT NOT NULL DEFAULT 'watch',
+            suggested_amount REAL DEFAULT 0,
+            position_pct REAL DEFAULT 0,
+            suggested_shares REAL DEFAULT 0,
+            confidence REAL,
+            risk_score REAL,
+            reason TEXT,
+            entry_plan TEXT,
+            stop_loss TEXT,
+            risk_note TEXT,
+            source_report_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_position_plans_status_created
+            ON position_plans(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_position_plans_adoption_created
+            ON position_plans(adoption_status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_position_plans_stage_created
+            ON position_plans(stage, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_position_plan_items_plan
+            ON position_plan_items(plan_id);
+        CREATE INDEX IF NOT EXISTS idx_position_plan_items_code
+            ON position_plan_items(code);
+        """,
+    ),
+    (
+        11,
+        "batch_research_runtime_ops",
+        """
+        CREATE TABLE IF NOT EXISTS batch_job_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            item_id INTEGER,
+            step_id INTEGER,
+            level TEXT NOT NULL DEFAULT 'info',
+            event TEXT NOT NULL,
+            message TEXT,
+            data_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS batch_job_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            artifact_type TEXT NOT NULL,
+            title TEXT,
+            path TEXT,
+            data_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_job_logs_job_created
+            ON batch_job_logs(job_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_artifacts_job_created
+            ON batch_job_artifacts(job_id, created_at DESC);
         """,
     ),
 ]
@@ -797,12 +1086,145 @@ async def run_migrations(db):
         )
 
 
+async def ensure_position_plan_adoption_columns(db):
+    """Backfill position plan adoption columns for databases that already ran v10."""
+    rows = await db.execute_fetchall("PRAGMA table_info(position_plans)")
+    columns = {row[1] for row in rows}
+    additions = {
+        "adoption_status": "ALTER TABLE position_plans ADD COLUMN adoption_status TEXT NOT NULL DEFAULT 'draft'",
+        "confirmed_at": "ALTER TABLE position_plans ADD COLUMN confirmed_at TEXT",
+        "confirmed_by": "ALTER TABLE position_plans ADD COLUMN confirmed_by TEXT",
+        "confirmed_snapshot_json": "ALTER TABLE position_plans ADD COLUMN confirmed_snapshot_json TEXT DEFAULT '{}'",
+    }
+    for column, sql in additions.items():
+        if column not in columns:
+            await db.execute(sql)
+    await db.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_position_plans_adoption_created
+            ON position_plans(adoption_status, created_at DESC)
+        """
+    )
+
+
+async def ensure_batch_job_item_steps_table(db):
+    """Backfill role-level batch item checkpoints for databases that already ran v9."""
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS batch_job_item_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            job_id TEXT NOT NULL,
+            role_key TEXT NOT NULL,
+            role_name TEXT,
+            step_order INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            content TEXT DEFAULT '',
+            error TEXT,
+            retry_count INTEGER DEFAULT 0,
+            heartbeat_at TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(item_id, role_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_item_order
+            ON batch_job_item_steps(item_id, step_order);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_job_status
+            ON batch_job_item_steps(job_id, status);
+        """
+    )
+
+
+async def ensure_batch_runtime_ops(db):
+    """Backfill long-running batch job runtime columns and operational tables."""
+    async def add_missing_columns(table: str, additions: dict[str, str]) -> None:
+        rows = await db.execute_fetchall(f"PRAGMA table_info({table})")
+        columns = {row[1] for row in rows}
+        for column, sql in additions.items():
+            if column not in columns:
+                await db.execute(sql)
+
+    await add_missing_columns(
+        "batch_jobs",
+        {
+            "worker_id": "ALTER TABLE batch_jobs ADD COLUMN worker_id TEXT",
+            "heartbeat_at": "ALTER TABLE batch_jobs ADD COLUMN heartbeat_at TEXT",
+            "lease_owner": "ALTER TABLE batch_jobs ADD COLUMN lease_owner TEXT",
+            "lease_token": "ALTER TABLE batch_jobs ADD COLUMN lease_token TEXT",
+            "lease_until": "ALTER TABLE batch_jobs ADD COLUMN lease_until TEXT",
+            "pause_requested": "ALTER TABLE batch_jobs ADD COLUMN pause_requested INTEGER DEFAULT 0",
+            "paused_at": "ALTER TABLE batch_jobs ADD COLUMN paused_at TEXT",
+            "input_snapshot_json": "ALTER TABLE batch_jobs ADD COLUMN input_snapshot_json TEXT DEFAULT '{}'",
+            "quality_json": "ALTER TABLE batch_jobs ADD COLUMN quality_json TEXT DEFAULT '{}'",
+            "post_actions_json": "ALTER TABLE batch_jobs ADD COLUMN post_actions_json TEXT DEFAULT '{}'",
+            "runtime_json": "ALTER TABLE batch_jobs ADD COLUMN runtime_json TEXT DEFAULT '{}'",
+        },
+    )
+    await add_missing_columns(
+        "batch_job_items",
+        {
+            "locked_snapshot_id": "ALTER TABLE batch_job_items ADD COLUMN locked_snapshot_id INTEGER",
+            "error_type": "ALTER TABLE batch_job_items ADD COLUMN error_type TEXT",
+            "next_retry_at": "ALTER TABLE batch_job_items ADD COLUMN next_retry_at TEXT",
+            "lease_owner": "ALTER TABLE batch_job_items ADD COLUMN lease_owner TEXT",
+            "lease_token": "ALTER TABLE batch_job_items ADD COLUMN lease_token TEXT",
+            "lease_until": "ALTER TABLE batch_job_items ADD COLUMN lease_until TEXT",
+            "quality_json": "ALTER TABLE batch_job_items ADD COLUMN quality_json TEXT DEFAULT '{}'",
+        },
+    )
+    await add_missing_columns(
+        "batch_job_item_steps",
+        {
+            "heartbeat_at": "ALTER TABLE batch_job_item_steps ADD COLUMN heartbeat_at TEXT",
+            "error_type": "ALTER TABLE batch_job_item_steps ADD COLUMN error_type TEXT",
+            "next_retry_at": "ALTER TABLE batch_job_item_steps ADD COLUMN next_retry_at TEXT",
+            "input_hash": "ALTER TABLE batch_job_item_steps ADD COLUMN input_hash TEXT",
+            "model_config_json": "ALTER TABLE batch_job_item_steps ADD COLUMN model_config_json TEXT DEFAULT '{}'",
+            "duration_ms": "ALTER TABLE batch_job_item_steps ADD COLUMN duration_ms INTEGER",
+            "token_usage_json": "ALTER TABLE batch_job_item_steps ADD COLUMN token_usage_json TEXT DEFAULT '{}'",
+        },
+    )
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS batch_job_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            item_id INTEGER,
+            step_id INTEGER,
+            level TEXT NOT NULL DEFAULT 'info',
+            event TEXT NOT NULL,
+            message TEXT,
+            data_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS batch_job_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            artifact_type TEXT NOT NULL,
+            title TEXT,
+            path TEXT,
+            data_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_job_logs_job_created
+            ON batch_job_logs(job_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_artifacts_job_created
+            ON batch_job_artifacts(job_id, created_at DESC);
+        """
+    )
+
+
 async def init_db():
     """初始化数据库，创建所有表"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(str(DB_PATH)) as db:
         await db.executescript(SCHEMA)
         await run_migrations(db)
+        await ensure_batch_job_item_steps_table(db)
+        await ensure_batch_runtime_ops(db)
+        await ensure_position_plan_adoption_columns(db)
         await db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
         await db.commit()
     return True

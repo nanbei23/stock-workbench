@@ -63,6 +63,49 @@ function actionText(action) {
   return action === 'sell' ? '卖出' : '买入';
 }
 
+function planStageText(stage) {
+  const map = {
+    screening: '初筛',
+    shortlist: '精选',
+    final: '最终建仓',
+  };
+  return map[String(stage || '').toLowerCase()] || stage || '--';
+}
+
+function planStrategyText(strategy) {
+  const map = {
+    auto: '自动',
+    full_text: '完整原文',
+    summary_plus_evidence: '摘要+证据',
+    candidate_screening: '候选筛选',
+    single: '单模型',
+    dual: '双模型',
+    per_role: '按角色',
+  };
+  return map[String(strategy || '').toLowerCase()] || strategy || '--';
+}
+
+function nullablePct(value) {
+  return value == null || Number.isNaN(Number(value))
+    ? '<span class="muted">--</span>'
+    : shadowPct(Number(value));
+}
+
+function planFollowText(deviation = {}) {
+  if (!deviation || !deviation.evaluated) return '--';
+  const rate = deviation.follow_rate == null ? '--' : shadowPct(deviation.follow_rate);
+  return `${rate}<br><span class="muted">缺口 ${shadowMoney(deviation.amount_gap || 0)}</span>`;
+}
+
+function allocationWarningText(allocation = {}) {
+  const warnings = allocation.warnings || [];
+  if (warnings.length) return warnings.map(escapeHtml).join('<br>');
+  const amount = Number(allocation.suggested_amount || 0);
+  const cash = Number(allocation.cash_total || 0);
+  if (amount || cash) return `建议 ${shadowMoney(amount)}<br><span class="muted">现金 ${shadowMoney(cash)}</span>`;
+  return '<span class="muted">--</span>';
+}
+
 async function shadowFetch(path, options = {}) {
   const resp = await fetch(`${SHADOW_API}${path}`, options);
   const data = await resp.json().catch(() => ({}));
@@ -326,6 +369,86 @@ function renderDeviation(data = {}) {
   `).join('');
 }
 
+function renderPositionPlanPerformance(data = {}) {
+  const plans = data.plans || [];
+  const trackedPlans = plans.filter(plan => Number(plan.tracked || 0) > 0);
+  const trackedItems = trackedPlans.reduce((sum, plan) => sum + Number(plan.tracked || 0), 0);
+  const avgPnlValues = trackedPlans
+    .map(plan => Number(plan.avg_pnl_pct))
+    .filter(Number.isFinite);
+  const winRateValues = trackedPlans
+    .map(plan => Number(plan.win_rate))
+    .filter(Number.isFinite);
+  const avgPnl = avgPnlValues.length
+    ? avgPnlValues.reduce((sum, value) => sum + value, 0) / avgPnlValues.length
+    : null;
+  const portfolioReturnValues = trackedPlans
+    .map(plan => Number(plan.portfolio_return_pct))
+    .filter(Number.isFinite);
+  const avgPortfolioReturn = portfolioReturnValues.length
+    ? portfolioReturnValues.reduce((sum, value) => sum + value, 0) / portfolioReturnValues.length
+    : null;
+  const avgWinRate = winRateValues.length
+    ? winRateValues.reduce((sum, value) => sum + value, 0) / winRateValues.length
+    : null;
+  const summaryEl = document.getElementById('positionPlanSummary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div><span>计划数</span><strong>${Number(data.count || plans.length || 0).toLocaleString()}</strong></div>
+      <div><span>已跟踪标的</span><strong>${trackedItems.toLocaleString()}</strong></div>
+      <div><span>组合收益</span><strong class="${shadowClass(avgPortfolioReturn)}">${avgPortfolioReturn == null ? '--' : shadowPct(avgPortfolioReturn)}</strong></div>
+      <div><span>计划胜率</span><strong class="${shadowClass((avgWinRate || 0) - 50)}">${avgWinRate == null ? '--' : shadowPct(avgWinRate)}</strong></div>
+    `;
+  }
+  const stageEl = document.getElementById('positionPlanStageRows');
+  if (stageEl) {
+    const rows = [
+      ...(data.by_stage || []).map(stage => ({
+      label: planStageText(stage.stage),
+      count: stage.plans,
+      wins: stage.tracked,
+      hit_rate: stage.tracked ? 100 : 0,
+      avg_return_pct: stage.avg_portfolio_return_pct ?? stage.avg_plan_pnl_pct,
+      calibration_gap: null,
+      })),
+      ...(data.by_model_strategy || []).map(model => ({
+        label: `模型：${planStrategyText(model.model_strategy)}`,
+        count: model.plans,
+        wins: model.tracked,
+        hit_rate: model.tracked ? 100 : 0,
+        avg_return_pct: model.avg_portfolio_return_pct ?? model.avg_plan_pnl_pct,
+        calibration_gap: null,
+      })),
+    ];
+    stageEl.innerHTML = renderStatRows(rows, '暂无建仓计划阶段样本');
+  }
+  const body = document.getElementById('positionPlanPerformanceBody');
+  if (!body) return;
+  if (!plans.length) {
+    body.innerHTML = '<tr><td colspan="15"><div class="shadow-empty">暂无已采纳的最终建仓计划。先在 AI报告库生成计划，并采纳为 AI 绩效基准。</div></td></tr>';
+    return;
+  }
+  body.innerHTML = plans.map(plan => `
+    <tr>
+      <td><b>${escapeHtml(plan.title || plan.plan_id)}</b><br><span class="muted">${escapeHtml(plan.plan_id || '')}</span></td>
+      <td>${escapeHtml(planStageText(plan.stage))}</td>
+      <td>${escapeHtml(planStrategyText(plan.context_strategy))}</td>
+      <td>${escapeHtml(planStrategyText(plan.model_strategy))}</td>
+      <td>${Number(plan.items || 0).toLocaleString()}</td>
+      <td>${Number(plan.tracked || 0).toLocaleString()}</td>
+      <td class="${shadowClass((Number(plan.win_rate || 0)) - 50)}">${plan.win_rate == null ? '<span class="muted">--</span>' : shadowPct(plan.win_rate)}</td>
+      <td class="${shadowClass(plan.portfolio_return_pct)}">${nullablePct(plan.portfolio_return_pct)}</td>
+      <td class="${shadowClass(plan.portfolio_excess_return)}">${nullablePct(plan.portfolio_excess_return)}</td>
+      <td class="${shadowClass(plan.horizon_returns && plan.horizon_returns['1'])}">${nullablePct(plan.horizon_returns && plan.horizon_returns['1'])}</td>
+      <td class="${shadowClass(plan.horizon_returns && plan.horizon_returns['3'])}">${nullablePct(plan.horizon_returns && plan.horizon_returns['3'])}</td>
+      <td class="${shadowClass(plan.horizon_returns && plan.horizon_returns['20'])}">${nullablePct(plan.horizon_returns && plan.horizon_returns['20'])}</td>
+      <td class="${shadowClass(plan.max_drawdown_pct)}">${nullablePct(plan.max_drawdown_pct)}</td>
+      <td>${planFollowText(plan.deviation)}</td>
+      <td>${allocationWarningText(plan.allocation)}</td>
+    </tr>
+  `).join('');
+}
+
 function setSignalTrackingFilter(filter) {
   signalTrackingState.filter = filter;
   renderSignalTrackingRows();
@@ -430,6 +553,7 @@ async function loadShadowPage() {
     renderShadowCalibration(calibration);
     renderSignalPerformance(signalStats, signalTracking);
     renderModelCalibration(signalStats, calibration);
+    renderPositionPlanPerformance(overview.position_plans || {});
     renderDeviation(shadow.deviation || {});
     renderShadowPositions(positions);
     renderShadowComparison(comparison);

@@ -16,19 +16,19 @@
                 <span>搜索</span>
                 <input id="reportFilterText" class="form-input" placeholder="股票名称 / 代码" oninput="filterReportLibrary()">
             </label>
-            <label class="library-filter">
+            <div class="library-filter">
                 <span>信号</span>
-                <select id="reportFilterSignal" class="form-input" onchange="filterReportLibrary()">
-                    <option value="">全部</option>
-                    <option value="STRONG_BUY">强烈买入</option>
-                    <option value="BUY">买入</option>
-                    <option value="OVERWEIGHT">增持</option>
-                    <option value="HOLD">持有</option>
-                    <option value="UNDERWEIGHT">减持</option>
-                    <option value="SELL">卖出</option>
-                    <option value="STRONG_SELL">强烈卖出</option>
-                </select>
-            </label>
+                <div class="signal-filter-grid" id="reportSignalFilters" aria-label="信号多选筛选">
+                    <button type="button" class="signal-filter-chip active" data-signal="" onclick="toggleSignalFilter('')">全部</button>
+                    <button type="button" class="signal-filter-chip" data-signal="STRONG_BUY" onclick="toggleSignalFilter('STRONG_BUY')">强烈买入</button>
+                    <button type="button" class="signal-filter-chip" data-signal="BUY" onclick="toggleSignalFilter('BUY')">买入</button>
+                    <button type="button" class="signal-filter-chip" data-signal="OVERWEIGHT" onclick="toggleSignalFilter('OVERWEIGHT')">增持</button>
+                    <button type="button" class="signal-filter-chip" data-signal="HOLD" onclick="toggleSignalFilter('HOLD')">持有</button>
+                    <button type="button" class="signal-filter-chip" data-signal="UNDERWEIGHT" onclick="toggleSignalFilter('UNDERWEIGHT')">减持</button>
+                    <button type="button" class="signal-filter-chip" data-signal="SELL" onclick="toggleSignalFilter('SELL')">卖出</button>
+                    <button type="button" class="signal-filter-chip" data-signal="STRONG_SELL" onclick="toggleSignalFilter('STRONG_SELL')">强烈卖出</button>
+                </div>
+            </div>
             <label class="library-filter">
                 <span>排序</span>
                 <select id="reportSortBy" class="form-input" onchange="filterReportLibrary()">
@@ -64,11 +64,17 @@
     <main class="report-library-main">
         <div class="library-toolbar">
             <div>
-                <h3>报告列表</h3>
-                <p>批量报告完成后在这里筛选、比较、勾选，并生成组合级多角色建仓建议。</p>
+                <h3 id="reportTabTitle">报告列表</h3>
+                <p id="reportTabHint">批量报告完成后在这里筛选、比较、勾选，并生成组合级多角色建仓建议。</p>
+            </div>
+            <div class="library-tabs" id="reportLibraryTabs">
+                <button class="active" data-tab="reports" onclick="switchReportTab('reports')">报告</button>
+                <button data-tab="snapshots" onclick="switchReportTab('snapshots')">数据快照</button>
+                <button data-tab="plans" onclick="switchReportTab('plans')">建仓计划</button>
+                <button data-tab="jobs" onclick="switchReportTab('jobs')">批量任务</button>
             </div>
         </div>
-        <div class="report-table-wrap">
+        <div class="report-table-wrap report-tab-panel active" id="tab-reports">
             <table class="report-library-table">
                 <thead>
                     <tr>
@@ -87,6 +93,74 @@
                 </tbody>
             </table>
         </div>
+        <div class="report-table-wrap report-tab-panel" id="tab-snapshots">
+            <div class="snapshot-quality-summary" id="snapshotQualitySummary">
+                <div><span>快照数</span><strong>--</strong></div>
+                <div><span>完整率</span><strong>--</strong></div>
+                <div><span>不完整</span><strong>--</strong></div>
+                <div><span>主要缺失层</span><strong>--</strong></div>
+            </div>
+            <table class="report-library-table">
+                <thead>
+                    <tr>
+                        <th>股票</th>
+                        <th>完整性</th>
+                        <th>七层覆盖</th>
+                        <th>数据大小</th>
+                        <th>批次</th>
+                        <th>关联报告</th>
+                        <th>时间</th>
+                    </tr>
+                </thead>
+                <tbody id="snapshotRows">
+                    <tr><td colspan="7" class="empty-row">切换后加载...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="report-table-wrap report-tab-panel" id="tab-plans">
+            <table class="report-library-table">
+                <thead>
+                    <tr>
+                        <th>标题</th>
+                        <th>阶段</th>
+                        <th>采纳状态</th>
+                        <th>策略</th>
+                        <th>候选/入选</th>
+                        <th>模型</th>
+                        <th>任务</th>
+                        <th>时间</th>
+                    </tr>
+                </thead>
+                <tbody id="positionPlanRows">
+                    <tr><td colspan="8" class="empty-row">切换后加载...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="report-table-wrap report-tab-panel" id="tab-jobs">
+            <div class="snapshot-quality-summary worker-runtime-summary" id="workerRuntimeSummary">
+                <div><span>Worker 在线</span><strong>--</strong></div>
+                <div><span>陈旧 Worker</span><strong>--</strong></div>
+                <div><span>后台模式</span><strong>launchd / 手动</strong></div>
+                <div><span>最近心跳</span><strong>--</strong></div>
+            </div>
+            <table class="report-library-table">
+                <thead>
+                    <tr>
+                        <th>任务</th>
+                        <th>类型</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>当前</th>
+                        <th>错误</th>
+                        <th>时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="batchJobRows">
+                    <tr><td colspan="8" class="empty-row">切换后加载...</td></tr>
+                </tbody>
+            </table>
+        </div>
     </main>
 
     <aside class="report-library-preview">
@@ -99,9 +173,64 @@
         </div>
     </aside>
 </div>
+
+<div class="modal-overlay" id="positionPlanModal">
+    <div class="modal-box" style="max-width:560px;">
+        <div class="modal-title">生成建仓建议</div>
+        <div class="modal-body">
+            <label class="library-filter">
+                <span>标题</span>
+                <input id="planTitleInput" class="form-input" placeholder="例如 125进30 初筛计划">
+            </label>
+            <label class="library-filter">
+                <span>计划阶段</span>
+                <select id="planStageInput" class="form-input">
+                    <option value="screening">初筛</option>
+                    <option value="shortlist">精选</option>
+                    <option value="final" selected>最终建仓</option>
+                </select>
+            </label>
+            <label class="library-filter">
+                <span>上下文策略</span>
+                <select id="planContextInput" class="form-input">
+                    <option value="auto" selected>自动</option>
+                    <option value="full_text">完整原文</option>
+                    <option value="summary_plus_evidence">摘要 + 证据</option>
+                    <option value="candidate_screening">候选筛选</option>
+                </select>
+            </label>
+            <label class="library-filter">
+                <span>模型策略</span>
+                <select id="planModelStrategyInput" class="form-input" onchange="togglePlanRoleModelFields()">
+                    <option value="single" selected>单模型</option>
+                    <option value="dual">双模型</option>
+                    <option value="per_role">按角色配置</option>
+                </select>
+            </label>
+            <div class="library-filter" id="planRoleModelFields" style="display:none;">
+                <span>角色模型</span>
+                <div class="role-model-grid" id="planRoleModelGrid">
+                    <div class="library-empty-state">正在读取模型配置...</div>
+                </div>
+            </div>
+            <label class="library-filter">
+                <span>最多买入候选</span>
+                <input id="planTopNInput" class="form-input" type="number" min="1" max="50" step="1" value="10">
+            </label>
+            <label class="library-filter">
+                <span>父计划 ID（可选）</span>
+                <input id="planParentInput" class="form-input" placeholder="基于上一份计划继续筛选时填写">
+            </label>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closePositionPlanModal()">取消</button>
+            <button class="btn btn-primary" onclick="submitPositionPlanFromModal()">创建任务</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-task-client.js?v=2.8.1"></script>
-<script src="/static/js/reports.js?v=2.8.1"></script>
+<script src="/static/js/ai-task-client.js?v=2.9.0"></script>
+<script src="/static/js/reports.js?v=2.9.0"></script>
 {% endblock %}

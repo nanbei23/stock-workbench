@@ -1,6 +1,6 @@
 # 炒股小牛马 Stock Workbench
 
-本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.8.1`。
+本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.9.0`。
 
 本项目面向个人研究和交易工作流辅助，不构成投资建议。所有写库操作都应由用户确认后执行。
 
@@ -109,6 +109,55 @@ scripts/deploy_macos_x86.sh
 125 只级别的报告不要再挤在 `/ai` 右下角阅读，统一进入 `/reports` 做筛选、对比、导出。勾选完整报告后，建仓建议会把选中报告全文作为上下文，进入组合经理、风控经理、交易员、反方审查和最终裁决的多角色讨论。
 
 完整步骤见 [docs/data_initialization_and_batch_research.md](docs/data_initialization_and_batch_research.md)。
+
+### 长任务后台 worker
+
+网页负责创建任务和看进度，独立 worker 负责真正执行 5-6 小时级别的批量任务。调试时可以手动启动：
+
+```bash
+.venv312/bin/python scripts/run_batch_worker.py --sleep 5 --stale-minutes 15 --worker-id batch-worker-main
+```
+
+长期自用建议安装 macOS launchd 后台守护：
+
+```bash
+scripts/worker_install_launchd.sh
+scripts/worker_start.sh
+scripts/worker_status.sh
+scripts/worker_logs.sh
+```
+
+停止后台 worker：
+
+```bash
+scripts/worker_stop.sh
+```
+
+长任务韧性规则：
+
+- worker 通过 lease 原子领取任务，避免多个 worker 抢同一批任务。
+- 心跳超过 `--stale-minutes` 后，任务会转为 `interrupted`，可以在 `/reports` 继续。
+- 模型额度耗尽会进入 `quota_paused`，切换模型或等待额度恢复后点“继续”。
+- 连续失败或失败率超过阈值会进入 `guard_paused`，避免错误状态下继续烧时间和额度。
+- `/reports` 的“批量任务”页签会显示 worker 在线状态、最近心跳、lease、熔断原因和模型额度状态。
+
+### 从 2.8.1 升级到 2.9
+
+部署机器已经运行 2.8.1 时，拉取 2.9 代码后执行：
+
+```bash
+cd /path/to/stock-workbench-local
+.venv312/bin/python scripts/migrate_2_8_1_to_2_9.py
+scripts/deploy_macos_x86.sh --install-service
+```
+
+迁移脚本会先备份当前 SQLite 数据库，再补齐 2.9 的批量任务、建仓计划和 worker lease 字段。迁移时如果发现旧版本仍标记为 `running` 的批量任务，会转为 `interrupted`，可以在 `/reports` 继续。
+
+如果数据库路径不是默认的 `data/workbench.db`：
+
+```bash
+.venv312/bin/python scripts/migrate_2_8_1_to_2_9.py --db-path /absolute/path/workbench.db
+```
 
 ## Hermes 写库安全模型
 

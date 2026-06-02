@@ -405,6 +405,7 @@
 
   <nav class="performance-tabs" id="performanceTabs">
     <button class="active" data-tab="signal" onclick="setPerformanceTab('signal')">信号验证</button>
+    <button data-tab="plans" onclick="setPerformanceTab('plans')">建仓计划</button>
     <button data-tab="shadow" onclick="setPerformanceTab('shadow')">AI影子盘</button>
     <button data-tab="deviation" onclick="setPerformanceTab('deviation')">执行差异</button>
     <button data-tab="model" onclick="setPerformanceTab('model')">模型校准</button>
@@ -457,6 +458,56 @@
         </thead>
         <tbody id="signalTrackingBody">
           <tr><td colspan="8"><div class="shadow-empty">正在读取信号绩效...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="shadow-panel shadow-performance" data-performance-panel="plans" hidden>
+    <header>
+      <div>
+        <h2>建仓计划绩效</h2>
+        <p>只按用户已采纳的最终建仓计划统计后验表现，草稿和初筛计划不进入正式组合绩效。</p>
+      </div>
+    </header>
+    <div class="shadow-performance-grid">
+      <div class="shadow-calibration-card">
+        <h3>计划概览</h3>
+        <div class="shadow-calibration-summary" id="positionPlanSummary">
+          <div><span>计划数</span><strong>--</strong></div>
+          <div><span>已跟踪</span><strong>--</strong></div>
+          <div><span>平均收益</span><strong>--</strong></div>
+          <div><span>胜率</span><strong>--</strong></div>
+        </div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>阶段表现</h3>
+        <div id="positionPlanStageRows"><div class="shadow-empty">暂无建仓计划样本</div></div>
+      </div>
+    </div>
+    <div class="shadow-table-wrap" style="padding-top:10px;">
+      <table class="shadow-table">
+        <thead>
+          <tr>
+            <th>计划</th>
+            <th>阶段</th>
+            <th>上下文</th>
+            <th>模型</th>
+            <th>标的</th>
+            <th>已跟踪</th>
+            <th>胜率</th>
+            <th>组合收益</th>
+            <th>超额收益</th>
+            <th>1日</th>
+            <th>3日</th>
+            <th>20日</th>
+            <th>最大回撤</th>
+            <th>实盘跟随</th>
+            <th>仓位提示</th>
+          </tr>
+        </thead>
+        <tbody id="positionPlanPerformanceBody">
+          <tr><td colspan="15"><div class="shadow-empty">正在读取建仓计划绩效...</div></td></tr>
         </tbody>
       </table>
     </div>
@@ -616,5 +667,5 @@
   </section>
 </div>
 
-<script src="/static/js/shadow.js?v=2.8.1"></script>
+<script src="/static/js/shadow.js?v=2.9.0"></script>
 {% endblock %}

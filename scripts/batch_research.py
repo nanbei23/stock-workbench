@@ -67,6 +67,16 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _loads(value: Any, fallback: Any):
+    if value in ("", None):
+        return fallback
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+        return parsed if parsed is not None else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
 def ensure_schema(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(db_path) as conn:
@@ -221,6 +231,15 @@ def _snapshot_llm_config(db_path: Path, *, model_tier: str = "deep") -> dict[str
     }
 
 
+def _verification_llm_config(db_path: Path) -> dict[str, str]:
+    settings = _settings_map(db_path)
+    return {
+        "base_url": settings.get("verification_endpoint") or "",
+        "api_key": settings.get("verification_api_key") or "",
+        "model": settings.get("verification_model") or "",
+    }
+
+
 def _latest_snapshot(db_path: Path, code: str) -> dict[str, Any] | None:
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -339,6 +358,529 @@ async def _call_snapshot_llm(prompt: str, config: dict[str, str], *, timeout_sec
     return _parse_llm_json(content)
 
 
+SNAPSHOT_DEBATE_ROLES = [
+    ("market_analyst", "市场/技术分析师", "只基于 market 层和行情摘要，分析价格结构、趋势、量能和关键触发位。"),
+    ("fundamental_analyst", "基本面分析师", "只基于 fundamentals 层，分析财务质量、估值、成长性和基本面风险。"),
+    ("event_sentiment_analyst", "事件/情绪/资金分析师", "基于 social、news、policy、hot_money、lockup 层，分析催化、舆情、政策、资金和解禁减持风险。"),
+    ("bull_researcher", "多头研究员", "基于前三位分析师观点，提出支持买入或增持的最强论据和触发条件。"),
+    ("bear_researcher", "空头研究员", "基于快照和已有观点，反驳多头观点，指出弱证据、下行风险和不建仓理由。"),
+    ("risk_manager", "风控经理", "综合多空观点，给出仓位、止损、失效条件、回撤和风险评分意见。"),
+    ("final_trader", "交易员/最终裁决", "综合所有角色观点，输出最终 JSON 交易裁决。"),
+]
+
+
+def _snapshot_debate_prompt(
+    stock: RankedCandidate,
+    snapshot_row: dict[str, Any],
+    *,
+    role_name: str,
+    role_goal: str,
+    previous_discussion: list[dict[str, str]],
+) -> str:
+    previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
+    final_instruction = ""
+    if role_name == "交易员/最终裁决":
+        final_instruction = """
+
+最终裁决必须输出 JSON 对象，不要 Markdown。格式：
+{
+  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "confidence": 0.0,
+  "risk_score": 0.0,
+  "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
+  "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
+}
+"""
+    payload = {
+        "stock": {"code": stock.code, "name": stock.name, "group": stock.group_name},
+        "quote": stock.quote,
+        "snapshot_id": snapshot_row["id"],
+        "validation": snapshot_row["validation"],
+        "layers": {layer: snapshot_row["snapshot"].get(layer) for layer in SNAPSHOT_LAYERS},
+    }
+    return f"""你正在参加 A 股单票研究委员会。当前角色：{role_name}。
+角色目标：{role_goal}
+
+硬性约束：
+- 只能基于下方已入库七层数据快照和已有角色观点。
+- 禁止联网，禁止调用外部数据，禁止编造快照没有提供的数据。
+- 如果快照完整性校验不是 ok，必须降低置信度并说明缺失项。
+- 输出要具体、可审计，区分事实、推断和不确定性。
+{final_instruction}
+
+已有角色讨论：
+{previous}
+
+七层数据快照：
+{_clip_text(payload, 28000)}
+"""
+
+
+async def _call_snapshot_debate_role_llm(role: dict[str, str], prompt: str, config: dict[str, str], *, timeout_seconds: int) -> str:
+    if not config.get("base_url"):
+        raise RuntimeError("AI 引擎 Base URL 未配置，无法生成快照多角色辩论报告")
+    if not config.get("api_key"):
+        raise RuntimeError("AI 引擎 API Key 未配置，无法生成快照多角色辩论报告")
+    if not config.get("model"):
+        raise RuntimeError("AI 引擎模型未配置，无法生成快照多角色辩论报告")
+    async with httpx.AsyncClient(timeout=max(30, timeout_seconds)) as client:
+        resp = await client.post(
+            _chat_completions_url(config["base_url"]),
+            headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+            json={
+                "model": config["model"],
+                "messages": [
+                    {"role": "system", "content": f"你是{role['role_name']}，参与基于已入库七层快照的离线多角色研究辩论。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2 if role["role_key"] == "final_trader" else 0.28,
+                "max_tokens": 4000,
+            },
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"快照多角色辩论模型请求失败 HTTP {resp.status_code}: {resp.text[:240]}")
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def _snapshot_debate_result(role_discussion: list[dict[str, str]]) -> dict[str, Any]:
+    by_key = {item["role_key"]: item["content"] for item in role_discussion}
+    final_payload = _parse_llm_json(by_key.get("final_trader", ""))
+    return {
+        **final_payload,
+        "market_report": by_key.get("market_analyst", ""),
+        "fundamentals_report": by_key.get("fundamental_analyst", ""),
+        "sentiment_report": by_key.get("event_sentiment_analyst", ""),
+        "news_report": by_key.get("event_sentiment_analyst", ""),
+        "policy_report": by_key.get("event_sentiment_analyst", ""),
+        "hot_money_report": by_key.get("event_sentiment_analyst", ""),
+        "lockup_report": by_key.get("event_sentiment_analyst", ""),
+        "investment_debate": "\n\n".join(
+            part
+            for part in [
+                f"多头研究员：{by_key.get('bull_researcher', '')}",
+                f"空头研究员：{by_key.get('bear_researcher', '')}",
+            ]
+            if part.strip()
+        ),
+        "risk_debate": by_key.get("risk_manager", ""),
+        "role_discussion": role_discussion,
+    }
+
+
+SNAPSHOT_TRADINGAGENTS_ROLES = [
+    ("market_analyst", "市场/技术分析师", "market_report", "只读取 market 层，输出技术、趋势、量能、关键价位和交易触发位。"),
+    ("social_analyst", "情绪分析师", "sentiment_report", "只读取 social 层，输出情绪、社交讨论和市场关注度判断。"),
+    ("news_analyst", "新闻分析师", "news_report", "只读取 news 层，输出新闻催化、负面事件和信息时效判断。"),
+    ("fundamentals_analyst", "基本面分析师", "fundamentals_report", "只读取 fundamentals 层，输出财务质量、估值、成长性和基本面风险。"),
+    ("policy_analyst", "政策分析师", "policy_report", "只读取 policy 层，输出政策、监管、宏观和行业方向影响。"),
+    ("hot_money_analyst", "游资/资金分析师", "hot_money_report", "只读取 hot_money 层，输出资金流、游资、题材热度和拥挤风险。"),
+    ("lockup_analyst", "解禁/减持分析师", "lockup_report", "只读取 lockup 层，输出解禁、减持、股东变化和供给压力。"),
+    ("quality_gate", "质量门控", "data_quality_summary", "审核七份分析师报告的数据完整性、时效、互相矛盾和可信度。"),
+    ("bull_researcher", "多头研究员", "bull_history", "基于七份报告和质量门控，提出最强多头论证和买入触发条件。"),
+    ("bear_researcher", "空头研究员", "bear_history", "基于七份报告、多头观点和质量门控，提出最强反方论证和不建仓理由。"),
+    ("research_manager", "Research Manager", "investment_plan", "综合多空辩论，形成明确的投资计划和评级。"),
+    ("trader", "Trader", "trader_plan", "把投资计划转成 A 股可执行交易计划，包括分批、触发、止损和失效条件。"),
+    ("aggressive_risk", "激进风控", "aggressive_history", "从机会成本和进攻性仓位角度审查交易计划。"),
+    ("conservative_risk", "保守风控", "conservative_history", "从回撤、流动性、T+1、价格限制和资金保护角度审查交易计划。"),
+    ("neutral_risk", "中性风控", "neutral_history", "平衡进攻和防守，给出中性风险判断与仓位约束。"),
+    ("portfolio_manager", "Portfolio Manager", "final_trade_decision", "综合所有报告、辩论和风控观点，输出最终 JSON 交易裁决。"),
+]
+
+
+def _snapshot_tradingagents_prompt(
+    stock: RankedCandidate,
+    snapshot_row: dict[str, Any],
+    *,
+    role_key: str,
+    role_name: str,
+    role_goal: str,
+    output_key: str,
+    previous_discussion: list[dict[str, str]],
+) -> str:
+    snapshot = snapshot_row["snapshot"]
+    validation = snapshot_row["validation"]
+    previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
+    layer_instruction = ""
+    if role_key.endswith("_analyst") and role_key != "hot_money_analyst":
+        layer = role_key.replace("_analyst", "")
+        if layer == "fundamentals":
+            layer = "fundamentals"
+        layer_instruction = f"\n本角色主要输入层：{layer}。\n本层数据：{_clip_text(snapshot.get(layer, {}), 16000)}"
+    elif role_key == "hot_money_analyst":
+        layer_instruction = f"\n本角色主要输入层：hot_money。\n本层数据：{_clip_text(snapshot.get('hot_money', {}), 16000)}"
+    elif role_key == "lockup_analyst":
+        layer_instruction = f"\n本角色主要输入层：lockup。\n本层数据：{_clip_text(snapshot.get('lockup', {}), 16000)}"
+
+    final_instruction = ""
+    if role_key == "portfolio_manager":
+        final_instruction = """
+
+最终裁决必须输出 JSON 对象，不要 Markdown。格式：
+{
+  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "confidence": 0.0,
+  "risk_score": 0.0,
+  "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
+  "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
+}
+"""
+    return f"""你正在执行快照版 TradingAgentsGraph。当前节点：{role_name}。
+节点输出字段：{output_key}
+节点目标：{role_goal}
+
+硬性约束：
+- 只能基于已入库七层快照和本轮前序节点输出。
+- 禁止联网，禁止调用外部数据，禁止编造快照没有提供的数据。
+- 快照完整性校验：{json.dumps(validation, ensure_ascii=False)}
+- 如果快照不完整或数据不足，必须降低置信度并明确说明。
+- 报告需可审计，区分事实、推断和不确定性。
+{final_instruction}
+
+标的：{stock.name} {stock.code}
+快照ID：{snapshot_row["id"]}
+行情摘要：{_clip_text(stock.quote, 2000)}
+{layer_instruction}
+
+前序节点输出：
+{previous}
+"""
+
+
+async def _call_snapshot_tradingagents_role_llm(role: dict[str, str], prompt: str, config: dict[str, str], *, timeout_seconds: int) -> str:
+    return await _call_snapshot_debate_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
+
+
+def _initial_snapshot_agent_state(stock: RankedCandidate, snapshot_row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "messages": [{"role": "human", "content": f"{stock.name} {stock.code}"}],
+        "company_of_interest": f"{stock.name} {stock.code}",
+        "trade_date": str(datetime.now().date()),
+        "past_context": "",
+        "snapshot_id": snapshot_row["id"],
+        "snapshot_validation": snapshot_row.get("validation") or {},
+        "market_report": "",
+        "sentiment_report": "",
+        "news_report": "",
+        "fundamentals_report": "",
+        "policy_report": "",
+        "hot_money_report": "",
+        "lockup_report": "",
+        "data_quality_summary": "",
+        "investment_plan": "",
+        "trader_investment_plan": "",
+        "final_trade_decision": "",
+        "investment_debate_state": {
+            "bull_history": "",
+            "bear_history": "",
+            "history": "",
+            "current_response": "",
+            "judge_decision": "",
+            "count": 0,
+        },
+        "risk_debate_state": {
+            "aggressive_history": "",
+            "conservative_history": "",
+            "neutral_history": "",
+            "history": "",
+            "latest_speaker": "",
+            "current_aggressive_response": "",
+            "current_conservative_response": "",
+            "current_neutral_response": "",
+            "judge_decision": "",
+            "count": 0,
+        },
+    }
+
+
+def _snapshot_report_context(state: dict[str, Any]) -> str:
+    labels = [
+        ("market_report", "Market research report"),
+        ("sentiment_report", "Social media sentiment report"),
+        ("news_report", "Latest news report"),
+        ("fundamentals_report", "Company fundamentals report"),
+        ("policy_report", "Policy analysis report"),
+        ("hot_money_report", "Hot money / capital flow report"),
+        ("lockup_report", "Lockup expiry / insider reduction report"),
+    ]
+    return "\n\n".join(f"{label}:\n{state.get(key) or '[尚未生成]'}" for key, label in labels)
+
+
+def _snapshot_tradingagents_state_prompt(
+    stock: RankedCandidate,
+    snapshot_row: dict[str, Any],
+    *,
+    role_key: str,
+    role_name: str,
+    role_goal: str,
+    output_key: str,
+    state: dict[str, Any],
+) -> str:
+    snapshot = snapshot_row["snapshot"]
+    validation = snapshot_row["validation"]
+    base = f"""你正在执行快照版 TradingAgentsGraph。当前节点：{role_name}。
+节点输出字段：{output_key}
+节点目标：{role_goal}
+
+硬性约束：
+- 只能基于已入库七层快照和当前 AgentState 字段。
+- 禁止联网，禁止调用外部数据，禁止编造快照没有提供的数据。
+- 快照完整性校验：{json.dumps(validation, ensure_ascii=False)}
+- 如果快照不完整或数据不足，必须降低置信度并明确说明。
+- 报告需可审计，区分事实、推断和不确定性。
+
+标的：{stock.name} {stock.code}
+快照ID：{snapshot_row["id"]}
+行情摘要：{_clip_text(stock.quote, 2000)}
+"""
+    layer_by_role = {
+        "market_analyst": "market",
+        "social_analyst": "social",
+        "news_analyst": "news",
+        "fundamentals_analyst": "fundamentals",
+        "policy_analyst": "policy",
+        "hot_money_analyst": "hot_money",
+        "lockup_analyst": "lockup",
+    }
+    if role_key in layer_by_role:
+        layer = layer_by_role[role_key]
+        return f"""{base}
+本节点等价于 TradingAgents 的分析师工具循环结果：工具调用已由七层快照预取替代。
+本角色主要输入层：{layer}
+本层数据：
+{_clip_text(snapshot.get(layer, {}), 16000)}
+
+请输出该节点的完整分析报告。"""
+    if role_key == "quality_gate":
+        return f"""{base}
+七份分析师报告：
+{_snapshot_report_context(state)}
+
+请按 TradingAgents Quality Gate 语义审核：数据完整性、时效性、矛盾项、可信度等级、低质量字段，并输出 data_quality_summary。"""
+    if role_key == "bull_researcher":
+        debate = state["investment_debate_state"]
+        return f"""{base}
+{_snapshot_report_context(state)}
+Data quality assessment:
+{state.get("data_quality_summary") or "[无]"}
+Conversation history of the debate:
+{debate.get("history") or "[无]"}
+Last bear argument:
+{debate.get("current_response") or "[无]"}
+
+请作为 Bull Analyst 输出强多头论证，并直接回应空头担忧。"""
+    if role_key == "bear_researcher":
+        debate = state["investment_debate_state"]
+        return f"""{base}
+{_snapshot_report_context(state)}
+Data quality assessment:
+{state.get("data_quality_summary") or "[无]"}
+Conversation history of the debate:
+{debate.get("history") or "[无]"}
+Last bull argument:
+{debate.get("current_response") or "[无]"}
+
+请作为 Bear Analyst 输出强反方论证，并直接反驳多头观点。"""
+    if role_key == "research_manager":
+        return f"""{base}
+七份分析师报告：
+{_snapshot_report_context(state)}
+Investment debate history:
+{state["investment_debate_state"].get("history") or "[无]"}
+
+请作为 Research Manager 综合多空辩论，输出明确 investment_plan。"""
+    if role_key == "trader":
+        return f"""{base}
+Research Manager's investment plan:
+{state.get("investment_plan") or "[无]"}
+
+政策、游资、解禁补充上下文：
+Policy: {state.get("policy_report") or "[无]"}
+Hot money: {state.get("hot_money_report") or "[无]"}
+Lockup: {state.get("lockup_report") or "[无]"}
+
+请作为 Trader 输出可执行交易计划。"""
+    if role_key in {"aggressive_risk", "conservative_risk", "neutral_risk"}:
+        risk = state["risk_debate_state"]
+        return f"""{base}
+Trader's decision:
+{state.get("trader_investment_plan") or "[无]"}
+
+七份分析师报告：
+{_snapshot_report_context(state)}
+
+Risk debate history:
+{risk.get("history") or "[无]"}
+Current aggressive response: {risk.get("current_aggressive_response") or "[无]"}
+Current conservative response: {risk.get("current_conservative_response") or "[无]"}
+Current neutral response: {risk.get("current_neutral_response") or "[无]"}
+
+请以 {role_name} 身份参与风险辩论。"""
+    if role_key == "portfolio_manager":
+        return f"""{base}
+Research Manager's investment plan:
+{state.get("investment_plan") or "[无]"}
+Trader's transaction proposal:
+{state.get("trader_investment_plan") or "[无]"}
+Risk Analysts Debate History:
+{state["risk_debate_state"].get("history") or "[无]"}
+Lessons from prior decisions:
+{state.get("past_context") or "[无]"}
+
+最终裁决必须输出 JSON 对象，不要 Markdown。格式：
+{{
+  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "confidence": 0.0,
+  "risk_score": 0.0,
+  "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
+  "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
+}}"""
+    return base
+
+
+def _append_investment_debate(state: dict[str, Any], *, speaker: str, content: str) -> None:
+    debate = state["investment_debate_state"]
+    argument = f"{speaker}: {content}"
+    key = "bull_history" if speaker.startswith("Bull") else "bear_history"
+    debate["history"] = (debate.get("history", "") + "\n" + argument).strip()
+    debate[key] = (debate.get(key, "") + "\n" + argument).strip()
+    debate["current_response"] = argument
+    debate["count"] = int(debate.get("count") or 0) + 1
+
+
+def _append_risk_debate(state: dict[str, Any], *, speaker: str, content: str) -> None:
+    risk = state["risk_debate_state"]
+    argument = f"{speaker} Analyst: {content}"
+    speaker_key = speaker.lower()
+    history_key = f"{speaker_key}_history"
+    current_key = f"current_{speaker_key}_response"
+    risk["history"] = (risk.get("history", "") + "\n" + argument).strip()
+    risk[history_key] = (risk.get(history_key, "") + "\n" + argument).strip()
+    risk[current_key] = argument
+    risk["latest_speaker"] = speaker
+    risk["count"] = int(risk.get("count") or 0) + 1
+
+
+async def _run_snapshot_tradingagents_graph(
+    stock: RankedCandidate,
+    snapshot_row: dict[str, Any],
+    config: dict[str, str],
+    *,
+    timeout_seconds: int,
+    debate_rounds: int = 1,
+    risk_rounds: int = 1,
+) -> dict[str, Any]:
+    state = _initial_snapshot_agent_state(stock, snapshot_row)
+    role_discussion: list[dict[str, str]] = []
+
+    async def call_role(role_key: str, role_name: str, output_key: str, role_goal: str) -> str:
+        role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal, "output_key": output_key}
+        prompt = _snapshot_tradingagents_state_prompt(
+            stock,
+            snapshot_row,
+            role_key=role_key,
+            role_name=role_name,
+            role_goal=role_goal,
+            output_key=output_key,
+            state=state,
+        )
+        content = await _call_snapshot_tradingagents_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
+        role_discussion.append({"role_key": role_key, "role_name": role_name, "output_key": output_key, "content": content})
+        return content
+
+    for role_key, role_name, output_key, role_goal in SNAPSHOT_TRADINGAGENTS_ROLES[:7]:
+        state[output_key] = await call_role(role_key, role_name, output_key, role_goal)
+
+    quality = SNAPSHOT_TRADINGAGENTS_ROLES[7]
+    state["data_quality_summary"] = await call_role(*quality)
+
+    bull = SNAPSHOT_TRADINGAGENTS_ROLES[8]
+    bear = SNAPSHOT_TRADINGAGENTS_ROLES[9]
+    for _round in range(max(1, debate_rounds)):
+        bull_content = await call_role(*bull)
+        _append_investment_debate(state, speaker="Bull Analyst", content=bull_content)
+        bear_content = await call_role(*bear)
+        _append_investment_debate(state, speaker="Bear Analyst", content=bear_content)
+
+    research_manager = SNAPSHOT_TRADINGAGENTS_ROLES[10]
+    state["investment_plan"] = await call_role(*research_manager)
+    state["investment_debate_state"]["judge_decision"] = state["investment_plan"]
+    state["investment_debate_state"]["current_response"] = state["investment_plan"]
+
+    trader = SNAPSHOT_TRADINGAGENTS_ROLES[11]
+    state["trader_investment_plan"] = await call_role(*trader)
+
+    risk_roles = SNAPSHOT_TRADINGAGENTS_ROLES[12:15]
+    risk_speakers = {
+        "aggressive_risk": "Aggressive",
+        "conservative_risk": "Conservative",
+        "neutral_risk": "Neutral",
+    }
+    for _round in range(max(1, risk_rounds)):
+        for role_key, role_name, output_key, role_goal in risk_roles:
+            content = await call_role(role_key, role_name, output_key, role_goal)
+            _append_risk_debate(state, speaker=risk_speakers[role_key], content=content)
+
+    portfolio_manager = SNAPSHOT_TRADINGAGENTS_ROLES[15]
+    state["final_trade_decision"] = await call_role(*portfolio_manager)
+    state["risk_debate_state"]["judge_decision"] = state["final_trade_decision"]
+    state["risk_debate_state"]["latest_speaker"] = "Judge"
+    return _snapshot_tradingagents_result(role_discussion, state=state)
+
+
+def _snapshot_tradingagents_result(role_discussion: list[dict[str, str]], state: dict[str, Any] | None = None) -> dict[str, Any]:
+    by_key = {item["role_key"]: item["content"] for item in role_discussion}
+    final_payload = _parse_llm_json(by_key.get("portfolio_manager", ""))
+    state = state or {}
+    investment_debate_state = state.get("investment_debate_state") or {
+        "bull_history": by_key.get("bull_researcher", ""),
+        "bear_history": by_key.get("bear_researcher", ""),
+        "history": "\n\n".join([by_key.get("bull_researcher", ""), by_key.get("bear_researcher", "")]).strip(),
+        "current_response": by_key.get("bear_researcher", ""),
+        "judge_decision": by_key.get("research_manager", ""),
+        "count": 2 if by_key.get("bull_researcher") or by_key.get("bear_researcher") else 0,
+    }
+    risk_debate_state = state.get("risk_debate_state") or {
+        "aggressive_history": by_key.get("aggressive_risk", ""),
+        "conservative_history": by_key.get("conservative_risk", ""),
+        "neutral_history": by_key.get("neutral_risk", ""),
+        "history": "\n\n".join(
+            [by_key.get("aggressive_risk", ""), by_key.get("conservative_risk", ""), by_key.get("neutral_risk", "")]
+        ).strip(),
+        "latest_speaker": "Judge",
+        "current_aggressive_response": by_key.get("aggressive_risk", ""),
+        "current_conservative_response": by_key.get("conservative_risk", ""),
+        "current_neutral_response": by_key.get("neutral_risk", ""),
+        "judge_decision": by_key.get("portfolio_manager", ""),
+        "count": sum(1 for key in ("aggressive_risk", "conservative_risk", "neutral_risk") if by_key.get(key)),
+    }
+    return {
+        **final_payload,
+        "market_report": state.get("market_report") or by_key.get("market_analyst", ""),
+        "sentiment_report": state.get("sentiment_report") or by_key.get("social_analyst", ""),
+        "news_report": state.get("news_report") or by_key.get("news_analyst", ""),
+        "fundamentals_report": state.get("fundamentals_report") or by_key.get("fundamentals_analyst", ""),
+        "policy_report": state.get("policy_report") or by_key.get("policy_analyst", ""),
+        "hot_money_report": state.get("hot_money_report") or by_key.get("hot_money_analyst", ""),
+        "lockup_report": state.get("lockup_report") or by_key.get("lockup_analyst", ""),
+        "data_quality_summary": state.get("data_quality_summary") or by_key.get("quality_gate", ""),
+        "investment_debate": json.dumps(investment_debate_state, ensure_ascii=False),
+        "risk_debate": json.dumps(risk_debate_state, ensure_ascii=False),
+        "trader_plan": state.get("trader_investment_plan") or final_payload.get("trader_plan") or by_key.get("trader", ""),
+        "final_decision": final_payload.get("final_decision") or state.get("final_trade_decision") or by_key.get("portfolio_manager", ""),
+        "role_discussion": role_discussion,
+        "snapshot_tradingagents_state": {
+            "investment_debate_state": investment_debate_state,
+            "risk_debate_state": risk_debate_state,
+            "investment_plan": state.get("investment_plan") or by_key.get("research_manager", ""),
+            "trader_investment_plan": state.get("trader_investment_plan") or by_key.get("trader", ""),
+            "final_trade_decision": state.get("final_trade_decision") or by_key.get("portfolio_manager", ""),
+            "snapshot_id": state.get("snapshot_id"),
+            "snapshot_validation": state.get("snapshot_validation"),
+        },
+    }
+
+
 def _text_value(result: dict[str, Any], key: str) -> str:
     value = result.get(key)
     if isinstance(value, (dict, list)):
@@ -382,10 +924,13 @@ def _save_snapshot_report(
     run_id: str,
     duration_seconds: float,
     model: str,
+    report_source: str = "snapshot_report",
+    depth: str = "snapshot",
+    model_mode: str = "snapshot_report",
 ) -> int:
     normalized = _normalise_snapshot_result(result)
     raw_state = {
-        "source": "snapshot_report",
+        "source": report_source,
         "run_id": run_id,
         "code": item.code,
         "name": item.name,
@@ -397,6 +942,12 @@ def _save_snapshot_report(
         "snapshot_created_at": snapshot_row["created_at"],
         "model": model,
     }
+    if result.get("role_discussion"):
+        raw_state["role_discussion"] = result["role_discussion"]
+    if result.get("snapshot_tradingagents_state"):
+        raw_state["snapshot_tradingagents_state"] = result["snapshot_tradingagents_state"]
+    if result.get("data_quality_summary"):
+        raw_state["data_quality_summary"] = result["data_quality_summary"]
     market_snapshot = {
         "snapshot_id": snapshot_row["id"],
         "validation": snapshot_row["validation"],
@@ -444,8 +995,8 @@ def _save_snapshot_report(
                     },
                     ensure_ascii=False,
                 ),
-                "snapshot",
-                "snapshot_report",
+                depth,
+                model_mode,
             ),
         )
         conn.commit()
@@ -738,6 +1289,122 @@ async def submit_snapshot_reports(
     return candidates
 
 
+async def submit_snapshot_debate_reports(
+    db_path: Path,
+    candidates: list[RankedCandidate],
+    *,
+    run_id: str,
+    concurrency: int,
+    model_tier: str,
+    timeout_seconds: int,
+) -> list[RankedCandidate]:
+    config = _snapshot_llm_config(db_path, model_tier=model_tier)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def worker(item: RankedCandidate) -> None:
+        async with semaphore:
+            snapshot_row = _latest_snapshot(db_path, item.code)
+            if not snapshot_row:
+                item.status = "failed"
+                item.error = "缺少已入库七层快照，snapshot-debate 不会联网补抓数据"
+                return
+            validation = snapshot_row.get("validation") or {}
+            if not validation.get("ok"):
+                item.status = "failed"
+                item.error = f"七层快照不完整：{json.dumps(validation, ensure_ascii=False)}"
+                return
+            started = datetime.now()
+            try:
+                role_discussion: list[dict[str, str]] = []
+                for role_key, role_name, role_goal in SNAPSHOT_DEBATE_ROLES:
+                    role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal}
+                    prompt = _snapshot_debate_prompt(
+                        item,
+                        snapshot_row,
+                        role_name=role_name,
+                        role_goal=role_goal,
+                        previous_discussion=role_discussion,
+                    )
+                    content = await _call_snapshot_debate_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
+                    role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
+                report_id = _save_snapshot_report(
+                    db_path,
+                    item,
+                    _snapshot_debate_result(role_discussion),
+                    snapshot_row,
+                    run_id=run_id,
+                    duration_seconds=(datetime.now() - started).total_seconds(),
+                    model=config.get("model", ""),
+                    report_source="snapshot_debate",
+                    depth="snapshot_debate",
+                    model_mode="snapshot_debate",
+                )
+                item.task_id = f"report:{report_id}"
+                item.status = "completed"
+                item.error = None
+            except Exception as exc:
+                item.status = "failed"
+                item.error = str(exc)
+
+    await asyncio.gather(*(worker(item) for item in candidates))
+    return candidates
+
+
+async def submit_snapshot_tradingagents_reports(
+    db_path: Path,
+    candidates: list[RankedCandidate],
+    *,
+    run_id: str,
+    concurrency: int,
+    model_tier: str,
+    timeout_seconds: int,
+) -> list[RankedCandidate]:
+    config = _snapshot_llm_config(db_path, model_tier=model_tier)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def worker(item: RankedCandidate) -> None:
+        async with semaphore:
+            snapshot_row = _latest_snapshot(db_path, item.code)
+            if not snapshot_row:
+                item.status = "failed"
+                item.error = "缺少已入库七层快照，snapshot-tradingagents 不会联网补抓数据"
+                return
+            validation = snapshot_row.get("validation") or {}
+            if not validation.get("ok"):
+                item.status = "failed"
+                item.error = f"七层快照不完整：{json.dumps(validation, ensure_ascii=False)}"
+                return
+            started = datetime.now()
+            try:
+                graph_result = await _run_snapshot_tradingagents_graph(
+                    item,
+                    snapshot_row,
+                    config,
+                    timeout_seconds=timeout_seconds,
+                )
+                report_id = _save_snapshot_report(
+                    db_path,
+                    item,
+                    graph_result,
+                    snapshot_row,
+                    run_id=run_id,
+                    duration_seconds=(datetime.now() - started).total_seconds(),
+                    model=config.get("model", ""),
+                    report_source="snapshot_tradingagents",
+                    depth="snapshot_tradingagents",
+                    model_mode="snapshot_tradingagents",
+                )
+                item.task_id = f"report:{report_id}"
+                item.status = "completed"
+                item.error = None
+            except Exception as exc:
+                item.status = "failed"
+                item.error = str(exc)
+
+    await asyncio.gather(*(worker(item) for item in candidates))
+    return candidates
+
+
 def _float_or_none(value: Any) -> float | None:
     try:
         if value is None or value == "":
@@ -967,6 +1634,79 @@ def _report_context_block(row: sqlite3.Row) -> str:
     return "\n".join(lines)
 
 
+def _report_summary_block(row: sqlite3.Row) -> str:
+    core = {
+        "report_id": row["id"],
+        "code": row["code"],
+        "name": row["watch_name"] or row["code"],
+        "group_name": row["group_name"],
+        "signal": row["signal"],
+        "confidence": row["confidence"],
+        "risk_score": row["risk_score"],
+        "depth": row["depth"],
+        "model_mode": row["model_mode"],
+        "final_decision": _clip_text(row["final_decision"] or "", 1200),
+        "trader_plan": _clip_text(row["trader_plan"] or "", 900),
+        "investment_debate": _clip_text(row["investment_debate"] or "", 900),
+        "risk_debate": _clip_text(row["risk_debate"] or "", 900),
+        "fact_check": _clip_text(row["fact_check"] or "", 500),
+    }
+    return json.dumps(core, ensure_ascii=False, default=_json_default)
+
+
+def _choose_context_strategy(report_count: int, raw_text_chars: int, requested: str | None = "auto") -> str:
+    requested = (requested or "auto").strip()
+    if requested in {"full_text", "summary_plus_evidence", "candidate_screening"}:
+        return requested
+    if report_count <= 8 and raw_text_chars <= 60000:
+        return "full_text"
+    if report_count <= 30 and raw_text_chars <= 180000:
+        return "summary_plus_evidence"
+    return "candidate_screening"
+
+
+def _position_report_context(rows: list[sqlite3.Row], deterministic_plan: dict[str, Any], strategy: str, *, top_n: int) -> str:
+    if strategy == "full_text":
+        return "\n\n".join(_report_context_block(row) for row in rows)
+    summaries = [_report_summary_block(row) for row in rows]
+    if strategy == "summary_plus_evidence":
+        evidence = []
+        for row in rows[: max(1, min(len(rows), top_n * 2))]:
+            evidence.append(
+                "\n".join(
+                    [
+                        f"## 关键证据 {row['watch_name'] or row['code']} {row['code']} #{row['id']}",
+                        f"### final_decision\n{_clip_text(row['final_decision'] or '', 1600)}",
+                        f"### trader_plan\n{_clip_text(row['trader_plan'] or '', 1200)}",
+                    ]
+                )
+            )
+        return "## 结构化候选摘要\n" + "\n".join(summaries) + "\n\n## 关键原文证据\n" + "\n\n".join(evidence)
+    ranked = deterministic_plan.get("recommendations") or []
+    filtered = [
+        item
+        for item in ranked
+        if (item.get("action") or "").lower() in {"buy", "watch", "overweight", "add"}
+    ][: max(top_n * 3, top_n)]
+    return _clip_text(
+        json.dumps(
+            {
+                "context_strategy": "candidate_screening",
+                "candidate_summaries": summaries,
+                "screened_candidates": filtered,
+                "screening_rules": [
+                    "剔除明显卖出/减持和缺少报告的标的。",
+                    "高置信度、低风险、明确交易计划的标的优先。",
+                    "最终建仓仍需考虑组合集中度、现金缓冲和执行触发条件。",
+                ],
+            },
+            ensure_ascii=False,
+            default=_json_default,
+        ),
+        70000,
+    )
+
+
 def _position_discussion_prompt(
     *,
     role_name: str,
@@ -1035,6 +1775,64 @@ async def _call_position_plan_role_llm(role: dict[str, str], prompt: str, config
         raise RuntimeError(f"多角色建仓建议模型请求失败 HTTP {resp.status_code}: {resp.text[:240]}")
     data = resp.json()
     return data["choices"][0]["message"]["content"]
+
+
+def _role_model_config(
+    role_key: str,
+    *,
+    model_strategy: str,
+    default_config: dict[str, str],
+    verification_config: dict[str, str],
+    role_models: dict[str, Any] | None,
+) -> dict[str, str]:
+    role_models = role_models or {}
+    custom = role_models.get(role_key)
+    if isinstance(custom, dict) and custom.get("base_url") and custom.get("api_key") and custom.get("model"):
+        return {
+            "base_url": custom.get("base_url") or "",
+            "api_key": custom.get("api_key") or "",
+            "model": custom.get("model") or "",
+        }
+    if model_strategy == "dual" and role_key == "chair" and all(verification_config.get(key) for key in ("base_url", "api_key", "model")):
+        return verification_config
+    return default_config
+
+
+def _resolve_role_model_configs(db_path: Path, role_models: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    """Resolve public role model selections to private provider configs."""
+    role_models = role_models or {}
+    if not role_models:
+        return {}
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'model_providers'").fetchone()
+    providers = _loads(row["value"] if row else "[]", [])
+    providers_by_id = {str(provider.get("id")): provider for provider in providers if isinstance(provider, dict)}
+    resolved: dict[str, dict[str, str]] = {}
+    for role_key, spec in role_models.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("base_url") and spec.get("api_key") and spec.get("model"):
+            resolved[role_key] = {
+                "base_url": spec.get("base_url") or "",
+                "api_key": spec.get("api_key") or "",
+                "model": spec.get("model") or "",
+                "_profile": spec.get("name") or "custom",
+            }
+            continue
+        provider_id = str(spec.get("provider_id") or "")
+        provider = providers_by_id.get(provider_id)
+        if not provider:
+            continue
+        model = spec.get("model") or provider.get("default_model") or provider.get("deep_model") or provider.get("quick_model") or ""
+        if not provider.get("base_url") or not provider.get("api_key") or not model:
+            continue
+        resolved[role_key] = {
+            "base_url": provider.get("base_url") or "",
+            "api_key": provider.get("api_key") or "",
+            "model": model,
+            "_profile": provider.get("name") or provider_id,
+        }
+    return resolved
 
 
 def _parse_position_plan_final(text: str) -> dict[str, Any]:
@@ -1135,6 +1933,9 @@ async def build_multi_role_position_plan(
     top_n: int = 10,
     config: dict[str, str] | None = None,
     timeout_seconds: int = 1800,
+    context_strategy: str = "auto",
+    model_strategy: str = "single",
+    role_models: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with _connect(db_path) as conn:
         cash = _cash_balance(conn)
@@ -1142,11 +1943,28 @@ async def build_multi_role_position_plan(
     if not rows:
         raise RuntimeError("缺少可用于多角色建仓建议的完整报告")
     deterministic_plan = _build_position_plan_from_report_rows(db_path, rows, top_n=top_n)
-    report_context = "\n\n".join(_report_context_block(row) for row in rows)
+    raw_text_chars = sum(len(_report_context_block(row)) for row in rows)
+    resolved_context_strategy = _choose_context_strategy(len(rows), raw_text_chars, context_strategy)
+    report_context = _position_report_context(rows, deterministic_plan, resolved_context_strategy, top_n=top_n)
     role_discussion: list[dict[str, str]] = []
     llm_config = config or _snapshot_llm_config(db_path, model_tier="deep")
+    verification_config = _verification_llm_config(db_path)
+    resolved_role_models = _resolve_role_model_configs(db_path, role_models)
+    role_model_trace: dict[str, dict[str, str]] = {}
     for role_key, role_name, role_goal in POSITION_PLAN_ROLES:
         role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal}
+        role_config = _role_model_config(
+            role_key,
+            model_strategy=model_strategy,
+            default_config=llm_config,
+            verification_config=verification_config,
+            role_models=resolved_role_models,
+        )
+        role_model_trace[role_key] = {
+            "model": role_config.get("model", ""),
+            "base_url": role_config.get("base_url", ""),
+            "profile": role_config.get("_profile") or ("verification" if role_config == verification_config else "ai"),
+        }
         prompt = _position_discussion_prompt(
             role_name=role_name,
             role_goal=role_goal,
@@ -1155,7 +1973,7 @@ async def build_multi_role_position_plan(
             report_context=report_context,
             previous_discussion=role_discussion,
         )
-        content = await _call_position_plan_role_llm(role, prompt, llm_config, timeout_seconds=timeout_seconds)
+        content = await _call_position_plan_role_llm(role, prompt, role_config, timeout_seconds=timeout_seconds)
         role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
     final_payload = _parse_position_plan_final(role_discussion[-1]["content"])
     recommendations = _multi_role_plan_items(rows, final_payload, deterministic_plan)
@@ -1163,6 +1981,10 @@ async def build_multi_role_position_plan(
         **deterministic_plan,
         "multi_role": True,
         "selected_report_ids": [int(row["id"]) for row in rows],
+        "context_strategy": resolved_context_strategy,
+        "raw_text_chars": raw_text_chars,
+        "model_strategy": model_strategy,
+        "model_config": role_model_trace,
         "available_reports": len(rows),
         "missing_reports": 0,
         "summary": final_payload.get("summary") or "",
@@ -1306,7 +2128,23 @@ async def run_batch_research(
     if not dry_run and selected_stocks:
         snapshot_targets = selected_stocks
         reused_snapshots = 0
-        if analysis_mode == "snapshot" and not data_only and not refresh_snapshots:
+        if analysis_mode in {"snapshot-debate", "snapshot-tradingagents"} and not data_only:
+            complete_snapshots = sum(1 for stock in selected_stocks if _has_complete_snapshot(db_path, stock.code))
+            snapshot_targets = []
+            reused_snapshots = complete_snapshots
+            snapshot_summary = {
+                "requested": len(selected_stocks),
+                "saved": 0,
+                "complete": complete_snapshots,
+                "incomplete": len(selected_stocks) - complete_snapshots,
+                "failed": 0,
+                "failed_items": [],
+                "incomplete_items": [],
+                "run_id": run_id,
+                "concurrency": 0,
+                "reused": complete_snapshots,
+            }
+        elif analysis_mode == "snapshot" and not data_only and not refresh_snapshots:
             snapshot_targets = [stock for stock in selected_stocks if not _has_complete_snapshot(db_path, stock.code)]
             reused_snapshots = len(selected_stocks) - len(snapshot_targets)
         if snapshot_targets:
@@ -1341,6 +2179,24 @@ async def run_batch_research(
                 debate_rounds=debate_rounds,
                 risk_rounds=risk_rounds,
                 poll_interval=poll_interval,
+                timeout_seconds=timeout_seconds,
+            )
+        elif analysis_mode == "snapshot-debate":
+            candidates = await submit_snapshot_debate_reports(
+                db_path,
+                candidates,
+                run_id=run_id,
+                concurrency=analysis_concurrency,
+                model_tier=snapshot_model_tier,
+                timeout_seconds=timeout_seconds,
+            )
+        elif analysis_mode == "snapshot-tradingagents":
+            candidates = await submit_snapshot_tradingagents_reports(
+                db_path,
+                candidates,
+                run_id=run_id,
+                concurrency=analysis_concurrency,
+                model_tier=snapshot_model_tier,
                 timeout_seconds=timeout_seconds,
             )
         else:
@@ -1408,8 +2264,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--analysis-mode",
         default="snapshot",
-        choices=["snapshot", "tradingagents"],
-        help="snapshot=读取已入库七层快照生成报告；tradingagents=走原生 TradingAgents 在线链路",
+        choices=["snapshot", "snapshot-debate", "snapshot-tradingagents", "tradingagents"],
+        help="snapshot=单次读取已入库七层快照生成报告；snapshot-debate=7角色离线辩论；snapshot-tradingagents=快照版TradingAgents完整流程；tradingagents=原生在线链路",
     )
     parser.add_argument("--analysis-concurrency", type=int, default=1, help="snapshot 模式下并发生成报告数")
     parser.add_argument("--snapshot-model-tier", default="deep", choices=["quick", "deep"], help="snapshot 模式使用快速或深度模型")

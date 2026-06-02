@@ -36,6 +36,7 @@ logs/
 
 # Runtime exports
 data/backups/
+data/batch_research/
 
 # Environment
 .env

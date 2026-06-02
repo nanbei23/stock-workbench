@@ -20,11 +20,27 @@ class BatchResearchCreatePayload(BaseModel):
     skip_recent_days: int = Field(default=30, ge=0)
     refresh_snapshots: bool = False
     snapshot_concurrency: int = Field(default=3, ge=1, le=10)
-    analysis_mode: str = "snapshot"
+    analysis_mode: str = "snapshot-tradingagents"
     analysis_concurrency: int = Field(default=1, ge=1, le=10)
     snapshot_model_tier: str = "deep"
+    debate_rounds: int = Field(default=1, ge=1, le=5)
+    risk_rounds: int = Field(default=1, ge=1, le=5)
+    timeout_seconds: int = Field(default=1800, ge=60, le=28800)
+    role_retry_attempts: int = Field(default=3, ge=1, le=8)
+    role_retry_backoff_seconds: float = Field(default=2.0, ge=0, le=120)
+    max_consecutive_failures: int = Field(default=5, ge=0, le=50)
+    max_failure_rate: float = Field(default=0.25, ge=0, le=1)
+    min_failure_rate_items: int = Field(default=5, ge=1, le=500)
+    model_fallback_enabled: bool = True
+    fallback_provider_ids: list[str] = Field(default_factory=list)
     plan_top_n: int = Field(default=10, ge=1, le=50)
     multi_role: bool = False
+    stage: str = "final"
+    parent_plan_id: Optional[str] = None
+    context_strategy: str = "auto"
+    model_strategy: str = "single"
+    role_models: dict = Field(default_factory=dict)
+    title: Optional[str] = None
     trade_date: Optional[str] = None
     output_dir: Optional[Path] = None
 
@@ -42,6 +58,16 @@ class BatchReportCreatePayload(BaseModel):
 @router.post("/batch-research/jobs")
 async def create_batch_research_job(payload: BatchResearchCreatePayload):
     return await batch_report_service.create_research_job(**payload.model_dump())
+
+
+@router.post("/batch-research/preflight")
+async def preflight_batch_research_models(payload: BatchResearchCreatePayload):
+    return batch_report_service.preflight_batch_models(**payload.model_dump())
+
+
+@router.get("/batch-research/workers")
+async def get_batch_research_workers(stale_minutes: int = Query(default=15, ge=1, le=120)):
+    return batch_report_service.get_worker_status(stale_minutes=stale_minutes)
 
 
 @router.get("/batch-research/jobs")
@@ -63,6 +89,26 @@ async def get_batch_research_items(job_id: str, status: Optional[str] = Query(No
     return batch_report_service.get_research_items(job_id, status=status)
 
 
+@router.get("/batch-research/jobs/{job_id}/logs")
+async def get_batch_research_logs(job_id: str, limit: int = Query(default=200, ge=1, le=1000)):
+    return batch_report_service.get_job_logs(job_id, limit=limit)
+
+
+@router.get("/batch-research/jobs/{job_id}/artifacts")
+async def get_batch_research_artifacts(job_id: str):
+    return batch_report_service.get_job_artifacts(job_id)
+
+
+@router.get("/batch-research/items/{item_id}/steps")
+async def get_batch_research_item_steps(item_id: int):
+    return batch_report_service.get_research_item_steps(item_id)
+
+
+@router.post("/batch-research/jobs/{job_id}/pause")
+async def pause_batch_research_job(job_id: str):
+    return batch_report_service.pause_job(job_id)
+
+
 @router.post("/batch-research/jobs/{job_id}/resume")
 async def resume_batch_research_job(job_id: str):
     return await batch_report_service.resume_job(job_id)
@@ -71,6 +117,11 @@ async def resume_batch_research_job(job_id: str):
 @router.post("/batch-research/jobs/{job_id}/retry-failed")
 async def retry_failed_batch_research_items(job_id: str):
     return await batch_report_service.retry_failed(job_id)
+
+
+@router.post("/batch-research/jobs/{job_id}/cancel")
+async def cancel_batch_research_job(job_id: str):
+    return batch_report_service.cancel_job(job_id)
 
 
 # Backward-compatible old batch report API.

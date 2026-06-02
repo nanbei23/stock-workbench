@@ -205,7 +205,13 @@ build_and_check() {
 }
 
 init_database() {
-  run "$VENV_DIR/bin/python" -c 'import asyncio; from models.database import init_db; asyncio.run(init_db())'
+  run "$VENV_DIR/bin/python" "$ROOT_DIR/scripts/migrate_2_8_1_to_2_9.py" --db-path "$DB_PATH_VALUE"
+}
+
+install_batch_worker() {
+  log "Installing batch worker launchd service"
+  run "$ROOT_DIR/scripts/worker_install_launchd.sh"
+  run "$ROOT_DIR/scripts/worker_start.sh"
 }
 
 uninstall_service() {
@@ -316,10 +322,12 @@ main() {
   install_node_deps
   build_and_check
   init_database
-  chmod +x "$ROOT_DIR/scripts/run_macos_x86.sh" "$ROOT_DIR/scripts/init_from_files.py" "$ROOT_DIR/scripts/batch_research.py"
+  chmod +x "$ROOT_DIR/scripts/run_macos_x86.sh" "$ROOT_DIR/scripts/init_from_files.py" "$ROOT_DIR/scripts/batch_research.py" "$ROOT_DIR/scripts/migrate_2_8_1_to_2_9.py"
+  chmod +x "$ROOT_DIR/scripts/worker_install_launchd.sh" "$ROOT_DIR/scripts/worker_start.sh" "$ROOT_DIR/scripts/worker_stop.sh" "$ROOT_DIR/scripts/worker_status.sh" "$ROOT_DIR/scripts/worker_logs.sh"
 
   if [[ "$INSTALL_SERVICE" -eq 1 ]]; then
     install_service
+    install_batch_worker
     smoke_test
     log "Deployment complete. Open http://$HOST_VALUE:$PORT_VALUE"
     log "Logs: $LOG_DIR/service.out.log and $LOG_DIR/service.err.log"

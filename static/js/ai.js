@@ -1274,7 +1274,7 @@ async function createBatchResearchJob(type) {
             top_n: 0,
             skip_recent_days: type === 'data_prefetch' ? 0 : 30,
             snapshot_concurrency: 3,
-            analysis_mode: 'snapshot',
+            analysis_mode: type === 'report_generation' ? 'snapshot-tradingagents' : 'snapshot',
             analysis_concurrency: 1,
             snapshot_model_tier: 'deep',
             plan_top_n: 10,

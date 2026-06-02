@@ -52,6 +52,33 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ranked[0].code, "000001")
         self.assertGreater(ranked[0].score, ranked[1].score)
 
+    def test_resolve_role_model_configs_uses_private_provider_key(self):
+        provider_payload = [
+            {
+                "id": "third",
+                "name": "第三方引擎",
+                "base_url": "https://third.example.com/v1",
+                "api_key": "sk-private",
+                "models": ["fast-model", "deep-model"],
+            }
+        ]
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                ("model_providers", json.dumps(provider_payload, ensure_ascii=False)),
+            )
+            conn.commit()
+
+        resolved = batch_research._resolve_role_model_configs(
+            self.db_path,
+            {"risk_manager": {"provider_id": "third", "model": "deep-model"}},
+        )
+
+        self.assertEqual(resolved["risk_manager"]["base_url"], "https://third.example.com/v1")
+        self.assertEqual(resolved["risk_manager"]["api_key"], "sk-private")
+        self.assertEqual(resolved["risk_manager"]["model"], "deep-model")
+        self.assertEqual(resolved["risk_manager"]["_profile"], "第三方引擎")
+
     async def test_dry_run_builds_plan_without_submitting_ai_tasks(self):
         with patch("scripts.batch_research.get_batch_quotes", new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 1.0}})), patch(
             "services.ai_analysis_service.start_analysis",
@@ -198,6 +225,180 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row[1], "BUY")
         self.assertEqual(row[2], "snapshot")
         self.assertEqual(row[3], "snapshot_report")
+
+    async def test_snapshot_debate_uses_saved_snapshot_without_fetching_or_tradingagents(self):
+        snapshot = {
+            "market": {"quote": {"price": 10.0}},
+            "social": {"items": ["ok"]},
+            "news": {"items": ["ok"]},
+            "fundamentals": {"items": ["ok"]},
+            "policy": {"items": ["ok"]},
+            "hot_money": {"items": ["ok"]},
+            "lockup": {"items": ["ok"]},
+        }
+        validation = batch_research.validate_snapshot(snapshot)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO stock_data_snapshots
+                    (code, name, snapshot_json, validation_json, summary_json, source, run_id)
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "000001",
+                    "平安银行",
+                    json.dumps(snapshot, ensure_ascii=False),
+                    json.dumps(validation, ensure_ascii=False),
+                    "{}",
+                    "test",
+                    "run-1",
+                ),
+            )
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_endpoint', 'https://api.example.com/v1')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('api_key', 'sk-test')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('deep_think_model', 'model-deep')")
+            conn.commit()
+
+        role_outputs = [
+            "价格结构改善",
+            "基本面稳定",
+            "新闻情绪中性，政策无明显冲击，资金温和，解禁风险可控",
+            "多方认为可分批建仓",
+            "空方认为仍需控制回撤",
+            "风控建议轻仓试错",
+            json.dumps(
+                {
+                    "signal": "BUY",
+                    "confidence": 0.74,
+                    "risk_score": 38,
+                    "trader_plan": "分批建仓，跌破支撑失效",
+                    "final_decision": "BUY，置信度 0.74，风险评分 38",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+        with patch("scripts.batch_research.get_batch_quotes", new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 1.0}})), patch(
+            "scripts.batch_research.fetch_seven_layer_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ) as fetch_snapshot, patch(
+            "scripts.batch_research._call_snapshot_llm",
+            new=AsyncMock(return_value={}),
+        ) as call_single, patch(
+            "scripts.batch_research._call_snapshot_debate_role_llm",
+            new=AsyncMock(side_effect=role_outputs),
+            create=True,
+        ) as call_role, patch(
+            "services.ai_analysis_service.start_analysis",
+            new=AsyncMock(),
+        ) as start_analysis:
+            result = await batch_research.run_batch_research(
+                db_path=self.db_path,
+                group="默认",
+                include_observation=False,
+                limit=5,
+                top_n=1,
+                batch_size=1,
+                data_only=False,
+                dry_run=False,
+                skip_recent_days=7,
+                output_dir=Path(self.tmp.name),
+                analysis_mode="snapshot-debate",
+            )
+
+        self.assertEqual(result["mode"], "snapshot-debate_analysis")
+        self.assertEqual(result["submitted_count"], 1)
+        fetch_snapshot.assert_not_awaited()
+        call_single.assert_not_awaited()
+        self.assertEqual(call_role.await_count, 7)
+        start_analysis.assert_not_awaited()
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT code, signal, confidence, risk_score, depth, model_mode, raw_state FROM analysis_reports WHERE code = ?",
+                ("000001",),
+            ).fetchone()
+        self.assertEqual(row[0], "000001")
+        self.assertEqual(row[1], "BUY")
+        self.assertEqual(row[2], 0.74)
+        self.assertEqual(row[3], 38)
+        self.assertEqual(row[4], "snapshot_debate")
+        self.assertEqual(row[5], "snapshot_debate")
+        self.assertEqual(len(json.loads(row[6])["role_discussion"]), 7)
+
+    async def test_snapshot_tradingagents_graph_preserves_debate_state_shape(self):
+        stock = batch_research.RankedCandidate(
+            code="000001",
+            name="平安银行",
+            group_name="默认",
+            sort_order=1,
+            quote={"price": 10.0},
+            score=1.0,
+        )
+        snapshot = {
+            "market": {"quote": {"price": 10.0}},
+            "social": {"items": ["ok"]},
+            "news": {"items": ["ok"]},
+            "fundamentals": {"items": ["ok"]},
+            "policy": {"items": ["ok"]},
+            "hot_money": {"items": ["ok"]},
+            "lockup": {"items": ["ok"]},
+        }
+        snapshot_row = {
+            "id": 1,
+            "code": "000001",
+            "name": "平安银行",
+            "snapshot": snapshot,
+            "validation": batch_research.validate_snapshot(snapshot),
+            "summary": {},
+            "created_at": "2026-06-03T09:30:00",
+        }
+        outputs = [
+            "市场报告",
+            "情绪报告",
+            "新闻报告",
+            "基本面报告",
+            "政策报告",
+            "游资报告",
+            "解禁报告",
+            "质量门控通过",
+            "多头观点",
+            "空头观点",
+            "研究经理计划",
+            "交易员计划",
+            "激进风控",
+            "保守风控",
+            "中性风控",
+            json.dumps({"signal": "BUY", "confidence": 0.8, "risk_score": 30, "final_decision": "最终买入"}, ensure_ascii=False),
+        ]
+
+        with patch("scripts.batch_research._call_snapshot_tradingagents_role_llm", new=AsyncMock(side_effect=outputs)) as call_role:
+            result = await batch_research._run_snapshot_tradingagents_graph(
+                stock,
+                snapshot_row,
+                {"base_url": "https://api.example.com/v1", "api_key": "sk", "model": "m"},
+                timeout_seconds=120,
+            )
+
+        self.assertEqual(call_role.await_count, 16)
+        self.assertEqual([item["role_key"] for item in result["role_discussion"][:8]], [
+            "market_analyst",
+            "social_analyst",
+            "news_analyst",
+            "fundamentals_analyst",
+            "policy_analyst",
+            "hot_money_analyst",
+            "lockup_analyst",
+            "quality_gate",
+        ])
+        state = result["snapshot_tradingagents_state"]
+        self.assertEqual(state["investment_debate_state"]["count"], 2)
+        self.assertEqual(state["investment_debate_state"]["current_response"], "研究经理计划")
+        self.assertIn("Bear Analyst:", state["investment_debate_state"]["history"])
+        self.assertEqual(state["risk_debate_state"]["count"], 3)
+        self.assertEqual(state["risk_debate_state"]["latest_speaker"], "Judge")
+        self.assertEqual(result["market_report"], "市场报告")
+        self.assertEqual(result["trader_plan"], "交易员计划")
+        self.assertEqual(result["signal"], "BUY")
 
     async def test_recent_reports_are_skipped_for_next_batch_but_kept_in_position_plan(self):
         snapshot = {

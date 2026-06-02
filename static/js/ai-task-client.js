@@ -58,6 +58,9 @@
         retryBatchResearch(jobId) {
             return post(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/retry-failed`);
         },
+        cancelBatchResearch(jobId) {
+            return post(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/cancel`);
+        },
         status(taskId) {
             return get(`/api/ai/analyze/${encode(taskId)}/status`);
         },
