@@ -23,13 +23,7 @@ cat > "$PLIST" <<PLIST
   <key>ProgramArguments</key>
   <array>
     <string>${PYTHON}</string>
-    <string>${ROOT_DIR}/scripts/run_batch_worker.py</string>
-    <string>--sleep</string>
-    <string>5</string>
-    <string>--stale-minutes</string>
-    <string>15</string>
-    <string>--worker-id</string>
-    <string>launchd-batch-worker</string>
+    <string>${ROOT_DIR}/scripts/run_batch_worker_pool.py</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

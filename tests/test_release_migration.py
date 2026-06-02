@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_SCRIPT = ROOT / "scripts" / "migrate_2_8_1_to_2_9.py"
 DEPLOY_SCRIPT = ROOT / "scripts" / "deploy_macos_x86.sh"
 BUILD_INSTALLER_SCRIPT = ROOT / "scripts" / "build_macos_x86_installer.sh"
+WORKER_INSTALL_SCRIPT = ROOT / "scripts" / "worker_install_launchd.sh"
 AI_JS = ROOT / "static" / "js" / "ai.js"
 AI_TEMPLATE = ROOT / "templates" / "ai.html"
 BATCH_WORKER_SCRIPT = ROOT / "scripts" / "run_batch_worker.py"
@@ -39,9 +40,12 @@ class ReleaseMigrationTests(unittest.TestCase):
 
     def test_deploy_script_installs_batch_worker_service(self):
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        worker_source = WORKER_INSTALL_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("worker_install_launchd.sh", source)
         self.assertIn("worker_start.sh", source)
+        self.assertIn("run_batch_worker_pool.py", worker_source)
+        self.assertNotIn("run_batch_worker.py</string>", worker_source)
 
     def test_installer_package_excludes_runtime_data(self):
         source = BUILD_INSTALLER_SCRIPT.read_text(encoding="utf-8")
