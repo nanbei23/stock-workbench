@@ -80,6 +80,14 @@ class AiReportServiceTests(unittest.IsolatedAsyncioTestCase):
         report = result["reports"][0]
         self.assertEqual(report["name"], "茅台快照")
         self.assertNotIn("raw_state", report)
+        self.assertIn("fact_accuracy", report)
+        self.assertIn("hallucinations", report)
+
+    async def test_list_reports_supports_large_report_library_limit(self):
+        result = await ai_report_service.list_reports(limit=300, model_mode="balanced")
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["reports"][0]["model_mode"], "balanced")
 
     async def test_get_report_parses_json_fields(self):
         report = await ai_report_service.get_report(1)
@@ -170,7 +178,7 @@ class AiReportApiTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_report_routes_use_service_layer(self):
-        listing = self.client.get("/api/ai/reports")
+        listing = self.client.get("/api/ai/reports?limit=300")
         detail = self.client.get("/api/ai/reports/10")
 
         self.assertEqual(listing.status_code, 200)

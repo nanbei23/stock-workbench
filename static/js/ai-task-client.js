@@ -39,6 +39,25 @@
         batch(payload) {
             return post('/api/ai/batch-analyze', payload || {});
         },
+        batchReport(payload) {
+            return post('/api/batch-reports', payload || {});
+        },
+        createBatchResearch(payload) {
+            return post('/api/batch-research/jobs', payload || {});
+        },
+        batchResearchJobs(params) {
+            const query = params ? `?${new URLSearchParams(params).toString()}` : '';
+            return get(`/api/batch-research/jobs${query}`);
+        },
+        batchResearchJob(jobId) {
+            return get(`/api/batch-research/jobs/${encodeURIComponent(jobId)}`);
+        },
+        resumeBatchResearch(jobId) {
+            return post(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/resume`);
+        },
+        retryBatchResearch(jobId) {
+            return post(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/retry-failed`);
+        },
         status(taskId) {
             return get(`/api/ai/analyze/${encode(taskId)}/status`);
         },

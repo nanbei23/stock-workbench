@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}AI报告库 — 炒股小牛马{% endblock %}
+
+{% block content %}
+<div class="report-library" id="reportLibrary">
+    <aside class="report-library-filters">
+        <div class="library-panel-title">
+            <h2>AI报告库</h2>
+            <span id="reportLibraryCount">0 份</span>
+        </div>
+        <label class="library-filter">
+            <span>搜索</span>
+            <input id="reportFilterText" class="form-input" placeholder="股票名称 / 代码" oninput="filterReportLibrary()">
+        </label>
+        <label class="library-filter">
+            <span>信号</span>
+            <select id="reportFilterSignal" class="form-input" onchange="filterReportLibrary()">
+                <option value="">全部</option>
+                <option value="STRONG_BUY">强烈买入</option>
+                <option value="BUY">买入</option>
+                <option value="OVERWEIGHT">增持</option>
+                <option value="HOLD">持有</option>
+                <option value="UNDERWEIGHT">减持</option>
+                <option value="SELL">卖出</option>
+                <option value="STRONG_SELL">强烈卖出</option>
+            </select>
+        </label>
+        <label class="library-filter">
+            <span>排序</span>
+            <select id="reportSortBy" class="form-input" onchange="filterReportLibrary()">
+                <option value="created_desc">最新生成</option>
+                <option value="confidence_desc">置信度高到低</option>
+                <option value="risk_asc">风险低到高</option>
+                <option value="risk_desc">风险高到低</option>
+            </select>
+        </label>
+        <label class="library-filter">
+            <span>最低置信度</span>
+            <input id="reportMinConfidence" class="form-input" type="number" min="0" max="100" step="1" placeholder="例如 60" oninput="filterReportLibrary()">
+        </label>
+        <label class="library-filter">
+            <span>最高风险评分</span>
+            <input id="reportMaxRisk" class="form-input" type="number" min="0" max="100" step="1" placeholder="例如 50" oninput="filterReportLibrary()">
+        </label>
+        <div class="library-actions">
+            <button class="btn btn-primary" onclick="createPlanFromReportLibrary()">生成建仓建议</button>
+            <button class="btn" onclick="exportReportLibrary('markdown')">导出 Markdown</button>
+            <button class="btn" onclick="exportReportLibrary('json')">导出 JSON</button>
+        </div>
+    </aside>
+
+    <main class="report-library-main">
+        <div class="library-toolbar">
+            <div>
+                <h3>报告列表</h3>
+                <p>批量报告完成后在这里筛选、比较和消费结果。</p>
+            </div>
+            <button class="btn" onclick="loadReportLibrary()">刷新</button>
+        </div>
+        <div class="report-table-wrap">
+            <table class="report-library-table">
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" id="reportSelectAll" onchange="toggleAllReports(this.checked)"></th>
+                        <th>股票</th>
+                        <th>信号</th>
+                        <th>置信度</th>
+                        <th>风险</th>
+                        <th>事实核查</th>
+                        <th>模式</th>
+                        <th>生成时间</th>
+                    </tr>
+                </thead>
+                <tbody id="reportLibraryRows">
+                    <tr><td colspan="8" class="empty-row">正在加载...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <aside class="report-library-preview">
+        <div class="library-panel-title">
+            <h3>报告预览</h3>
+            <span id="reportPreviewMeta">未选择</span>
+        </div>
+        <div id="reportPreview" class="report-preview-body">
+            <div class="empty-row">点击左侧报告查看最终决策、交易计划和风险说明。</div>
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ai-task-client.js?v=2.8.0"></script>
+<script src="/static/js/reports.js?v=2.8.0"></script>
+{% endblock %}

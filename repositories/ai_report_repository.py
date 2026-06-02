@@ -1,10 +1,11 @@
 """AI report and anomaly read queries."""
 
 
-async def list_reports(db, code=None, signal=None, limit=20):
+async def list_reports(db, code=None, signal=None, limit=20, depth=None, model_mode=None):
     query = """
         SELECT id, task_id, code, signal, confidence, risk_score,
-               duration_seconds, created_at, depth, model_mode, raw_state
+               duration_seconds, created_at, depth, model_mode, raw_state,
+               fact_check, bystander_verify, market_snapshot
         FROM analysis_reports
         WHERE 1=1
     """
@@ -15,6 +16,12 @@ async def list_reports(db, code=None, signal=None, limit=20):
     if signal:
         query += " AND signal = ?"
         params.append(signal)
+    if depth:
+        query += " AND depth = ?"
+        params.append(depth)
+    if model_mode:
+        query += " AND model_mode = ?"
+        params.append(model_mode)
     query += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     rows = await db.execute_fetchall(query, params)

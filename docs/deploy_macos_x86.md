@@ -44,7 +44,7 @@ scripts/build_macos_x86_installer.sh
 输出位置：
 
 ```text
-dist/stock-workbench-v2.7.3-macos-x86.tar.gz
+dist/stock-workbench-v2.8.0-macos-x86.tar.gz
 ```
 
 解压后先打开 `安装向导.html`，再双击 `安装.command`。安装包内还包含 `升级.command`，用于后续复用现有升级流程。
@@ -57,7 +57,9 @@ scripts/batch_research.py
 docs/data_initialization_and_batch_research.md
 ```
 
-`batch_research.py` 支持先并发拉取七层数据写入 `stock_data_snapshots`，再分批提交完整 AI 分析，最后基于已入库报告生成 `position_plan_*.md` 建仓建议文件。
+`batch_research.py` 支持先并发拉取七层数据写入 `stock_data_snapshots`，再复用已入库快照生成 AI 报告，最后基于已入库报告生成 `position_plan_*.md` 建仓建议文件。原生 TradingAgents 在线链路保留为 `--analysis-mode tradingagents`，需要网络稳定或代理支持。
+
+`v2.8.0` 起页面内批量报告会创建后台任务并写入 `batch_report_jobs / batch_report_items`，长任务在后台执行，不阻塞页面操作。
 
 ## 常用参数
 

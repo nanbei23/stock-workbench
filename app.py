@@ -26,6 +26,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     from tasks import mark_interrupted_tasks
     await mark_interrupted_tasks()
+    from services.batch_report_service import mark_interrupted_jobs
+    mark_interrupted_jobs()
     sched = setup_scheduler()
     logger.info("Database initialized")
     logger.info("Scheduler started")
@@ -60,6 +62,10 @@ async def page_portfolio(request: Request):
 @app.get("/ai", response_class=HTMLResponse)
 async def page_ai(request: Request):
     return templates.TemplateResponse(request=request, name="ai.html")
+
+@app.get("/reports", response_class=HTMLResponse)
+async def page_reports(request: Request):
+    return templates.TemplateResponse(request=request, name="reports.html")
 
 @app.get("/hotspots", response_class=HTMLResponse)
 async def page_hotspots(request: Request):
@@ -100,6 +106,7 @@ from api.enhancement_api import router as enhancement_router
 from api.hermes_api import router as hermes_router
 from api.shadow_api import router as shadow_router
 from api.performance_api import router as performance_router
+from api.batch_report_api import router as batch_report_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -114,6 +121,7 @@ app.include_router(enhancement_router, prefix="/api")
 app.include_router(hermes_router, prefix="/api")
 app.include_router(shadow_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
+app.include_router(batch_report_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")

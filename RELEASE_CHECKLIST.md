@@ -25,6 +25,7 @@ python -m unittest discover tests
 python -m py_compile scripts/init_from_files.py scripts/batch_research.py
 node --check static/js/hermes.js
 node --check static/js/shadow.js
+node --check static/js/ai-task-client.js static/js/ai.js static/js/reports.js
 npm run typecheck
 npm run build
 ```
@@ -39,7 +40,8 @@ Open these pages on `http://127.0.0.1:8000`:
 
 - [ ] `/` loads the watchlist workspace.
 - [ ] `/portfolio` loads accounts and positions.
-- [ ] `/ai` loads the AI task center.
+- [ ] `/ai` loads the AI task center and the non-blocking batch research panel.
+- [ ] `/reports` loads the report library, filters, report preview, export actions, and position-plan action.
 - [ ] `/hotspots` loads hotspot themes and research progress.
 - [ ] `/hermes` loads the Hermes console, history, draft panel, and audit panel.
 - [ ] `/shadow` loads AI performance, signal validation, shadow portfolio, execution deviation, and model calibration.
@@ -56,6 +58,9 @@ Check these APIs:
 - [ ] `GET /api/shadow/execution-deviation`
 - [ ] `GET /api/market-regime`
 - [ ] `GET /api/hotspots?limit=12`
+- [ ] `GET /api/ai/reports?limit=500`
+- [ ] `GET /api/batch-research/jobs?limit=5`
+- [ ] `GET /api/batch-reports?limit=5`
 
 Check release scripts:
 
@@ -64,6 +69,9 @@ Check release scripts:
 - [ ] `.venv312/bin/python scripts/init_from_files.py --watchlist <file> --trades <file> --cash <cash> --reset` dry-run does not write the database.
 - [ ] `.venv312/bin/python scripts/batch_research.py --group 默认 --top-n 5` dry-run does not submit AI tasks.
 - [ ] `.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --data-only --apply` writes validated seven-layer snapshots before AI submission.
+- [ ] `.venv312/bin/python scripts/batch_research.py --group 默认 --top-n 5 --analysis-mode snapshot --apply` reuses complete snapshots and writes reports without TradingAgents online data calls.
+- [ ] Restarting the service with a running batch research job marks it as interrupted rather than leaving it permanently running.
+- [ ] Retrying a failed batch research job resets only failed or waiting items.
 
 ## 5. Hermes Safety Checks
 
@@ -78,6 +86,6 @@ Check release scripts:
 
 ```bash
 git add .
-git commit -m "Release v2.7.3"
-git tag v2.7.3
+git commit -m "Release v2.8.0"
+git tag v2.8.0
 ```

@@ -117,6 +117,159 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(rows[0][1])["market"]["quote"]["price"], 10.0)
         self.assertTrue(json.loads(rows[0][2])["ok"])
 
+    async def test_snapshot_analysis_uses_saved_snapshot_without_tradingagents(self):
+        snapshot = {
+            "market": {"quote": {"price": 10.0}},
+            "social": {"items": ["ok"]},
+            "news": {"items": ["ok"]},
+            "fundamentals": {"items": ["ok"]},
+            "policy": {"items": ["ok"]},
+            "hot_money": {"items": ["ok"]},
+            "lockup": {"items": ["ok"]},
+        }
+        validation = batch_research.validate_snapshot(snapshot)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO stock_data_snapshots
+                    (code, name, snapshot_json, validation_json, summary_json, source, run_id)
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "000001",
+                    "平安银行",
+                    json.dumps(snapshot, ensure_ascii=False),
+                    json.dumps(validation, ensure_ascii=False),
+                    "{}",
+                    "test",
+                    "run-1",
+                ),
+            )
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_endpoint', 'https://api.example.com/v1')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('api_key', 'sk-test')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('deep_think_model', 'model-deep')")
+            conn.commit()
+
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.76,
+            "risk_score": 32.5,
+            "market_report": "价格结构改善",
+            "sentiment_report": "情绪中性",
+            "news_report": "无重大负面",
+            "fundamentals_report": "基本面稳定",
+            "policy_report": "政策无明显冲击",
+            "hot_money_report": "资金温和",
+            "lockup_report": "解禁风险可控",
+            "investment_debate": "多方略占优",
+            "risk_debate": "控制仓位",
+            "trader_plan": "分批建仓",
+            "final_decision": "评级：BUY，置信度 76%，风险评分 32.5",
+        }
+        with patch("scripts.batch_research.get_batch_quotes", new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 1.0}})), patch(
+            "scripts.batch_research._call_snapshot_llm",
+            new=AsyncMock(return_value=llm_result),
+        ) as call_llm, patch(
+            "services.ai_analysis_service.start_analysis",
+            new=AsyncMock(),
+        ) as start_analysis:
+            result = await batch_research.run_batch_research(
+                db_path=self.db_path,
+                group="默认",
+                include_observation=False,
+                limit=5,
+                top_n=1,
+                batch_size=1,
+                data_only=False,
+                dry_run=False,
+                skip_recent_days=7,
+                output_dir=Path(self.tmp.name),
+                analysis_mode="snapshot",
+            )
+
+        self.assertEqual(result["mode"], "snapshot_analysis")
+        self.assertEqual(result["submitted_count"], 1)
+        call_llm.assert_awaited_once()
+        start_analysis.assert_not_awaited()
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT code, signal, depth, model_mode FROM analysis_reports WHERE code = ?", ("000001",)).fetchone()
+        self.assertEqual(row[0], "000001")
+        self.assertEqual(row[1], "BUY")
+        self.assertEqual(row[2], "snapshot")
+        self.assertEqual(row[3], "snapshot_report")
+
+    async def test_recent_reports_are_skipped_for_next_batch_but_kept_in_position_plan(self):
+        snapshot = {
+            "market": {"quote": {"price": 10.0}},
+            "social": {"items": ["ok"]},
+            "news": {"items": ["ok"]},
+            "fundamentals": {"items": ["ok"]},
+            "policy": {"items": ["ok"]},
+            "hot_money": {"items": ["ok"]},
+            "lockup": {"items": ["ok"]},
+        }
+        validation = batch_research.validate_snapshot(snapshot)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO stock_data_snapshots
+                    (code, name, snapshot_json, validation_json, summary_json, source, run_id)
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "000001",
+                    "平安银行",
+                    json.dumps(snapshot, ensure_ascii=False),
+                    json.dumps(validation, ensure_ascii=False),
+                    "{}",
+                    "test",
+                    "run-1",
+                ),
+            )
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('custom_endpoint', 'https://api.example.com/v1')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('api_key', 'sk-test')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('deep_think_model', 'model-deep')")
+            conn.execute("UPDATE analysis_reports SET signal = 'BUY', confidence = 0.7, risk_score = 35 WHERE code = '600519'")
+            conn.commit()
+
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.8,
+            "risk_score": 28,
+            "final_decision": "评级：BUY",
+            "trader_plan": "分批建仓",
+        }
+        with patch(
+            "scripts.batch_research.get_batch_quotes",
+            new=AsyncMock(
+                return_value={
+                    "000001": {"price": 10.0, "change_pct": 1.0},
+                    "600519": {"price": 1500.0, "change_pct": 0.5},
+                }
+            ),
+        ), patch("scripts.batch_research._call_snapshot_llm", new=AsyncMock(return_value=llm_result)):
+            result = await batch_research.run_batch_research(
+                db_path=self.db_path,
+                group="默认",
+                include_observation=False,
+                limit=0,
+                top_n=0,
+                batch_size=1,
+                data_only=False,
+                dry_run=False,
+                skip_recent_days=7,
+                output_dir=Path(self.tmp.name),
+                analysis_mode="snapshot",
+            )
+
+        self.assertEqual(result["planned_count"], 1)
+        self.assertEqual(result["candidates"][0]["code"], "000001")
+        self.assertEqual(result["skipped_existing_reports"], 1)
+        self.assertEqual(result["position_plan"]["available_reports"], 2)
+        self.assertIn("600519", {item["code"] for item in result["position_plan"]["recommendations"]})
+
     def test_snapshot_validation_marks_missing_layers(self):
         validation = batch_research.validate_snapshot({"market": {"quote": {"price": 10}}})
 

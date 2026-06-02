@@ -1,6 +1,6 @@
 # 炒股小牛马 Stock Workbench
 
-本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.7.3`。
+本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.8.0`。
 
 本项目面向个人研究和交易工作流辅助，不构成投资建议。所有写库操作都应由用户确认后执行。
 
@@ -10,7 +10,8 @@
 | --- | --- |
 | 自选股 | 腾讯行情、K 线分时、异动监控、新闻/公告/研报聚合、AI 报告入口 |
 | 持仓 | 多账户资产看板、合并视图、交易记录、盈亏统计、交易计划、条件单 |
-| AI 分析台 | TradingAgents-astock 分析任务、队列状态、历史任务、失败原因、重试/取消、报告质量和信号跟踪 |
+| AI 分析台 | TradingAgents-astock 分析任务、后台批量研究、数据预取、报告生成、建仓建议、队列状态、失败原因、重试和续跑 |
+| 报告库 | 大批量 AI 报告筛选、预览、导出、选中报告生成建仓建议 |
 | 热点主线 | 市场状态、热点主题、研究节奏、策略生命周期、实时研究进度 |
 | Hermes 对话台 | 自然语言意图识别、Hermes session 历史、多步任务计划、写库草稿、分步确认/跳过、审计记录 |
 | AI 绩效 | 信号验证、AI 影子盘、执行偏差、模型校准、置信度 Brier Score 和实盘对比 |
@@ -65,6 +66,7 @@ http://127.0.0.1:8000
 - `/` 自选股
 - `/portfolio` 持仓
 - `/ai` AI 分析台
+- `/reports` AI 报告库
 - `/hotspots` 热点主线
 - `/hermes` Hermes 对话台
 - `/shadow` AI 绩效
@@ -96,13 +98,15 @@ scripts/deploy_macos_x86.sh
   --apply
 ```
 
-空仓后做候选研究时，先 dry-run；全量执行时会先拉七层数据写库，再跑完整 AI 分析并生成建仓建议：
+空仓后做候选研究时，可以在 `/ai` 右侧的 `批量研究` 面板启动后台任务，也可以用脚本执行。全量执行时建议先拉七层数据写库，再复用已入库快照生成 AI 报告和建仓建议，避免 TradingAgents 在报告阶段重新请求东财：
 
 ```bash
 .venv312/bin/python scripts/batch_research.py --group all --top-n 0
 .venv312/bin/python scripts/batch_research.py --group all --top-n 0 --skip-recent-days 0 --data-only --apply
-.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --skip-recent-days 0 --batch-size 2 --snapshot-concurrency 3 --depth standard --apply
+.venv312/bin/python scripts/batch_research.py --group all --top-n 0 --skip-recent-days 30 --analysis-mode snapshot --analysis-concurrency 1 --apply
 ```
+
+125 只级别的报告不要再挤在 `/ai` 右下角阅读，统一进入 `/reports` 做筛选、对比、导出和建仓建议生成。
 
 完整步骤见 [docs/data_initialization_and_batch_research.md](docs/data_initialization_and_batch_research.md)。
 
@@ -167,6 +171,7 @@ python -m unittest discover tests
 python -m py_compile scripts/init_from_files.py scripts/batch_research.py
 node --check static/js/hermes.js
 node --check static/js/shadow.js
+node --check static/js/ai-task-client.js static/js/ai.js static/js/reports.js
 npm run typecheck
 npm run build
 ```

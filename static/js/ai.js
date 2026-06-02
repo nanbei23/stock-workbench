@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadReports(),
         loadIndices(),
         loadTaskCenter(),
+        loadBatchResearchJobs(),
         loadReportQuality(),
         loadAiReadiness(),
         loadStrategyReview(),
@@ -24,11 +25,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     initIdleStages();
     pollQueueStatus();
     setInterval(pollQueueStatus, 10000);
+    setInterval(loadBatchResearchJobs, 5000);
     pollAnomalies();
     setInterval(pollAnomalies, 30000);
     restoreActiveTask();
     handleResponsiveLayout();
     window.addEventListener('resize', handleResponsiveLayout);
+    const reportId = new URLSearchParams(window.location.search).get('report_id');
+    if (reportId) viewReport(Number(reportId));
 });
 
 let selectedCardCode = null;
@@ -215,15 +219,14 @@ async function batchAnalyze() {
     try {
         const dc = getActiveDepthConfig();
         if (!dc) return;
-        const resp = await aiTaskClient().batch({
+        const resp = await aiTaskClient().batchReport({
             codes,
             depth: currentDepth,
-            selected_analysts: dc.analysts,
             debate_rounds: dc.debate_rounds,
             risk_rounds: dc.risk_rounds,
-            mode: currentModelMode
+            batch_size: 2
         });
-        showToast(resp.message || `已提交 ${resp.count} 个分析任务`, 'success');
+        showToast(`后台批量报告任务已创建：${resp.job_id}`, 'success');
         clearSelection();
         pollQueueStatus();
         loadTaskCenter();
@@ -1204,6 +1207,103 @@ async function cancelQueuedTask(taskId) {
         pollQueueStatus();
     } catch(e) {
         showToast('取消失败: ' + e.message, 'error');
+    }
+}
+
+const BATCH_JOB_TYPE_LABELS = {
+    data_prefetch: '七层数据',
+    report_generation: '报告生成',
+    position_plan: '建仓建议'
+};
+
+const BATCH_STATUS_LABELS = {
+    pending: '待执行',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+    interrupted: '已中断',
+    cancelled: '已取消'
+};
+
+async function loadBatchResearchJobs() {
+    const el = document.getElementById('batchResearchPanel');
+    if (!el) return;
+    try {
+        const data = await aiTaskClient().batchResearchJobs({ limit: '10' });
+        const jobs = data.jobs || [];
+        if (!jobs.length) {
+            el.innerHTML = '<div class="empty-row">暂无批量任务</div>';
+            return;
+        }
+        el.innerHTML = jobs.map(job => {
+            const total = Number(job.total_count || 0);
+            const done = Number(job.completed_count || 0) + Number(job.skipped_count || 0) + Number(job.waiting_count || 0) + Number(job.failed_count || 0);
+            const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+            const retry = Number(job.failed_count || 0) || Number(job.waiting_count || 0)
+                ? `<button class="btn btn-sm" onclick="retryBatchResearch('${escapeAttr(job.job_id)}')">重试</button>`
+                : '';
+            const resume = ['pending','failed','interrupted'].includes(job.status)
+                ? `<button class="btn btn-sm" onclick="resumeBatchResearch('${escapeAttr(job.job_id)}')">继续</button>`
+                : '';
+            return `<div class="ai-task-card batch-job-card">
+                <div class="ai-task-main">
+                    <div class="ai-task-title">${escapeHtml(BATCH_JOB_TYPE_LABELS[job.job_type] || job.name || '批量任务')} <span>${escapeHtml(job.job_id)}</span></div>
+                    <div class="ai-task-meta">${escapeHtml(BATCH_STATUS_LABELS[job.status] || job.status)} · 完成${Number(job.completed_count||0)} / 跳过${Number(job.skipped_count||0)} / 待数据${Number(job.waiting_count||0)} / 失败${Number(job.failed_count||0)}</div>
+                    <div class="mini-progress"><span style="width:${pct}%"></span></div>
+                    ${job.current_code ? `<div class="ai-task-meta">当前：${escapeHtml(job.current_code)}</div>` : ''}
+                </div>
+                <div class="ai-task-actions">${resume}${retry}</div>
+            </div>`;
+        }).join('');
+    } catch(e) {
+        el.innerHTML = `<div class="empty-row">批量任务加载失败：${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function createBatchResearchJob(type) {
+    const labels = {
+        data_prefetch: '创建七层数据预取任务？',
+        report_generation: '创建快照报告生成任务？最近已有报告会自动跳过。',
+        position_plan: '基于已有报告生成建仓建议？'
+    };
+    if (!confirm(labels[type] || '创建批量任务？')) return;
+    try {
+        const payload = {
+            job_type: type,
+            group: 'all',
+            top_n: 0,
+            skip_recent_days: type === 'data_prefetch' ? 0 : 30,
+            snapshot_concurrency: 3,
+            analysis_mode: 'snapshot',
+            analysis_concurrency: 1,
+            snapshot_model_tier: 'deep',
+            plan_top_n: 10
+        };
+        const resp = await aiTaskClient().createBatchResearch(payload);
+        showToast(`批量任务已创建：${resp.job_id}`, 'success');
+        await loadBatchResearchJobs();
+    } catch(e) {
+        showToast('创建批量任务失败: ' + e.message, 'error');
+    }
+}
+
+async function resumeBatchResearch(jobId) {
+    try {
+        await aiTaskClient().resumeBatchResearch(jobId);
+        showToast('已继续批量任务', 'success');
+        await loadBatchResearchJobs();
+    } catch(e) {
+        showToast('继续失败: ' + e.message, 'error');
+    }
+}
+
+async function retryBatchResearch(jobId) {
+    try {
+        await aiTaskClient().retryBatchResearch(jobId);
+        showToast('已重试失败项', 'success');
+        await loadBatchResearchJobs();
+    } catch(e) {
+        showToast('重试失败: ' + e.message, 'error');
     }
 }
 

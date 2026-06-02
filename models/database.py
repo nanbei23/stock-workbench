@@ -144,6 +144,73 @@ CREATE TABLE IF NOT EXISTS stock_data_snapshots (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS batch_report_jobs (
+    job_id TEXT PRIMARY KEY,
+    name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    total_count INTEGER DEFAULT 0,
+    submitted_count INTEGER DEFAULT 0,
+    completed_count INTEGER DEFAULT 0,
+    failed_count INTEGER DEFAULT 0,
+    payload_json TEXT DEFAULT '{}',
+    result_json TEXT DEFAULT '{}',
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS batch_report_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT,
+    task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS batch_jobs (
+    job_id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    total_count INTEGER DEFAULT 0,
+    completed_count INTEGER DEFAULT 0,
+    failed_count INTEGER DEFAULT 0,
+    skipped_count INTEGER DEFAULT 0,
+    waiting_count INTEGER DEFAULT 0,
+    running_count INTEGER DEFAULT 0,
+    current_code TEXT,
+    payload_json TEXT DEFAULT '{}',
+    result_json TEXT DEFAULT '{}',
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS batch_job_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    snapshot_id INTEGER,
+    report_id INTEGER,
+    task_id TEXT,
+    error TEXT,
+    retry_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS anomaly_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
@@ -409,6 +476,8 @@ CREATE INDEX IF NOT EXISTS idx_conditional_orders_code_status ON conditional_ord
 CREATE INDEX IF NOT EXISTS idx_analysis_reports_code_created ON analysis_reports(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_code_created ON stock_data_snapshots(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_run ON stock_data_snapshots(run_id, code);
+CREATE INDEX IF NOT EXISTS idx_batch_report_jobs_status_created ON batch_report_jobs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_batch_report_items_job_status ON batch_report_items(job_id, status);
 CREATE INDEX IF NOT EXISTS idx_anomaly_logs_code_created ON anomaly_logs(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_code_cached ON news_cache(code6, cached_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_url ON news_cache(url);
@@ -615,6 +684,91 @@ MIGRATIONS = [
             ON stock_data_snapshots(code, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_stock_data_snapshots_run
             ON stock_data_snapshots(run_id, code);
+        """,
+    ),
+    (
+        8,
+        "batch_report_jobs",
+        """
+        CREATE TABLE IF NOT EXISTS batch_report_jobs (
+            job_id TEXT PRIMARY KEY,
+            name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            total_count INTEGER DEFAULT 0,
+            submitted_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            payload_json TEXT DEFAULT '{}',
+            result_json TEXT DEFAULT '{}',
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS batch_report_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            task_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_report_jobs_status_created
+            ON batch_report_jobs(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_batch_report_items_job_status
+            ON batch_report_items(job_id, status);
+        """,
+    ),
+    (
+        9,
+        "batch_research_jobs",
+        """
+        CREATE TABLE IF NOT EXISTS batch_jobs (
+            job_id TEXT PRIMARY KEY,
+            job_type TEXT NOT NULL,
+            name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            total_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            skipped_count INTEGER DEFAULT 0,
+            waiting_count INTEGER DEFAULT 0,
+            running_count INTEGER DEFAULT 0,
+            current_code TEXT,
+            payload_json TEXT DEFAULT '{}',
+            result_json TEXT DEFAULT '{}',
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS batch_job_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            code TEXT NOT NULL,
+            name TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            snapshot_id INTEGER,
+            report_id INTEGER,
+            task_id TEXT,
+            error TEXT,
+            retry_count INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_jobs_type_status_created
+            ON batch_jobs(job_type, status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_items_job_status
+            ON batch_job_items(job_id, status);
+        CREATE INDEX IF NOT EXISTS idx_batch_job_items_code
+            ON batch_job_items(code);
         """,
     ),
 ]

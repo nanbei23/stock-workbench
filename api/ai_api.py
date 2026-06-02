@@ -211,10 +211,12 @@ async def get_active_task():
 async def list_reports(
     code: Optional[str] = None,
     signal: Optional[str] = None,
-    limit: int = Query(default=20, le=100),
+    depth: Optional[str] = None,
+    model_mode: Optional[str] = None,
+    limit: int = Query(default=20, le=500),
 ):
     """历史分析报告列表"""
-    return await ai_report_service.list_reports(code=code, signal=signal, limit=limit)
+    return await ai_report_service.list_reports(code=code, signal=signal, depth=depth, model_mode=model_mode, limit=limit)
 
 
 @router.get("/ai/reports/{report_id}")

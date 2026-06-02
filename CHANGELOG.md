@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.8.0 - 2026-06-02
+
+### Added
+
+- Added persistent batch research jobs for data prefetch, report generation, and position-plan generation.
+- Added `/api/batch-research` API surfaces for non-blocking job creation, progress polling, resume, and failed-item retry.
+- Added the `/reports` AI report library with report filtering, preview, selected-report position-plan generation, and Markdown/JSON export.
+- Added regression coverage for snapshot prefetch skipping, report-generation resume, failed-item retry, interruption recovery, legacy batch-report API compatibility, and report-list metadata.
+
+### Changed
+
+- Changed AI batch analysis from direct queue submission to background research jobs, so long 125-stock batches do not block the page.
+- Changed `scripts/batch_research.py` full-analysis default to `--analysis-mode snapshot`, reusing validated `stock_data_snapshots` to generate and persist AI reports without re-entering TradingAgents' Eastmoney-dependent online data path.
+- Added explicit `--analysis-mode tradingagents`, `--analysis-concurrency`, `--snapshot-model-tier`, and `--refresh-snapshots` controls for batch research.
+- Changed the AI page report area to a compact "recent reports" panel and moved large-batch report consumption into the dedicated report library.
+- Updated release metadata, package metadata, installer badge, frontend cache versions, release docs, and macOS x86 package default version to `2.8.0`.
+
+### Fixed
+
+- Recovered stale running batch research jobs on service restart by marking interrupted jobs and items explicitly.
+- Kept `/api/batch-reports` compatibility while routing new batches through the v2.8 snapshot-first research pipeline.
+
 ## 2.7.3 - 2026-06-02
 
 ### Added

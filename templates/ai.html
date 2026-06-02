@@ -180,6 +180,23 @@
             </div>
         </div>
 
+        <div class="ai-section ai-right-section">
+            <div class="section-header">
+                <h3>批量研究</h3>
+                <div class="section-actions">
+                    <button class="btn btn-sm" onclick="createBatchResearchJob('data_prefetch')">预取数据</button>
+                    <button class="btn btn-sm btn-primary" onclick="createBatchResearchJob('report_generation')">生成报告</button>
+                </div>
+            </div>
+            <div id="batchResearchPanel" class="report-quality-panel">
+                <div class="empty-row">暂无批量任务</div>
+            </div>
+            <div class="section-actions" style="margin-top:8px;justify-content:space-between">
+                <button class="btn btn-sm" onclick="createBatchResearchJob('position_plan')">生成建仓建议</button>
+                <a class="btn btn-sm" href="/reports">进入报告库</a>
+            </div>
+        </div>
+
         <div class="ai-section ai-right-section report-quality-section">
             <div class="section-header">
                 <h3>报告质量复盘</h3>
@@ -242,9 +259,10 @@
 
         <div class="ai-section ai-right-section" id="reportsSection">
             <div class="section-header">
-                <h3>历史报告</h3>
+                <h3>最近报告</h3>
                 <div class="section-actions">
                     <input id="reportSearch" type="text" class="form-input-sm" placeholder="搜索代码..." onkeyup="searchReports(event)">
+                    <a class="btn btn-sm" href="/reports">全部</a>
                 </div>
             </div>
             <div id="reportsList" class="reports-list">
@@ -256,6 +274,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-task-client.js?v=2.7.3"></script>
-<script src="/static/js/ai.js?v=2.7.3"></script>
+<script src="/static/js/ai-task-client.js?v=2.8.0"></script>
+<script src="/static/js/ai.js?v=2.8.0"></script>
 {% endblock %}

@@ -26,10 +26,10 @@ def _name_from_raw(raw_state):
     return raw.get("name", "") if isinstance(raw, dict) else ""
 
 
-async def list_reports(code=None, signal=None, limit=20):
+async def list_reports(code=None, signal=None, limit=20, depth=None, model_mode=None):
     db = await get_db()
     try:
-        rows = await repo.list_reports(db, code=code, signal=signal, limit=limit)
+        rows = await repo.list_reports(db, code=code, signal=signal, limit=max(1, min(limit, 500)), depth=depth, model_mode=model_mode)
         names = await repo.watchlist_name_map(db)
     finally:
         await db.close()
@@ -37,7 +37,15 @@ async def list_reports(code=None, signal=None, limit=20):
     reports = []
     for row in rows:
         row["name"] = _name_from_raw(row.get("raw_state")) or names.get(row.get("code", ""), "")
+        fact_check = _loads(row.get("fact_check"))
+        bystander = _loads(row.get("bystander_verify"))
+        row["fact_accuracy"] = _fact_accuracy(fact_check)
+        row["hallucinations"] = _hallucination_count(fact_check, bystander)
+        row["has_snapshot"] = bool(row.get("market_snapshot"))
         row.pop("raw_state", None)
+        row.pop("fact_check", None)
+        row.pop("bystander_verify", None)
+        row.pop("market_snapshot", None)
         reports.append(row)
     return {"count": len(reports), "reports": reports}
 
