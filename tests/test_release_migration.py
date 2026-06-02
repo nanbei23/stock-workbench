@@ -86,6 +86,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("get_worker_pool_config", script)
         self.assertIn("subprocess.Popen", script)
         self.assertIn("asyncio.run(init_db())", script)
+        self.assertIn("worker pool is idle", script)
         self.assertNotIn("init_db_sync", script)
         self.assertIn("/worker-pool/config", js)
         self.assertIn("saveWorkerPoolConfig", js)

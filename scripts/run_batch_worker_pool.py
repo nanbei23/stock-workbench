@@ -63,19 +63,31 @@ def main() -> int:
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
     asyncio.run(init_db())
-    workers = _enabled_workers()
-    if not workers:
-        print("No enabled batch workers configured. Configure them in Settings > AI engine > Worker pool.", flush=True)
-        return 1
-
-    commands = {worker["id"]: _worker_command(worker) for worker in workers}
     if args.dry_run:
+        workers = _enabled_workers()
+        if not workers:
+            print("No enabled batch workers configured. Configure them in Settings > AI engine > Worker pool.", flush=True)
+            return 1
+        commands = {worker["id"]: _worker_command(worker) for worker in workers}
         for worker_id, command in commands.items():
             print(worker_id + ": " + " ".join(command), flush=True)
         return 0
 
     processes: dict[str, subprocess.Popen] = {}
     while not STOP:
+        workers = _enabled_workers()
+        commands = {worker["id"]: _worker_command(worker) for worker in workers}
+        if not commands:
+            print("No enabled batch workers configured; worker pool is idle.", flush=True)
+            time.sleep(max(5.0, args.restart_delay))
+            continue
+        for worker_id, proc in list(processes.items()):
+            if worker_id in commands:
+                continue
+            if proc.poll() is None:
+                print(f"stopping disabled worker {worker_id}", flush=True)
+                proc.terminate()
+            processes.pop(worker_id, None)
         for worker_id, command in commands.items():
             proc = processes.get(worker_id)
             if proc and proc.poll() is None:
