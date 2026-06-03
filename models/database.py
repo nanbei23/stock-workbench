@@ -293,6 +293,8 @@ CREATE TABLE IF NOT EXISTS position_plans (
     role_models_json TEXT DEFAULT '{}',
     cash_snapshot_json TEXT DEFAULT '{}',
     portfolio_snapshot_json TEXT DEFAULT '{}',
+    decision_market_snapshot_json TEXT DEFAULT '{}',
+    market_context_captured_at TEXT,
     summary TEXT,
     risk_controls_json TEXT DEFAULT '[]',
     role_discussion_json TEXT DEFAULT '[]',
@@ -986,6 +988,8 @@ MIGRATIONS = [
             role_models_json TEXT DEFAULT '{}',
             cash_snapshot_json TEXT DEFAULT '{}',
             portfolio_snapshot_json TEXT DEFAULT '{}',
+            decision_market_snapshot_json TEXT DEFAULT '{}',
+            market_context_captured_at TEXT,
             summary TEXT,
             risk_controls_json TEXT DEFAULT '[]',
             role_discussion_json TEXT DEFAULT '[]',
@@ -1107,6 +1111,19 @@ async def ensure_position_plan_adoption_columns(db):
     )
 
 
+async def ensure_position_plan_market_context_columns(db):
+    """Backfill decision-time market context columns for existing position plan tables."""
+    rows = await db.execute_fetchall("PRAGMA table_info(position_plans)")
+    columns = {row[1] for row in rows}
+    additions = {
+        "decision_market_snapshot_json": "ALTER TABLE position_plans ADD COLUMN decision_market_snapshot_json TEXT DEFAULT '{}'",
+        "market_context_captured_at": "ALTER TABLE position_plans ADD COLUMN market_context_captured_at TEXT",
+    }
+    for column, sql in additions.items():
+        if column not in columns:
+            await db.execute(sql)
+
+
 async def ensure_batch_job_item_steps_table(db):
     """Backfill role-level batch item checkpoints for databases that already ran v9."""
     await db.executescript(
@@ -1225,6 +1242,7 @@ async def init_db():
         await ensure_batch_job_item_steps_table(db)
         await ensure_batch_runtime_ops(db)
         await ensure_position_plan_adoption_columns(db)
+        await ensure_position_plan_market_context_columns(db)
         await db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
         await db.commit()
     return True

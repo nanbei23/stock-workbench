@@ -144,6 +144,32 @@ a { color: var(--color-accent); text-decoration: none; }
   overflow-y: auto;
   padding: 8px;
 }
+.stock-list-filter {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  background: color-mix(in srgb, var(--bg-card), transparent 10%);
+}
+.stock-list-filter input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border-light, rgba(0,0,0,0.08));
+  border-radius: var(--radius-sm);
+  background: var(--bg-input, var(--bg-hover, var(--bg-card)));
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.stock-list-filter input::placeholder {
+  color: var(--text-muted);
+}
+.stock-list-filter input:focus {
+  border-color: var(--color-accent);
+  background: var(--bg-card);
+  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.12);
+}
 
 /* --- 股票卡片（左侧名称+代码+价格，右侧当日盈亏/持仓盈亏/当日涨幅，底部色条）--- */
 .stock-card-list {
@@ -1614,6 +1640,40 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
   flex-direction: column;
   gap: 8px;
 }
+.ai-last-signal-tools,
+.ai-market-tools {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-card), transparent 18%);
+}
+.ai-last-signal-title,
+.ai-batch-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ai-last-signal-title span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.ai-last-signal-tools .signal-filter-grid.compact,
+.ai-market-tools .signal-filter-grid.compact {
+  gap: 5px;
+}
+.ai-last-signal-tools .signal-filter-chip,
+.ai-market-tools .signal-filter-chip {
+  min-height: 26px;
+  padding: 0 7px;
+  font-size: 0.7rem;
+}
+.ai-batch-select-row .btn {
+  flex: 1;
+}
 /* AI左栏中的股票卡片 — 复用stock-card样式 + 复选框 */
 .ai-stock-card {
   position: relative;
@@ -1661,6 +1721,11 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
   height: 16px;
   cursor: pointer;
   accent-color: var(--color-accent);
+}
+.sc-last-signal {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 6px;
 }
 
 /* 批量操作栏 */
@@ -3865,6 +3930,40 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 .signal-underweight {
   background: rgba(123, 196, 127, 0.15);
   color: #7BC47F;
+}
+
+.signal-no-report {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text-muted);
+}
+
+.report-group-header td {
+  background: color-mix(in srgb, var(--bg-hover), var(--color-accent) 8%);
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+}
+
+.report-group-header strong {
+  color: var(--text-primary);
+  margin-right: 10px;
+}
+
+.report-group-header span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.report-group-toggle {
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .report-code {
@@ -6966,6 +7065,10 @@ body.dense-watch-mode .portfolio-container {
   gap: 8px;
 }
 
+.role-model-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 .role-model-row {
   display: grid;
   grid-template-columns: minmax(88px, 0.45fr) minmax(0, 1fr);
@@ -6977,6 +7080,25 @@ body.dense-watch-mode .portfolio-container {
   color: var(--text-secondary);
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.mini-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.mini-check-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
 }
 
 .report-library .form-input {
@@ -7084,6 +7206,16 @@ body.dense-watch-mode .portfolio-container {
   font-size: 0.92rem;
   line-height: 1.25;
   word-break: break-word;
+}
+
+.worker-status-panel {
+  max-height: 260px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.worker-status-table td {
+  vertical-align: top;
 }
 
 .report-library-table .library-action-row {
@@ -7207,6 +7339,89 @@ body.dense-watch-mode .portfolio-container {
 
 .preview-block p {
   margin: 0 0 8px;
+}
+.structured-report {
+  display: grid;
+  gap: 8px;
+}
+.structured-row {
+  display: grid;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light), transparent 35%);
+}
+.structured-row:last-child {
+  border-bottom: 0;
+}
+.structured-key {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.structured-value {
+  min-width: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.structured-report.depth-1,
+.structured-report.depth-2,
+.structured-report.depth-3 {
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--color-accent), transparent 72%);
+}
+.structured-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.structured-list li {
+  margin: 4px 0;
+}
+.structured-empty {
+  color: var(--text-muted);
+}
+
+.batch-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.batch-analysis-card {
+  display: grid;
+  gap: 4px;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.batch-analysis-card span {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.batch-analysis-card strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+}
+
+.batch-analysis-card em {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.batch-analysis-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-primary);
+  line-height: 1.65;
 }
 
 .batch-item-preview,

@@ -17,6 +17,44 @@
             <button class="btn btn-sm ai-panel-close" onclick="toggleLeftPanel()" title="收起左栏">收起</button>
         </div>
     </div>
+        <div class="stock-list-filter ai-stock-filter">
+            <input type="search" id="aiStockSearch" placeholder="搜索股票名称 / 代码"
+                   oninput="filterAIStocks(this.value)">
+        </div>
+        <div class="ai-market-tools">
+            <div class="ai-last-signal-title">
+                <span>交易市场</span>
+            </div>
+            <div class="signal-filter-grid compact" id="aiMarketFilters" aria-label="交易市场筛选">
+                <button type="button" class="signal-filter-chip active" data-market="tradable" onclick="setAIMarketFilter('tradable')">可交易</button>
+                <button type="button" class="signal-filter-chip" data-market="all" onclick="setAIMarketFilter('all')">全部</button>
+                <button type="button" class="signal-filter-chip" data-market="main" onclick="setAIMarketFilter('main')">主板</button>
+                <button type="button" class="signal-filter-chip" data-market="gem" onclick="setAIMarketFilter('gem')">创业板</button>
+                <button type="button" class="signal-filter-chip" data-market="star" onclick="setAIMarketFilter('star')">科创板</button>
+                <button type="button" class="signal-filter-chip" data-market="bse" onclick="setAIMarketFilter('bse')">北交所</button>
+            </div>
+        </div>
+        <div class="ai-last-signal-tools">
+            <div class="ai-last-signal-title">
+                <span>上次报告信号</span>
+                <button class="btn btn-sm" onclick="clearLastSignalFilters()">清除</button>
+            </div>
+            <div class="signal-filter-grid compact" id="aiLastSignalFilters" aria-label="上次报告信号多选筛选">
+                <button type="button" class="signal-filter-chip active" data-signal="" onclick="toggleLastSignalFilter('')">全部</button>
+                <button type="button" class="signal-filter-chip" data-signal="STRONG_BUY" onclick="toggleLastSignalFilter('STRONG_BUY')">强烈买入</button>
+                <button type="button" class="signal-filter-chip" data-signal="BUY" onclick="toggleLastSignalFilter('BUY')">买入</button>
+                <button type="button" class="signal-filter-chip" data-signal="OVERWEIGHT" onclick="toggleLastSignalFilter('OVERWEIGHT')">增持</button>
+                <button type="button" class="signal-filter-chip" data-signal="HOLD" onclick="toggleLastSignalFilter('HOLD')">持有</button>
+                <button type="button" class="signal-filter-chip" data-signal="UNDERWEIGHT" onclick="toggleLastSignalFilter('UNDERWEIGHT')">减持</button>
+                <button type="button" class="signal-filter-chip" data-signal="SELL" onclick="toggleLastSignalFilter('SELL')">卖出</button>
+                <button type="button" class="signal-filter-chip" data-signal="STRONG_SELL" onclick="toggleLastSignalFilter('STRONG_SELL')">强烈卖出</button>
+                <button type="button" class="signal-filter-chip" data-signal="NO_REPORT" onclick="toggleLastSignalFilter('NO_REPORT')">无报告</button>
+            </div>
+            <div class="ai-batch-select-row">
+                <button class="btn btn-sm" onclick="selectVisibleAIStocks()">全选当前</button>
+                <button class="btn btn-sm" onclick="selectAIStocksByLastSignals()">按信号选择</button>
+            </div>
+        </div>
         <div class="ai-stock-list" id="aiStockList">
             <!-- JS填充：复用 stock-card 样式 -->
         </div>
@@ -292,6 +330,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-task-client.js?v=2.9.1"></script>
-<script src="/static/js/ai.js?v=2.9.1"></script>
+<script src="/static/js/ai-task-client.js?v=2.9.2"></script>
+<script src="/static/js/ai.js?v=2.9.2-market-permissions"></script>
 {% endblock %}

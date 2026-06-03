@@ -66,6 +66,8 @@ REQUIRED_COLUMNS: dict[str, set[str]] = {
         "model_config_json",
         "role_discussion_json",
         "recommendations_json",
+        "decision_market_snapshot_json",
+        "market_context_captured_at",
         "confirmed_snapshot_json",
     },
     "position_plan_items": {

@@ -29,6 +29,17 @@
                     <button type="button" class="signal-filter-chip" data-signal="STRONG_SELL" onclick="toggleSignalFilter('STRONG_SELL')">强烈卖出</button>
                 </div>
             </div>
+            <div class="library-filter">
+                <span>交易市场</span>
+                <div class="signal-filter-grid" id="reportMarketFilters" aria-label="交易市场筛选">
+                    <button type="button" class="signal-filter-chip active" data-market="all" onclick="setReportMarketFilter('all')">全部</button>
+                    <button type="button" class="signal-filter-chip" data-market="tradable" onclick="setReportMarketFilter('tradable')">可交易</button>
+                    <button type="button" class="signal-filter-chip" data-market="main" onclick="setReportMarketFilter('main')">主板</button>
+                    <button type="button" class="signal-filter-chip" data-market="gem" onclick="setReportMarketFilter('gem')">创业板</button>
+                    <button type="button" class="signal-filter-chip" data-market="star" onclick="setReportMarketFilter('star')">科创板</button>
+                    <button type="button" class="signal-filter-chip" data-market="bse" onclick="setReportMarketFilter('bse')">北交所</button>
+                </div>
+            </div>
             <label class="library-filter">
                 <span>排序</span>
                 <select id="reportSortBy" class="form-input" onchange="filterReportLibrary()">
@@ -36,6 +47,14 @@
                     <option value="confidence_desc">置信度高到低</option>
                     <option value="risk_asc">风险低到高</option>
                     <option value="risk_desc">风险高到低</option>
+                </select>
+            </label>
+            <label class="library-filter">
+                <span>分组</span>
+                <select id="reportGroupBy" class="form-input" onchange="filterReportLibrary()">
+                    <option value="none" selected>不分组</option>
+                    <option value="batch">按批量任务折叠</option>
+                    <option value="date">按日期折叠</option>
                 </select>
             </label>
             <label class="library-filter">
@@ -143,6 +162,9 @@
                 <div><span>后台模式</span><strong>launchd / 手动</strong></div>
                 <div><span>最近心跳</span><strong>--</strong></div>
             </div>
+            <div class="worker-status-panel" id="workerStatusPanel">
+                <div class="library-empty-state">正在加载 Worker 状态...</div>
+            </div>
             <table class="report-library-table">
                 <thead>
                     <tr>
@@ -213,6 +235,31 @@
                     <div class="library-empty-state">正在读取模型配置...</div>
                 </div>
             </div>
+            <div class="library-filter">
+                <span>允许参与的 Worker</span>
+                <div class="role-model-grid compact" id="planWorkerGrid">
+                    <div class="library-empty-state">创建时读取 Worker 配置...</div>
+                </div>
+            </div>
+            <div class="library-filter">
+                <span>本任务主模型池</span>
+                <div class="role-model-grid compact" id="planPrimaryProviderGrid">
+                    <div class="library-empty-state">创建时读取模型池...</div>
+                </div>
+            </div>
+            <div class="library-filter">
+                <span>备用模型池</span>
+                <div class="role-model-grid compact" id="planFallbackProviderGrid">
+                    <div class="library-empty-state">创建时读取模型池...</div>
+                </div>
+            </div>
+            <label class="library-filter">
+                <span>额度耗尽策略</span>
+                <select id="planQuotaActionInput" class="form-input">
+                    <option value="switch_model" selected>自动切换备用模型</option>
+                    <option value="pause">暂停等待人工处理</option>
+                </select>
+            </label>
             <label class="library-filter">
                 <span>最多买入候选</span>
                 <input id="planTopNInput" class="form-input" type="number" min="1" max="50" step="1" value="10">
@@ -231,6 +278,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-task-client.js?v=2.9.1"></script>
-<script src="/static/js/reports.js?v=2.9.1"></script>
+<script src="/static/js/ai-task-client.js?v=2.9.2"></script>
+<script src="/static/js/reports.js?v=2.9.2-market-permissions"></script>
 {% endblock %}

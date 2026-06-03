@@ -16,6 +16,7 @@ BATCH_WORKER_SCRIPT = ROOT / "scripts" / "run_batch_worker.py"
 WORKER_POOL_SCRIPT = ROOT / "scripts" / "run_batch_worker_pool.py"
 SETTINGS_JS = ROOT / "static" / "js" / "settings.js"
 SETTINGS_TEMPLATE = ROOT / "templates" / "settings.html"
+STYLE_CSS = ROOT / "static" / "css" / "style.css"
 
 
 def load_migration_module():
@@ -57,7 +58,8 @@ class ReleaseMigrationTests(unittest.TestCase):
         js = AI_JS.read_text(encoding="utf-8")
         html = AI_TEMPLATE.read_text(encoding="utf-8")
 
-        self.assertIn("const codes = getSelectedCodes();", js)
+        self.assertIn("const rawCodes = getSelectedCodes();", js)
+        self.assertIn("StockMarketPermissions?.isAllowed", js)
         self.assertIn("function getBatchResearchOptions()", js)
         self.assertIn("请先在左侧自选股列表勾选", js)
         self.assertIn("codes,", js)
@@ -65,6 +67,8 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("analysis_depth: batchOptions.depth", js)
         self.assertIn("model_mode: batchOptions.modelMode", js)
         self.assertIn("snapshot_model_tier: batchOptions.modelTier", js)
+        self.assertIn("preflightBatchResearch(payload)", js)
+        self.assertIn("预计总调用", js)
         self.assertNotIn("group: 'all',\n            top_n: 0", js)
         self.assertNotIn("snapshot_model_tier: 'deep'", js)
         self.assertIn('id="batchDepthSelect"', html)
@@ -91,6 +95,125 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("/worker-pool/config", js)
         self.assertIn("saveWorkerPoolConfig", js)
         self.assertIn("workerPoolList", html)
+
+    def test_reports_page_exposes_worker_panel_preflight_and_failure_retry(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+
+        self.assertIn("workerStatusPanel", html)
+        self.assertIn("planWorkerGrid", html)
+        self.assertIn("planPrimaryProviderGrid", html)
+        self.assertIn("planFallbackProviderGrid", html)
+        self.assertIn("previewFailureGroups", js)
+        self.assertIn("previewRuntimeStats", js)
+        self.assertIn("/failure-groups", js)
+        self.assertIn("/runtime-stats", js)
+        self.assertIn("allowed_worker_ids", js)
+        self.assertIn("primary_provider_ids", js)
+        self.assertIn("previewBatchAnalysis", js)
+        self.assertIn("/analysis", js)
+        self.assertIn("信号分布", js)
+
+    def test_reports_page_supports_grouped_collapsible_report_list(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="reportGroupBy"', html)
+        self.assertIn("renderGroupedReportRows", js)
+        self.assertIn("collapsedReportGroups", js)
+        self.assertIn("toggleReportGroup", js)
+        self.assertIn("report-group-header", js)
+
+    def test_report_preview_renders_structured_json_sections(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        css = STYLE_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("formatStructuredValue", js)
+        self.assertIn("structured-report", js)
+        self.assertIn("formatMarkdown(report.risk_debate || '暂无')", js)
+        self.assertNotIn("formatMarkdown(typeof report.risk_debate === 'string' ? report.risk_debate : JSON.stringify", js)
+        self.assertIn(".structured-report", css)
+        self.assertIn(".structured-key", css)
+
+    def test_ai_page_supports_last_report_signal_filter_and_batch_select(self):
+        js = AI_JS.read_text(encoding="utf-8")
+        html = AI_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("aiLastSignalFilters", html)
+        self.assertIn("selectVisibleAIStocks", html)
+        self.assertIn("selectAIStocksByLastSignals", html)
+        self.assertIn("AI_SIGNAL_RANK", js)
+        self.assertIn("last_report_signal", js)
+        self.assertIn("selectedLastReportSignals", js)
+        self.assertIn("renderAIStockCards", js)
+        self.assertIn("selectAIStocksByLastSignals", js)
+
+    def test_left_stock_panels_expose_unified_search(self):
+        ai_js = AI_JS.read_text(encoding="utf-8")
+        ai_html = AI_TEMPLATE.read_text(encoding="utf-8")
+        stock_js = (ROOT / "static/js/stock.js").read_text(encoding="utf-8")
+        stock_html = (ROOT / "templates/index.html").read_text(encoding="utf-8")
+        portfolio_js = (ROOT / "static/js/portfolio.js").read_text(encoding="utf-8")
+        portfolio_html = (ROOT / "templates/portfolio.html").read_text(encoding="utf-8")
+        css = STYLE_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("stockListFilter", stock_html)
+        self.assertIn("filterWatchlistStocks", stock_js)
+        self.assertIn("portfolioListFilter", portfolio_html)
+        self.assertIn("filterPortfolioStocks", portfolio_js)
+        self.assertIn("aiStockSearch", ai_html)
+        self.assertIn("filterAIStocks", ai_js)
+        self.assertIn(".stock-list-filter", css)
+
+    def test_market_permission_filters_are_exposed_on_ai_reports_and_settings(self):
+        ai_js = AI_JS.read_text(encoding="utf-8")
+        ai_html = AI_TEMPLATE.read_text(encoding="utf-8")
+        reports_js = (ROOT / "static/js/reports.js").read_text(encoding="utf-8")
+        reports_html = (ROOT / "templates/reports.html").read_text(encoding="utf-8")
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+        base_html = (ROOT / "templates/base.html").read_text(encoding="utf-8")
+
+        self.assertIn("market-permissions.js", base_html)
+        self.assertIn("trade_market_star", settings_html)
+        self.assertIn("trade_market_bse", settings_html)
+        self.assertIn("aiMarketFilters", ai_html)
+        self.assertIn("setAIMarketFilter", ai_js)
+        self.assertIn("filterByTradingMarket", ai_js)
+        self.assertIn("reportMarketFilters", reports_html)
+        self.assertIn("setReportMarketFilter", reports_js)
+        self.assertIn("filterByTradingMarket", reports_js)
+
+    def test_position_plans_have_decision_market_snapshot_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "workbench.db"
+            with sqlite3.connect(db_path) as db:
+                db.execute(
+                    """
+                    CREATE TABLE position_plans (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        plan_id TEXT UNIQUE NOT NULL,
+                        title TEXT,
+                        status TEXT NOT NULL DEFAULT 'active'
+                    )
+                    """
+                )
+                db.commit()
+
+            import models.database as database
+            import asyncio
+            import aiosqlite
+
+            async def migrate():
+                async with aiosqlite.connect(str(db_path)) as adb:
+                    await database.ensure_position_plan_market_context_columns(adb)
+                    await adb.commit()
+
+            asyncio.run(migrate())
+            with sqlite3.connect(db_path) as db:
+                columns = {row[1] for row in db.execute("PRAGMA table_info(position_plans)").fetchall()}
+
+        self.assertIn("decision_market_snapshot_json", columns)
+        self.assertIn("market_context_captured_at", columns)
 
     def test_migration_script_upgrades_2_8_1_database(self):
         module = load_migration_module()

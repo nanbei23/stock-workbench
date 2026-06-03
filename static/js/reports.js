@@ -18,8 +18,11 @@
     let jobsLoaded = false;
     let modelProvidersLoaded = false;
     let modelProviders = [];
+    let workerStatusCache = null;
     const selected = new Set();
     const selectedSignals = new Set();
+    let reportMarketFilter = 'all';
+    const collapsedReportGroups = new Set();
     const POSITION_PLAN_ROLES = [
         ['portfolio_manager', '组合经理'],
         ['risk_manager', '风控经理'],
@@ -28,7 +31,13 @@
         ['chair', '最终裁决']
     ];
 
-    document.addEventListener('DOMContentLoaded', loadReportLibrary);
+    document.addEventListener('DOMContentLoaded', initReportLibrary);
+
+    async function initReportLibrary() {
+        if (window.StockMarketPermissions?.load) await window.StockMarketPermissions.load();
+        renderReportMarketFilterState();
+        await loadReportLibrary();
+    }
 
     async function requestJson(url, options) {
         const resp = await fetch(url, options || {});
@@ -67,6 +76,26 @@
         const d = new Date(value);
         if (Number.isNaN(d.getTime())) return String(value);
         return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+
+    function formatDate(value) {
+        if (!value) return '未知日期';
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return String(value).slice(0, 10) || '未知日期';
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function reportBatchKey(report) {
+        const taskId = String(report.task_id || '');
+        const match = taskId.match(/^snapshot-(.+)-(\d{6})$/);
+        if (match) return match[1];
+        return taskId ? `task:${taskId}` : 'manual';
+    }
+
+    function reportBatchLabel(groupKey) {
+        if (groupKey === 'manual') return '单次/手动报告';
+        if (groupKey.startsWith('task:')) return groupKey.slice(5);
+        return `批量任务 ${groupKey}`;
     }
 
     function stageLabel(value) {
@@ -125,6 +154,17 @@
         return 'signal-sell';
     }
 
+    function workerStateLabel(value) {
+        return {
+            running: '运行中',
+            online: '在线',
+            idle: '空闲',
+            stale: '卡死/陈旧',
+            offline: '离线',
+            disabled: '已停用'
+        }[value] || value || '--';
+    }
+
     function formatJsonBlock(value) {
         return `<pre>${escapeHtml(JSON.stringify(value || {}, null, 2))}</pre>`;
     }
@@ -134,8 +174,57 @@
         try {
             return JSON.parse(value);
         } catch (_err) {
-            return value;
+            try {
+                return JSON.parse(value.replace(/\\n/g, '\n'));
+            } catch (_err2) {
+                return value;
+            }
         }
+    }
+
+    function humanizeReportKey(key) {
+        return String(key || '')
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, ch => ch.toUpperCase());
+    }
+
+    function formatStructuredPrimitive(value) {
+        if (value == null || value === '') return '<span class="structured-empty">暂无</span>';
+        const raw = String(value).replace(/\\n/g, '\n');
+        if (window.marked && /[\n#>*`-]|\*\*/.test(raw)) return window.marked.parse(raw);
+        return `<span>${escapeHtml(raw)}</span>`;
+    }
+
+    function formatStructuredValue(value, depth = 0) {
+        const parsed = typeof value === 'string' ? parseJsonish(value) : value;
+        if (parsed == null || parsed === '') return '<span class="structured-empty">暂无</span>';
+        if (depth > 6) return formatStructuredPrimitive(parsed);
+        if (Array.isArray(parsed)) {
+            if (!parsed.length) return '<span class="structured-empty">暂无</span>';
+            return `<ul class="structured-list">${parsed.map(item => `<li>${formatStructuredValue(item, depth + 1)}</li>`).join('')}</ul>`;
+        }
+        if (typeof parsed === 'object') {
+            const entries = Object.entries(parsed).filter(([, val]) => val !== undefined && val !== null && val !== '');
+            if (!entries.length) return '<span class="structured-empty">暂无</span>';
+            return `<div class="structured-report depth-${Math.min(depth, 3)}">${entries.map(([key, val]) => `
+                <section class="structured-row">
+                    <div class="structured-key">${escapeHtml(humanizeReportKey(key))}</div>
+                    <div class="structured-value">${formatStructuredValue(val, depth + 1)}</div>
+                </section>
+            `).join('')}</div>`;
+        }
+        return formatStructuredPrimitive(parsed);
+    }
+
+    function metricCard(label, value, subtext = '') {
+        return `<div class="batch-analysis-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${subtext ? `<em>${escapeHtml(subtext)}</em>` : ''}</div>`;
+    }
+
+    function formatChange(value) {
+        if (value == null || value === '') return '--';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '--';
+        return `${num >= 0 ? '+' : ''}${num.toFixed(3)}%`;
     }
 
     function switchReportTab(tab) {
@@ -158,17 +247,36 @@
 
     async function loadWorkerRuntimeSummary() {
         const box = document.getElementById('workerRuntimeSummary');
+        const panel = document.getElementById('workerStatusPanel');
         if (!box) return;
         try {
             const data = await requestJson('/api/batch-research/workers?stale_minutes=15');
+            workerStatusCache = data;
             const workers = data.workers || [];
             const latestHeartbeat = workers.map(worker => worker.heartbeat_at).filter(Boolean).sort().pop();
             box.innerHTML = `
                 <div><span>Worker 在线</span><strong>${Number(data.summary?.online || 0)}</strong></div>
-                <div><span>陈旧 Worker</span><strong>${Number(data.summary?.stale || 0)}</strong></div>
-                <div><span>后台模式</span><strong>${workers.some(worker => String(worker.worker_id || '').includes('launchd')) ? 'launchd' : '手动/未启动'}</strong></div>
-                <div><span>最近心跳</span><strong>${escapeHtml(formatTime(latestHeartbeat))}</strong></div>
+                <div><span>运行 / 空闲</span><strong>${Number(data.summary?.running || 0)} / ${Number(data.summary?.idle || 0)}</strong></div>
+                <div><span>卡死 / 离线</span><strong>${Number(data.summary?.stale || 0)} / ${Number(data.summary?.offline || 0)}</strong></div>
+                <div><span>最近心跳</span><strong>${escapeHtml(formatTime(data.summary?.latest_heartbeat_at || latestHeartbeat))}</strong></div>
             `;
+            if (panel) {
+                panel.innerHTML = `<table class="report-library-table worker-status-table">
+                    <thead><tr><th>Worker</th><th>状态</th><th>模型池</th><th>当前</th><th>进度</th><th>心跳</th></tr></thead>
+                    <tbody>${workers.map(worker => {
+                        const pool = (worker.model_pool || []).map(item => `${item.ready ? '' : '!'}${escapeHtml(item.name || item.provider_id)} / ${escapeHtml(item.model || '--')}`).join('<br>') || '--';
+                        const counts = worker.counts || {};
+                        return `<tr>
+                            <td><strong>${escapeHtml(worker.name || worker.worker_id)}</strong><span>${escapeHtml(worker.worker_id)}</span></td>
+                            <td><span class="report-signal ${escapeHtml(statusClass(worker.state === 'running' ? 'running' : worker.state === 'stale' || worker.state === 'offline' ? 'failed' : 'completed'))}">${escapeHtml(workerStateLabel(worker.state))}</span></td>
+                            <td>${pool}</td>
+                            <td>${escapeHtml(worker.current_code || '--')}<span>${escapeHtml(worker.current_model || '')}${worker.fallback_model ? ` -> ${escapeHtml(worker.fallback_model)}` : ''}</span></td>
+                            <td>完成 ${Number(counts.completed || 0)} / 失败 ${Number(counts.failed || 0)}<span>等待 ${Number(counts.pending || 0)} / 待数据 ${Number(counts.waiting || 0)}</span></td>
+                            <td>${escapeHtml(formatTime(worker.heartbeat_at))}</td>
+                        </tr>`;
+                    }).join('') || '<tr><td colspan="6" class="library-empty-state">暂无 Worker 配置或运行记录</td></tr>'}</tbody>
+                </table>`;
+            }
         } catch (err) {
             box.innerHTML = `
                 <div><span>Worker 在线</span><strong>--</strong></div>
@@ -176,6 +284,7 @@
                 <div><span>后台模式</span><strong>未知</strong></div>
                 <div><span>状态</span><strong>${escapeHtml(err.message)}</strong></div>
             `;
+            if (panel) panel.innerHTML = `<div class="library-empty-state">Worker 状态加载失败：${escapeHtml(err.message)}</div>`;
         }
     }
 
@@ -202,6 +311,7 @@
             const haystack = `${report.code || ''} ${report.name || ''}`.toLowerCase();
             if (text && !haystack.includes(text)) return false;
             if (selectedSignals.size && !selectedSignals.has(report.signal)) return false;
+            if (!filterByTradingMarket(report, reportMarketFilter)) return false;
             const confidence = Number(report.confidence || 0) * 100;
             if (minConfidence && confidence < minConfidence) return false;
             const risk = Number(report.risk_score == null ? 0 : report.risk_score);
@@ -237,6 +347,22 @@
         filterReportLibrary();
     }
 
+    function filterByTradingMarket(report, filter = reportMarketFilter) {
+        return window.StockMarketPermissions?.matchesFilter?.(report.code, filter) ?? true;
+    }
+
+    function renderReportMarketFilterState() {
+        document.querySelectorAll('#reportMarketFilters .signal-filter-chip').forEach(btn => {
+            btn.classList.toggle('active', (btn.dataset.market || 'all') === reportMarketFilter);
+        });
+    }
+
+    function setReportMarketFilter(filter) {
+        reportMarketFilter = filter || 'all';
+        renderReportMarketFilterState();
+        filterReportLibrary();
+    }
+
     function updateSelectionSummary() {
         const selectedCount = document.getElementById('selectedReportCount');
         if (selectedCount) selectedCount.textContent = String(selected.size);
@@ -258,21 +384,56 @@
             updateSelectionSummary();
             return;
         }
-        tbody.innerHTML = filtered.map(report => {
-            const signal = report.signal || 'HOLD';
-            const id = Number(report.id);
-            return `<tr class="${selected.has(id) ? 'selected' : ''}" onclick="previewReport(${id})">
-                <td onclick="event.stopPropagation()"><input type="checkbox" data-report-id="${Number(report.id)}" ${selected.has(Number(report.id)) ? 'checked' : ''} onchange="toggleReportSelection(${Number(report.id)}, this.checked)"></td>
-                <td><strong>${escapeHtml(report.name || report.code)}</strong><span>${escapeHtml(report.code)}</span></td>
-                <td><span class="report-signal signal-${escapeHtml(signal.toLowerCase().replace(/_/g, '-'))}">${escapeHtml(SIG_LABEL[signal] || signal)}</span></td>
-                <td>${formatPct(report.confidence)}</td>
-                <td>${formatScore(report.risk_score)}</td>
-                <td>${report.fact_accuracy == null ? '--' : `${Number(report.fact_accuracy).toFixed(1)}%`} / ${Number(report.hallucinations || 0)}项</td>
-                <td>${escapeHtml(report.depth || 'standard')} · ${escapeHtml(report.model_mode || 'balanced')}</td>
-                <td>${escapeHtml(formatTime(report.created_at))}</td>
-            </tr>`;
-        }).join('');
+        const groupBy = document.getElementById('reportGroupBy')?.value || 'none';
+        tbody.innerHTML = groupBy === 'none'
+            ? filtered.map(renderReportRow).join('')
+            : renderGroupedReportRows(groupBy);
         updateSelectionSummary();
+    }
+
+    function renderReportRow(report) {
+        const signal = report.signal || 'HOLD';
+        const id = Number(report.id);
+        return `<tr class="${selected.has(id) ? 'selected' : ''}" onclick="previewReport(${id})">
+            <td onclick="event.stopPropagation()"><input type="checkbox" data-report-id="${Number(report.id)}" ${selected.has(Number(report.id)) ? 'checked' : ''} onchange="toggleReportSelection(${Number(report.id)}, this.checked)"></td>
+            <td><strong>${escapeHtml(report.name || report.code)}</strong><span>${escapeHtml(report.code)}</span></td>
+            <td><span class="report-signal signal-${escapeHtml(signal.toLowerCase().replace(/_/g, '-'))}">${escapeHtml(SIG_LABEL[signal] || signal)}</span></td>
+            <td>${formatPct(report.confidence)}</td>
+            <td>${formatScore(report.risk_score)}</td>
+            <td>${report.fact_accuracy == null ? '--' : `${Number(report.fact_accuracy).toFixed(1)}%`} / ${Number(report.hallucinations || 0)}项</td>
+            <td>${escapeHtml(report.depth || 'standard')} · ${escapeHtml(report.model_mode || 'balanced')}</td>
+            <td>${escapeHtml(formatTime(report.created_at))}</td>
+        </tr>`;
+    }
+
+    function renderGroupedReportRows(groupBy) {
+        const groups = new Map();
+        for (const report of filtered) {
+            const key = groupBy === 'date' ? formatDate(report.created_at) : reportBatchKey(report);
+            const label = groupBy === 'date' ? key : reportBatchLabel(key);
+            if (!groups.has(key)) groups.set(key, { key, label, reports: [] });
+            groups.get(key).reports.push(report);
+        }
+        return Array.from(groups.values()).map(group => {
+            const groupToken = `${groupBy}:${group.key}`;
+            const collapsed = collapsedReportGroups.has(groupToken);
+            const selectedCount = group.reports.filter(report => selected.has(Number(report.id))).length;
+            const latest = group.reports[0]?.created_at;
+            const rows = collapsed ? '' : group.reports.map(renderReportRow).join('');
+            return `<tr class="report-group-header" onclick="toggleReportGroup('${escapeAttr(groupToken)}')">
+                <td colspan="8">
+                    <button type="button" class="report-group-toggle" aria-label="展开或折叠">${collapsed ? '+' : '-'}</button>
+                    <strong>${escapeHtml(group.label)}</strong>
+                    <span>${group.reports.length} 份报告 · 已选 ${selectedCount} · 最近 ${escapeHtml(formatTime(latest))}</span>
+                </td>
+            </tr>${rows}`;
+        }).join('');
+    }
+
+    function toggleReportGroup(groupToken) {
+        if (collapsedReportGroups.has(groupToken)) collapsedReportGroups.delete(groupToken);
+        else collapsedReportGroups.add(groupToken);
+        renderReportRows();
     }
 
     async function previewReport(id) {
@@ -295,7 +456,7 @@
                 <h4>交易计划</h4>
                 <div class="preview-block">${formatMarkdown(report.trader_plan || '暂无')}</div>
                 <h4>风险复核</h4>
-                <div class="preview-block">${formatMarkdown(typeof report.risk_debate === 'string' ? report.risk_debate : JSON.stringify(report.risk_debate || {}, null, 2))}</div>
+                <div class="preview-block">${formatMarkdown(report.risk_debate || '暂无')}</div>
                 <div class="preview-actions">
                     <a class="btn btn-sm" href="/ai?report_id=${Number(id)}">在 AI 分析台打开</a>
                     <a class="btn btn-sm" href="/api/ai/report/${Number(id)}/pdf">PDF</a>
@@ -307,7 +468,9 @@
     }
 
     function formatMarkdown(text) {
-        const raw = String(text || '');
+        const parsed = typeof text === 'string' ? parseJsonish(text) : text;
+        if (parsed && typeof parsed === 'object') return formatStructuredValue(parsed);
+        const raw = String(parsed || '').replace(/\\n/g, '\n');
         if (window.marked) return window.marked.parse(raw);
         return `<pre>${escapeHtml(raw)}</pre>`;
     }
@@ -332,6 +495,7 @@
         const modal = document.getElementById('positionPlanModal');
         if (modal) modal.classList.add('show');
         togglePlanRoleModelFields();
+        await loadPlanSchedulingOptions();
     }
 
     function closePositionPlanModal() {
@@ -342,6 +506,8 @@
     async function submitPositionPlanFromModal() {
         const reportIds = [...selected];
         if (!reportIds.length) return alert('请先勾选要进入组合级讨论的完整报告');
+        const selectedReports = reports.filter(report => selected.has(Number(report.id)));
+        const excludedByPermission = selectedReports.filter(report => !(window.StockMarketPermissions?.isAllowed?.(report.code) ?? true));
         const modelStrategy = document.getElementById('planModelStrategyInput')?.value || 'single';
         const payload = {
             job_type: 'position_plan',
@@ -353,6 +519,11 @@
             context_strategy: document.getElementById('planContextInput')?.value || 'auto',
             model_strategy: modelStrategy,
             role_models: modelStrategy === 'per_role' ? collectPlanRoleModels() : {},
+            allowed_worker_ids: collectCheckedValues('planWorkerGrid'),
+            primary_provider_ids: collectCheckedValues('planPrimaryProviderGrid'),
+            fallback_provider_ids: collectCheckedValues('planFallbackProviderGrid'),
+            model_fallback_enabled: collectCheckedValues('planFallbackProviderGrid').length > 0,
+            quota_exhausted_action: document.getElementById('planQuotaActionInput')?.value || 'switch_model',
             max_consecutive_failures: 5,
             max_failure_rate: 0.25,
             min_failure_rate_items: 5,
@@ -364,7 +535,15 @@
             body: JSON.stringify(payload)
         });
         const warnings = preflight.warnings || [];
-        if (warnings.length && !confirm(`任务体检提示：\n${warnings.join('\n')}\n\n仍然创建任务吗？`)) return;
+        const estimate = [
+            `选择报告：${reportIds.length} 份`,
+            ...(excludedByPermission.length ? [`交易权限过滤：将由后端排除 ${excludedByPermission.length} 份无权限市场报告`] : []),
+            `预计模型调用：${preflight.estimated_role_calls || '--'} 次`,
+            `Worker：${preflight.worker_count || '--'} 个`,
+            `预计耗时：${preflight.estimated_duration_text || '--'}`,
+            ...(preflight.recommendations || [])
+        ].join('\n');
+        if (!confirm(`${estimate}${warnings.length ? `\n\n风险提示：\n${warnings.join('\n')}` : ''}\n\n创建任务吗？`)) return;
         const resp = await requestJson('/api/batch-research/jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -375,6 +554,46 @@
         jobsLoaded = false;
         plansLoaded = false;
         switchReportTab('jobs');
+    }
+
+    function collectCheckedValues(containerId) {
+        return Array.from(document.querySelectorAll(`#${containerId} input[type="checkbox"]:checked`)).map(input => input.value).filter(Boolean);
+    }
+
+    async function loadPlanSchedulingOptions() {
+        await Promise.all([loadPlanModelProviders(), loadWorkerRuntimeSummary()]);
+        renderPlanWorkerOptions();
+        renderPlanProviderOptions();
+    }
+
+    function renderPlanWorkerOptions() {
+        const grid = document.getElementById('planWorkerGrid');
+        if (!grid) return;
+        const workers = workerStatusCache?.workers || [];
+        const enabled = workers.filter(worker => worker.enabled !== false);
+        if (!enabled.length) {
+            grid.innerHTML = '<div class="library-empty-state">暂无启用 Worker；留空表示由可用 worker 自动领取。</div>';
+            return;
+        }
+        grid.innerHTML = enabled.map(worker => `
+            <label class="mini-check-row">
+                <input type="checkbox" value="${escapeAttr(worker.worker_id)}" checked>
+                <span>${escapeHtml(worker.name || worker.worker_id)} · ${escapeHtml(workerStateLabel(worker.state))}</span>
+            </label>
+        `).join('');
+    }
+
+    function renderPlanProviderOptions() {
+        const primary = document.getElementById('planPrimaryProviderGrid');
+        const fallback = document.getElementById('planFallbackProviderGrid');
+        const providerRows = (checkedFirst) => modelProviders.map((provider, index) => `
+            <label class="mini-check-row">
+                <input type="checkbox" value="${escapeAttr(provider.id)}" ${checkedFirst && index === 0 ? 'checked' : ''}>
+                <span>${escapeHtml(provider.name || provider.id)} · ${escapeHtml(provider.default_model || provider.deep_model || provider.quick_model || '--')}</span>
+            </label>
+        `).join('');
+        if (primary) primary.innerHTML = modelProviders.length ? providerRows(true) : '<div class="library-empty-state">暂无可用模型配置。</div>';
+        if (fallback) fallback.innerHTML = modelProviders.length > 1 ? providerRows(false) : '<div class="library-empty-state">可在设置中增加备用模型池。</div>';
     }
 
     async function loadPlanModelProviders() {
@@ -532,6 +751,7 @@
             }
             tbody.innerHTML = plans.map(plan => {
                 const modelConfig = plan.model_config_json || {};
+                const marketCaptured = plan.market_context_captured_at || plan.decision_market_snapshot_json?.captured_at || '';
                 return `<tr onclick="previewPositionPlan('${encodeURIComponent(plan.plan_id)}')">
                     <td><strong>${escapeHtml(plan.title || plan.plan_id)}</strong><span>${escapeHtml(plan.plan_id)}</span></td>
                     <td>${escapeHtml(stageLabel(plan.stage))}</td>
@@ -539,7 +759,7 @@
                     <td>${escapeHtml(strategyLabel(plan.context_strategy))}</td>
                     <td>${Number(plan.candidate_count || 0)} / ${Number(plan.selected_count || 0)}</td>
                     <td>${escapeHtml(strategyLabel(plan.model_strategy))}<span>${escapeHtml(modelConfig.snapshot_model_tier || '')}</span></td>
-                    <td>${escapeHtml(plan.batch_job_id || '--')}</td>
+                    <td>${escapeHtml(plan.batch_job_id || '--')}<span>${marketCaptured ? `行情 ${escapeHtml(formatTime(marketCaptured))}` : '未校准行情'}</span></td>
                     <td>${escapeHtml(formatTime(plan.created_at))}</td>
                 </tr>`;
             }).join('');
@@ -558,6 +778,18 @@
             const plan = await requestJson(`/api/position-plans/${encodeURIComponent(planId)}`);
             if (meta) meta.textContent = `${stageLabel(plan.stage)} ${plan.plan_id}`;
             const items = plan.items || [];
+            const marketSnapshot = plan.decision_market_snapshot_json || {};
+            const marketRows = (marketSnapshot.summary || []).slice(0, 20).map(item => {
+                const day = item.day || {};
+                return `<tr>
+                    <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
+                    <td>${escapeHtml(item.status || '--')}</td>
+                    <td>${Number(item.price || 0).toFixed(3)}</td>
+                    <td>${Number(item.change_pct || 0).toFixed(3)}%</td>
+                    <td>${Number(day.return_5d_pct || 0).toFixed(3)}%</td>
+                    <td>${Number(day.return_20d_pct || 0).toFixed(3)}%</td>
+                </tr>`;
+            }).join('');
             const itemRows = items.map(item => `<tr>
                 <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
                 <td>${escapeHtml(item.action)}</td>
@@ -577,6 +809,15 @@
                 <div class="preview-block"><table class="report-library-table"><tbody>${itemRows || '<tr><td>暂无明细</td></tr>'}</tbody></table></div>
                 <h4>模型配置</h4>
                 <div class="preview-block">${formatJsonBlock(plan.model_config_json)}</div>
+                <h4>决策实时行情快照</h4>
+                <div class="preview-block">
+                    <div class="preview-signal">
+                        <span>${escapeHtml(marketSnapshot.status || '未采集')}</span>
+                        <span>${escapeHtml(formatTime(plan.market_context_captured_at || marketSnapshot.captured_at || ''))}</span>
+                        <span>${Number((marketSnapshot.summary || []).length || 0)} 只</span>
+                    </div>
+                    <table class="report-library-table"><tbody>${marketRows || '<tr><td>暂无行情校准快照</td></tr>'}</tbody></table>
+                </div>
                 <h4>现金 / 持仓快照</h4>
                 <div class="preview-block">${formatJsonBlock({cash: plan.cash_snapshot_json, portfolio: plan.portfolio_snapshot_json})}</div>
                 <h4>采纳快照</h4>
@@ -731,6 +972,9 @@
                     <button class="btn btn-sm" onclick="resumeBatchJob('${escapeAttr(job.job_id)}')">继续</button>
                     <button class="btn btn-sm" onclick="retryBatchJob('${escapeAttr(job.job_id)}')">重试失败</button>
                     <button class="btn btn-sm" onclick="cancelBatchJob('${escapeAttr(job.job_id)}')">取消</button>
+                    <button class="btn btn-sm btn-primary" onclick="previewBatchAnalysis('${escapeAttr(job.job_id)}')">批量分析</button>
+                    <button class="btn btn-sm" onclick="previewFailureGroups('${escapeAttr(job.job_id)}')">失败分组</button>
+                    <button class="btn btn-sm" onclick="previewRuntimeStats('${escapeAttr(job.job_id)}')">耗时统计</button>
                     <button class="btn btn-sm" onclick="previewBatchLogs('${escapeAttr(job.job_id)}')">日志</button>
                     <button class="btn btn-sm" onclick="previewBatchArtifacts('${escapeAttr(job.job_id)}')">产物</button>
                 </div>
@@ -768,6 +1012,83 @@
         }
     }
 
+    async function previewBatchAnalysis(jobId) {
+        const body = document.getElementById('reportPreview');
+        const meta = document.getElementById('reportPreviewMeta');
+        if (meta) meta.textContent = `${jobId} 批量分析`;
+        if (body) body.innerHTML = '<div class="library-empty-state">加载批量分析...</div>';
+        try {
+            const data = await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/analysis`);
+            const overview = data.overview || {};
+            const breadth = data.breadth || {};
+            const market = data.market || {};
+            const signals = data.signal_distribution || {};
+            const signalRows = Object.entries(signals)
+                .filter(([, count]) => Number(count || 0) > 0)
+                .map(([signal, count]) => `<tr>
+                    <td><span class="report-signal signal-${escapeHtml(signal.toLowerCase().replace(/_/g, '-'))}">${escapeHtml(SIG_LABEL[signal] || signal)}</span></td>
+                    <td>${Number(count || 0)}</td>
+                    <td>${overview.total ? (Number(count || 0) / Number(overview.total || 1) * 100).toFixed(1) : '0.0'}%</td>
+                </tr>`).join('');
+            const industryRows = Object.entries(data.industry_groups || {})
+                .sort((a, b) => Number(b[1].count || 0) - Number(a[1].count || 0))
+                .map(([name, group]) => `<tr>
+                    <td><strong>${escapeHtml(name)}</strong></td>
+                    <td>${Number(group.count || 0)}</td>
+                    <td>${Number(group.positive_signals || 0)} / ${Number(group.negative_signals || 0)}</td>
+                    <td>${formatPct(group.avg_confidence)}</td>
+                    <td>${Number(group.avg_risk || 0).toFixed(1)}</td>
+                    <td>${formatChange(group.avg_change_pct)}</td>
+                </tr>`).join('');
+            const indexRows = Object.values(market.indices || {})
+                .filter(item => item && typeof item === 'object' && !item.error)
+                .map(item => `<tr>
+                    <td>${escapeHtml(item.name || item.code || '--')}</td>
+                    <td>${formatChange(item.change_pct)}</td>
+                </tr>`).join('');
+            const positiveRows = (data.top_positive || []).map(item => `<tr>
+                <td><strong>${escapeHtml(item.name || item.code)}</strong><span>${escapeHtml(item.code)}</span></td>
+                <td><span class="report-signal signal-${escapeHtml((item.signal || 'HOLD').toLowerCase().replace(/_/g, '-'))}">${escapeHtml(SIG_LABEL[item.signal] || item.signal)}</span></td>
+                <td>${formatPct(item.confidence)}</td>
+                <td>${formatScore(item.risk_score)}</td>
+                <td>${formatChange(item.change_pct)}</td>
+            </tr>`).join('');
+            const riskRows = (data.top_risk || []).map(item => `<tr>
+                <td><strong>${escapeHtml(item.name || item.code)}</strong><span>${escapeHtml(item.code)}</span></td>
+                <td><span class="report-signal signal-${escapeHtml((item.signal || 'HOLD').toLowerCase().replace(/_/g, '-'))}">${escapeHtml(SIG_LABEL[item.signal] || item.signal)}</span></td>
+                <td>${formatScore(item.risk_score)}</td>
+                <td>${formatChange(item.change_pct)}</td>
+            </tr>`).join('');
+            if (body) body.innerHTML = `
+                <div class="preview-signal">
+                    <span>批量分析</span>
+                    <span>${escapeHtml(formatTime(data.generated_at))}</span>
+                </div>
+                <div class="batch-analysis-grid">
+                    ${metricCard('完成报告', `${Number(overview.completed || 0)} / ${Number(overview.total || 0)}`, `失败 ${Number(overview.failed || 0)} / 待数据 ${Number(overview.waiting || 0)}`)}
+                    ${metricCard('平均置信度', formatPct(overview.avg_confidence))}
+                    ${metricCard('平均风险', Number(overview.avg_risk || 0).toFixed(1))}
+                    ${metricCard('上涨 / 下跌', `${Number(breadth.up || 0)} / ${Number(breadth.down || 0)}`, `上涨 ${Number(breadth.up_ratio || 0).toFixed(1)}%`)}
+                    ${metricCard('大盘均值', formatChange(market.avg_change_pct), `上涨指数 ${Number(market.positive_indices || 0)} / ${Number(market.indices_count || 0)}`)}
+                </div>
+                <h4>观察结论</h4>
+                <div class="preview-block"><ul class="batch-analysis-list">${(data.observations || []).map(item => `<li>${escapeHtml(item)}</li>`).join('') || '<li>暂无结论</li>'}</ul></div>
+                <h4>信号分布</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>信号</th><th>数量</th><th>占比</th></tr></thead><tbody>${signalRows || '<tr><td colspan="3">暂无信号</td></tr>'}</tbody></table></div>
+                <h4>行业 / 分组情况</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>分组</th><th>数量</th><th>正/负信号</th><th>置信度</th><th>风险</th><th>涨跌</th></tr></thead><tbody>${industryRows || '<tr><td colspan="6">暂无分组</td></tr>'}</tbody></table></div>
+                <h4>大盘情况</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>指数</th><th>涨跌幅</th></tr></thead><tbody>${indexRows || '<tr><td colspan="2">暂无大盘数据</td></tr>'}</tbody></table></div>
+                <h4>正向信号优先观察</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>股票</th><th>信号</th><th>置信度</th><th>风险</th><th>涨跌</th></tr></thead><tbody>${positiveRows || '<tr><td colspan="5">暂无正向信号</td></tr>'}</tbody></table></div>
+                <h4>高风险样本</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>股票</th><th>信号</th><th>风险</th><th>涨跌</th></tr></thead><tbody>${riskRows || '<tr><td colspan="4">暂无风险数据</td></tr>'}</tbody></table></div>
+            `;
+        } catch (err) {
+            if (body) body.innerHTML = `<div class="library-empty-state">加载失败：${escapeHtml(err.message)}</div>`;
+        }
+    }
+
     async function pauseBatchJob(jobId) {
         await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/pause`, { method: 'POST' });
         jobsLoaded = false;
@@ -781,10 +1102,78 @@
         await loadBatchJobs();
     }
 
-    async function retryBatchJob(jobId) {
-        await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/retry-failed`, { method: 'POST' });
+    async function retryBatchJob(jobId, errorType = '') {
+        await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/retry-failed`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(errorType ? { error_type: errorType } : {})
+        });
         jobsLoaded = false;
         await loadBatchJobs();
+    }
+
+    async function previewFailureGroups(jobId) {
+        const body = document.getElementById('reportPreview');
+        if (body) body.innerHTML = '<div class="library-empty-state">加载失败分组...</div>';
+        try {
+            const data = await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/failure-groups`);
+            const rows = (data.groups || []).map(group => `<tr>
+                <td><strong>${escapeHtml(group.label || group.error_type)}</strong><span>${escapeHtml(group.error_type)}</span></td>
+                <td>${Number(group.count || 0)}</td>
+                <td>${(group.items || []).slice(0, 5).map(item => `${escapeHtml(item.name || item.code)} ${escapeHtml(item.code)}`).join('<br>') || '--'}</td>
+                <td><button class="btn btn-sm" onclick="retryBatchJob('${escapeAttr(jobId)}','${escapeAttr(group.error_type)}')">只重试此类</button></td>
+            </tr>`).join('');
+            if (body) body.innerHTML = `
+                <div class="preview-signal"><span>失败分组 ${Number((data.groups || []).length)}</span></div>
+                <div class="preview-block batch-step-preview">
+                    <table class="report-library-table">
+                        <thead><tr><th>类型</th><th>数量</th><th>样例</th><th>操作</th></tr></thead>
+                        <tbody>${rows || '<tr><td colspan="4">暂无失败项</td></tr>'}</tbody>
+                    </table>
+                </div>
+            `;
+        } catch (err) {
+            if (body) body.innerHTML = `<div class="library-empty-state">加载失败：${escapeHtml(err.message)}</div>`;
+        }
+    }
+
+    async function previewRuntimeStats(jobId) {
+        const body = document.getElementById('reportPreview');
+        if (body) body.innerHTML = '<div class="library-empty-state">加载耗时统计...</div>';
+        try {
+            const data = await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/runtime-stats`);
+            const slowRows = (data.slowest_items || []).map(item => `<tr>
+                <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
+                <td>${escapeHtml(statusLabel(item.status))}</td>
+                <td>${(Number(item.duration_ms || 0) / 1000).toFixed(1)}s</td>
+            </tr>`).join('');
+            const roleRows = (data.roles || []).map(item => `<tr>
+                <td>${escapeHtml(item.role_name || item.role_key)}<span>${escapeHtml(item.role_key)}</span></td>
+                <td>${Number(item.count || 0)}</td>
+                <td>${Number(item.failed || 0)}</td>
+                <td>${(Number(item.duration_ms || 0) / 1000).toFixed(1)}s</td>
+            </tr>`).join('');
+            const modelRows = (data.models || []).map(item => `<tr>
+                <td>${escapeHtml(item.model)}</td>
+                <td>${Number(item.count || 0)}</td>
+                <td>${Number(item.failed || 0)}</td>
+                <td>${(Number(item.duration_ms || 0) / 1000).toFixed(1)}s</td>
+            </tr>`).join('');
+            if (body) body.innerHTML = `
+                <div class="preview-signal">
+                    <span>最慢股票 ${Number((data.slowest_items || []).length)}</span>
+                    <span>Fallback ${Number((data.fallback_events || []).length)}</span>
+                </div>
+                <h4>最慢股票</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><tbody>${slowRows || '<tr><td>暂无耗时数据</td></tr>'}</tbody></table></div>
+                <h4>角色耗时</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>角色</th><th>次数</th><th>失败</th><th>总耗时</th></tr></thead><tbody>${roleRows || '<tr><td colspan="4">暂无角色统计</td></tr>'}</tbody></table></div>
+                <h4>模型耗时</h4>
+                <div class="preview-block batch-step-preview"><table class="report-library-table"><thead><tr><th>模型</th><th>次数</th><th>失败</th><th>总耗时</th></tr></thead><tbody>${modelRows || '<tr><td colspan="4">暂无模型统计</td></tr>'}</tbody></table></div>
+            `;
+        } catch (err) {
+            if (body) body.innerHTML = `<div class="library-empty-state">加载失败：${escapeHtml(err.message)}</div>`;
+        }
     }
 
     async function previewBatchLogs(jobId) {
@@ -861,6 +1250,8 @@
     window.loadReportLibrary = loadReportLibrary;
     window.filterReportLibrary = filterReportLibrary;
     window.toggleSignalFilter = toggleSignalFilter;
+    window.setReportMarketFilter = setReportMarketFilter;
+    window.toggleReportGroup = toggleReportGroup;
     window.switchReportTab = switchReportTab;
     window.previewReport = previewReport;
     window.previewSnapshot = previewSnapshot;
@@ -880,6 +1271,9 @@
     window.cancelBatchJob = cancelBatchJob;
     window.previewBatchJob = previewBatchJob;
     window.previewBatchItemSteps = previewBatchItemSteps;
+    window.previewBatchAnalysis = previewBatchAnalysis;
+    window.previewFailureGroups = previewFailureGroups;
+    window.previewRuntimeStats = previewRuntimeStats;
     window.previewBatchLogs = previewBatchLogs;
     window.previewBatchArtifacts = previewBatchArtifacts;
 })();

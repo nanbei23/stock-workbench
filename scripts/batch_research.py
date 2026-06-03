@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from config import DB_PATH  # noqa: E402
+from data.kline import get_kline  # noqa: E402
 from data.quote import get_batch_quotes  # noqa: E402
 from models.database import SCHEMA  # noqa: E402
 from scheduler.ai_engine import extract_confidence, extract_risk_score, extract_signal, extract_target_price  # noqa: E402
@@ -1415,9 +1416,105 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _cash_balance(conn: sqlite3.Connection) -> float:
-    row = conn.execute("SELECT value FROM settings WHERE key = 'cash_balance_default'").fetchone()
-    value = _float_or_none(row["value"] if row else None)
-    return round(value or 0.0, 3)
+    return _cash_context(conn)["total_cash"]
+
+
+def _cash_context(conn: sqlite3.Connection) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT key, value
+        FROM settings
+        WHERE key = 'cash_balance' OR key = 'cash_balance_default' OR key LIKE 'cash_balance_%'
+        ORDER BY key
+        """
+    ).fetchall()
+    balances: dict[str, float] = {}
+    for row in rows:
+        key = row["key"]
+        if key in {"cash_balance", "cash_balance_default"}:
+            account_id = "default"
+        else:
+            account_id = key.replace("cash_balance_", "") or "default"
+        balances[account_id] = _float_or_none(row["value"]) or 0.0
+    total_cash = round(sum(balances.values()), 3)
+    return {"balances": balances, "total_cash": total_cash}
+
+
+def _portfolio_context(conn: sqlite3.Connection, *, cash: float) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT code, name, total_shares, available_shares, avg_cost, current_price,
+               market_value, unrealized_pnl, unrealized_pnl_pct, account_id, updated_at
+        FROM portfolio
+        WHERE total_shares > 0
+        ORDER BY account_id, market_value DESC, code
+        """
+    ).fetchall()
+    positions = []
+    market_value = 0.0
+    for row in rows:
+        shares = _float_or_none(row["total_shares"]) or 0.0
+        current_price = _float_or_none(row["current_price"]) or 0.0
+        row_market_value = _float_or_none(row["market_value"]) or 0.0
+        if not row_market_value and current_price and shares:
+            row_market_value = round(current_price * shares, 3)
+        market_value += row_market_value
+        positions.append(
+            {
+                "code": row["code"],
+                "name": row["name"] or row["code"],
+                "shares": round(shares, 3),
+                "available_shares": _float_or_none(row["available_shares"]) or 0.0,
+                "avg_cost": _float_or_none(row["avg_cost"]) or 0.0,
+                "current_price": current_price,
+                "market_value": round(row_market_value, 3),
+                "unrealized_pnl": _float_or_none(row["unrealized_pnl"]) or 0.0,
+                "unrealized_pnl_pct": _float_or_none(row["unrealized_pnl_pct"]) or 0.0,
+                "account_id": row["account_id"] or "default",
+                "updated_at": row["updated_at"],
+            }
+        )
+    market_value = round(market_value, 3)
+    total_assets = round(cash + market_value, 3)
+    by_code = {item["code"]: item for item in positions}
+    for item in positions:
+        item["position_pct_of_assets"] = round(item["market_value"] / total_assets * 100, 3) if total_assets else 0.0
+    return {
+        "positions": positions,
+        "positions_by_code": by_code,
+        "position_count": len(positions),
+        "market_value": market_value,
+        "cash": round(cash, 3),
+        "total_assets": total_assets,
+        "invested_pct": round(market_value / total_assets * 100, 3) if total_assets else 0.0,
+        "cash_pct": round(cash / total_assets * 100, 3) if total_assets else 0.0,
+    }
+
+
+def _attach_current_positions(items: list[dict[str, Any]], portfolio_context: dict[str, Any]) -> None:
+    positions_by_code = portfolio_context.get("positions_by_code") or {}
+    for item in items:
+        position = positions_by_code.get(item.get("code")) or {}
+        if position:
+            item["current_position"] = {
+                "shares": position.get("shares") or 0.0,
+                "available_shares": position.get("available_shares") or 0.0,
+                "avg_cost": position.get("avg_cost") or 0.0,
+                "current_price": position.get("current_price") or 0.0,
+                "market_value": position.get("market_value") or 0.0,
+                "position_pct_of_assets": position.get("position_pct_of_assets") or 0.0,
+                "account_id": position.get("account_id") or "default",
+            }
+        else:
+            item["current_position"] = {
+                "shares": 0.0,
+                "available_shares": 0.0,
+                "avg_cost": 0.0,
+                "current_price": 0.0,
+                "market_value": 0.0,
+                "position_pct_of_assets": 0.0,
+                "account_id": "default",
+            }
 
 
 def _latest_reports(conn: sqlite3.Connection, codes: list[str]) -> dict[str, sqlite3.Row]:
@@ -1505,9 +1602,12 @@ def _report_to_plan_item(stock: StockCandidate, row: sqlite3.Row | None) -> dict
 def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: int = 10) -> dict[str, Any]:
     with _connect(db_path) as conn:
         cash = _cash_balance(conn)
+        cash_context = _cash_context(conn)
+        portfolio_context = _portfolio_context(conn, cash=cash)
         reports = _latest_reports(conn, [stock.code for stock in stocks])
 
     items = [_report_to_plan_item(stock, reports.get(stock.code)) for stock in stocks]
+    _attach_current_positions(items, portfolio_context)
     available = [item for item in items if item.get("report_id")]
     missing = [item for item in items if item["action"] == "missing_report"]
     buyable = sorted(
@@ -1537,6 +1637,8 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
     recommendations = buyable + watchers + missing
     return {
         "cash": cash,
+        "cash_context": cash_context,
+        "portfolio_context": {key: value for key, value in portfolio_context.items() if key != "positions_by_code"},
         "candidate_count": len(stocks),
         "available_reports": len(available),
         "missing_reports": len(missing),
@@ -1707,6 +1809,187 @@ def _position_report_context(rows: list[sqlite3.Row], deterministic_plan: dict[s
     )
 
 
+def _safe_num(value: Any, default: float | None = None) -> float | None:
+    try:
+        return round(float(str(value).replace(",", "")), 3)
+    except (TypeError, ValueError):
+        return default
+
+
+def _kline_summary(klines: list[dict[str, Any]]) -> dict[str, Any]:
+    closes = [_safe_num(item.get("close")) for item in klines if _safe_num(item.get("close")) is not None]
+    volumes = [_safe_num(item.get("volume"), 0.0) or 0.0 for item in klines]
+    if not closes:
+        return {"count": len(klines), "status": "empty"}
+    last_close = closes[-1]
+    recent20 = closes[-20:]
+    recent5 = closes[-5:]
+    avg_volume5 = sum(volumes[-5:]) / min(5, len(volumes)) if volumes else 0.0
+    prev_volume5 = sum(volumes[-10:-5]) / 5 if len(volumes) >= 10 else 0.0
+    return {
+        "count": len(klines),
+        "last_date": klines[-1].get("date") if isinstance(klines[-1], dict) else "",
+        "last_close": last_close,
+        "return_5d_pct": round((last_close / recent5[0] - 1) * 100, 3) if recent5 and recent5[0] else 0.0,
+        "return_20d_pct": round((last_close / recent20[0] - 1) * 100, 3) if recent20 and recent20[0] else 0.0,
+        "high_20": round(max(recent20), 3),
+        "low_20": round(min(recent20), 3),
+        "ma20": round(sum(recent20) / len(recent20), 3),
+        "above_ma20": bool(last_close >= (sum(recent20) / len(recent20))),
+        "volume_ratio_5d": round(avg_volume5 / prev_volume5, 3) if prev_volume5 else None,
+    }
+
+
+async def collect_position_plan_market_context(
+    stocks: list[StockCandidate],
+    *,
+    kline_periods: list[tuple[str, int]] | None = None,
+    kline_concurrency: int = 8,
+) -> dict[str, Any]:
+    """Collect execution-time quotes and K-line summaries for position planning."""
+    kline_periods = kline_periods or [("day", 60), ("60", 32)]
+    captured_at = datetime.now().isoformat(timespec="seconds")
+    codes = list(dict.fromkeys(stock.code for stock in stocks if stock.code))
+    context: dict[str, Any] = {
+        "captured_at": captured_at,
+        "source": "tencent_quote_and_local_kline",
+        "status": "empty" if not codes else "ok",
+        "items": {},
+        "summary": [],
+    }
+    if not codes:
+        return context
+    try:
+        quotes = await get_batch_quotes(codes)
+    except Exception as exc:  # noqa: BLE001 - keep planning usable when quotes are temporarily unavailable
+        quotes = {}
+        context["status"] = "partial"
+        context["quote_error"] = str(exc)
+
+    semaphore = asyncio.Semaphore(max(1, int(kline_concurrency or 1)))
+
+    async def fetch_period(code: str, period: str, count: int) -> tuple[str, dict[str, Any]]:
+        async with semaphore:
+            try:
+                rows = await asyncio.to_thread(get_kline, code, period, count)
+                return period, {"status": "ok", "count": len(rows), "summary": _kline_summary(rows)}
+            except Exception as exc:  # noqa: BLE001
+                return period, {"status": "failed", "error": str(exc)}
+
+    kline_tasks = {
+        (code, period): asyncio.create_task(fetch_period(code, period, count))
+        for code in codes
+        for period, count in kline_periods
+    }
+    kline_map: dict[str, dict[str, Any]] = {code: {} for code in codes}
+    for (code, _period), task in kline_tasks.items():
+        period, data = await task
+        kline_map.setdefault(code, {})[period] = data
+
+    for code in codes:
+        quote = quotes.get(code) or {}
+        klines = kline_map.get(code) or {}
+        item_status = "ok" if quote or any(data.get("status") == "ok" for data in klines.values()) else "failed"
+        if item_status != "ok":
+            context["status"] = "partial"
+        item = {
+            "status": item_status,
+            "quote": quote,
+            "kline_summary": klines,
+        }
+        if not quote:
+            item["error"] = "实时行情为空"
+        context["items"][code] = item
+        context["summary"].append(
+            {
+                "code": code,
+                "name": quote.get("name") or code,
+                "status": item_status,
+                "price": _safe_num(quote.get("price")),
+                "change_pct": _safe_num(quote.get("change_pct")),
+                "turnover_rate": _safe_num(quote.get("turnover_rate")),
+                "amount": _safe_num(quote.get("amount")),
+                "day": klines.get("day", {}).get("summary", {}),
+                "intraday": klines.get("60", {}).get("summary", {}),
+                "error": item.get("error", ""),
+            }
+        )
+    return context
+
+
+def _position_market_context_block(context: dict[str, Any] | None) -> str:
+    if not context:
+        return "未采集。"
+    lines = [
+        "## 决策实时行情快照",
+        f"- 采集时间：{context.get('captured_at') or '未知'}",
+        f"- 状态：{context.get('status') or 'unknown'}",
+        "- 用途：只用于校准建仓执行时点，不覆盖原始单股报告结论。",
+        "",
+        "| 股票 | 状态 | 现价 | 涨跌幅% | 5日收益% | 20日收益% | MA20 | 备注 |",
+        "|---|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for item in context.get("summary") or []:
+        day = item.get("day") if isinstance(item.get("day"), dict) else {}
+        lines.append(
+            "| {code} | {status} | {price:.3f} | {change:.3f} | {ret5:.3f} | {ret20:.3f} | {ma20:.3f} | {note} |".format(
+                code=item.get("code") or "",
+                status=item.get("status") or "",
+                price=_safe_num(item.get("price"), 0.0) or 0.0,
+                change=_safe_num(item.get("change_pct"), 0.0) or 0.0,
+                ret5=_safe_num(day.get("return_5d_pct"), 0.0) or 0.0,
+                ret20=_safe_num(day.get("return_20d_pct"), 0.0) or 0.0,
+                ma20=_safe_num(day.get("ma20"), 0.0) or 0.0,
+                note=item.get("error") or ("缺失实时行情" if item.get("status") != "ok" else ""),
+            )
+        )
+    if any((item.get("status") != "ok") for item in context.get("summary") or []):
+        lines.append("")
+        lines.append("存在缺失实时行情的股票，最终裁决必须标注不确定性，不能把缺失行情的标的作为可直接执行买入。")
+    return "\n".join(lines)
+
+
+def _position_portfolio_context_block(context: dict[str, Any] | None) -> str:
+    if not context:
+        return "## 当前组合与资金快照\n- 未采集。"
+    lines = [
+        "## 当前组合与资金快照",
+        f"- 可用现金：{_safe_num(context.get('cash'), 0.0) or 0.0:.3f}",
+        f"- 持仓市值：{_safe_num(context.get('market_value'), 0.0) or 0.0:.3f}",
+        f"- 总资产：{_safe_num(context.get('total_assets'), 0.0) or 0.0:.3f}",
+        f"- 当前仓位：{_safe_num(context.get('invested_pct'), 0.0) or 0.0:.3f}%",
+        f"- 现金比例：{_safe_num(context.get('cash_pct'), 0.0) or 0.0:.3f}%",
+        "- 约束：建仓建议必须是调仓建议，不允许默认全仓重建；suggested_amount 只代表新增买入金额，不包含已有持仓市值。",
+    ]
+    positions = context.get("positions") or []
+    if not positions:
+        lines.append("- 当前空仓：可以基于可用现金分批建仓，但仍需保留现金缓冲。")
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "",
+            "| 股票 | 账户 | 持股 | 可用 | 成本 | 现价 | 市值 | 仓位% | 浮盈亏% |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for item in positions:
+        lines.append(
+            "| {name} {code} | {account} | {shares:.3f} | {available:.3f} | {avg_cost:.3f} | {price:.3f} | {value:.3f} | {pct:.3f} | {pnl_pct:.3f} |".format(
+                name=item.get("name") or item.get("code") or "",
+                code=item.get("code") or "",
+                account=item.get("account_id") or "default",
+                shares=_safe_num(item.get("shares"), 0.0) or 0.0,
+                available=_safe_num(item.get("available_shares"), 0.0) or 0.0,
+                avg_cost=_safe_num(item.get("avg_cost"), 0.0) or 0.0,
+                price=_safe_num(item.get("current_price"), 0.0) or 0.0,
+                value=_safe_num(item.get("market_value"), 0.0) or 0.0,
+                pct=_safe_num(item.get("position_pct_of_assets"), 0.0) or 0.0,
+                pnl_pct=_safe_num(item.get("unrealized_pnl_pct"), 0.0) or 0.0,
+            )
+        )
+    return "\n".join(lines)
+
+
 def _position_discussion_prompt(
     *,
     role_name: str,
@@ -1714,6 +1997,8 @@ def _position_discussion_prompt(
     cash: float,
     top_n: int,
     report_context: str,
+    market_context: dict[str, Any] | None,
+    portfolio_context: dict[str, Any] | None,
     previous_discussion: list[dict[str, str]],
 ) -> str:
     previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
@@ -1734,16 +2019,22 @@ def _position_discussion_prompt(
 角色目标：{role_goal}
 
 约束：
-- 只能基于下方已入库的完整 AI 报告内容和已有角色观点判断。
+- 只能基于下方已入库的完整 AI 报告内容、决策实时行情快照和已有角色观点判断。
 - 不允许自行联网，不允许编造报告没有提供的数据。
 - 当前可用现金：{cash:.3f}
 - 最多给出 {top_n} 只买入候选。
 - 建仓建议不写库、不下单，只生成研究建议。
 - 金额和百分比保留三位小数。
+- 建仓建议必须结合当前仓位和可用资金，输出调仓建议；不能把当前组合当作空仓，也不能默认全仓买入。
+- 如果实时行情/K线与旧报告判断冲突，优先把它作为执行时点校准：可降低仓位、延后建仓或改为观察，但不能改写旧报告事实。
 {final_instruction}
 
 已有角色讨论：
 {previous}
+
+{_position_market_context_block(market_context)}
+
+{_position_portfolio_context_block(portfolio_context)}
 
 完整报告上下文：
 {_clip_text(report_context, 60000)}
@@ -1884,6 +2175,8 @@ def _multi_role_plan_items(
 def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row], *, top_n: int) -> dict[str, Any]:
     with _connect(db_path) as conn:
         cash = _cash_balance(conn)
+        cash_context = _cash_context(conn)
+        portfolio_context = _portfolio_context(conn, cash=cash)
     items = [
         _report_to_plan_item(
             StockCandidate(row["code"], row["watch_name"] or row["code"], row["group_name"] or "默认", 0),
@@ -1891,6 +2184,7 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         )
         for row in rows
     ]
+    _attach_current_positions(items, portfolio_context)
     buyable = sorted(
         [item for item in items if item.get("action") == "buy"],
         key=lambda item: item["score"],
@@ -1912,6 +2206,8 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         item["position_pct"] = 0.0
     return {
         "cash": cash,
+        "cash_context": cash_context,
+        "portfolio_context": {key: value for key, value in portfolio_context.items() if key != "positions_by_code"},
         "candidate_count": len(rows),
         "available_reports": len(rows),
         "missing_reports": 0,
@@ -1936,6 +2232,7 @@ async def build_multi_role_position_plan(
     context_strategy: str = "auto",
     model_strategy: str = "single",
     role_models: dict[str, Any] | None = None,
+    decision_market_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with _connect(db_path) as conn:
         cash = _cash_balance(conn)
@@ -1971,6 +2268,8 @@ async def build_multi_role_position_plan(
             cash=cash,
             top_n=top_n,
             report_context=report_context,
+            market_context=decision_market_context,
+            portfolio_context=deterministic_plan.get("portfolio_context") or {},
             previous_discussion=role_discussion,
         )
         content = await _call_position_plan_role_llm(role, prompt, role_config, timeout_seconds=timeout_seconds)
@@ -1985,6 +2284,7 @@ async def build_multi_role_position_plan(
         "raw_text_chars": raw_text_chars,
         "model_strategy": model_strategy,
         "model_config": role_model_trace,
+        "decision_market_snapshot": decision_market_context or {},
         "available_reports": len(rows),
         "missing_reports": 0,
         "summary": final_payload.get("summary") or "",
@@ -1993,7 +2293,8 @@ async def build_multi_role_position_plan(
         "recommendations": recommendations,
         "notes": [
             "建仓建议由组合经理、风控经理、交易员、反方审查和最终裁决多角色顺序讨论生成。",
-            "上下文仅包含已勾选并入库的完整 AI 报告内容，不自动写入交易流水或条件单。",
+            "上下文包含已勾选并入库的完整 AI 报告内容，以及生成建仓建议当下采集的实时行情/K线快照。",
+            "建仓建议不自动写入交易流水或条件单。",
         ],
     }
 
@@ -2024,6 +2325,25 @@ def write_position_plan(output_dir: Path, plan: dict[str, Any]) -> dict[str, str
         )
     lines.extend(["", "## 说明", ""])
     lines.extend(f"- {note}" for note in plan["notes"])
+    market_context = plan.get("decision_market_snapshot") or {}
+    if market_context:
+        lines.extend(
+            [
+                "",
+                "## 决策实时行情快照",
+                "",
+                f"- 采集时间：{market_context.get('captured_at') or '--'}",
+                f"- 状态：{market_context.get('status') or '--'}",
+                "",
+                "| 股票 | 状态 | 现价 | 涨跌幅% | 5日收益% | 20日收益% |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+        )
+        for item in market_context.get("summary") or []:
+            day = item.get("day") if isinstance(item.get("day"), dict) else {}
+            lines.append(
+                f"| {item.get('code') or ''} | {item.get('status') or ''} | {(_safe_num(item.get('price'), 0.0) or 0.0):.3f} | {(_safe_num(item.get('change_pct'), 0.0) or 0.0):.3f} | {(_safe_num(day.get('return_5d_pct'), 0.0) or 0.0):.3f} | {(_safe_num(day.get('return_20d_pct'), 0.0) or 0.0):.3f} |"
+            )
     if plan.get("multi_role"):
         if plan.get("summary"):
             lines.extend(["", "## 最终裁决摘要", "", str(plan["summary"])])

@@ -112,6 +112,31 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job["total_count"], 3)
         self.assertEqual(sorted(item["code"] for item in job["items"]), ["000001", "000002", "600519"])
 
+    async def test_batch_research_respects_trade_market_permissions(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO watchlist (code, name, group_name, sort_order) VALUES (?, ?, ?, ?)",
+                ("688498", "源杰科技", "默认", 4),
+            )
+            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('trade_market_star', 'false')")
+            db.commit()
+
+        preflight = batch_report_service.preflight_batch_models(
+            job_type="data_prefetch",
+            codes=["000001", "688498"],
+        )
+        created = await batch_report_service.create_research_job(
+            job_type="data_prefetch",
+            codes=["000001", "688498"],
+            auto_start=False,
+        )
+        job = batch_report_service.get_research_job(created["job_id"])
+
+        self.assertEqual(preflight["stock_count"], 1)
+        self.assertEqual(preflight["excluded_by_permission_count"], 1)
+        self.assertEqual(job["total_count"], 1)
+        self.assertEqual(job["items"][0]["code"], "000001")
+
     async def test_report_generation_skips_recent_report_and_waits_for_snapshot(self):
         self._insert_snapshot("000001", "平安银行")
         with sqlite3.connect(self.db_path) as db:
@@ -944,6 +969,80 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(post_actions["summary_markdown"].endswith(".md"))
         self.assertGreaterEqual(artifacts["count"], 2)
 
+    async def test_batch_analysis_summarizes_signals_industries_breadth_and_market(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO batch_jobs (job_id, job_type, name, status, total_count, completed_count)
+                VALUES ('job-analysis', 'report_generation', '测试批量分析', 'completed', 3, 3)
+                """
+            )
+            snapshots = [
+                ("000001", "平安银行", 1.234),
+                ("000002", "万科A", -2.345),
+                ("600519", "贵州茅台", 0.000),
+            ]
+            for code, name, change_pct in snapshots:
+                cursor = db.execute(
+                    """
+                    INSERT INTO stock_data_snapshots
+                        (code, name, snapshot_json, validation_json, summary_json, source, run_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        code,
+                        name,
+                        json.dumps({"market": {"quote": {"price": 10.0, "change_pct": change_pct}}}, ensure_ascii=False),
+                        json.dumps(COMPLETE_VALIDATION, ensure_ascii=False),
+                        "{}",
+                        "test",
+                        "job-analysis",
+                    ),
+                )
+                report = db.execute(
+                    """
+                    INSERT INTO analysis_reports
+                        (code, task_id, signal, confidence, risk_score, final_decision, trader_plan, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    (
+                        code,
+                        f"report-{code}",
+                        {"000001": "BUY", "000002": "SELL", "600519": "HOLD"}[code],
+                        {"000001": 0.8, "000002": 0.7, "600519": 0.5}[code],
+                        {"000001": 25, "000002": 70, "600519": 50}[code],
+                        "批量分析样本",
+                        "执行计划",
+                    ),
+                )
+                db.execute(
+                    """
+                    INSERT INTO batch_job_items
+                        (job_id, code, name, status, snapshot_id, report_id)
+                    VALUES (?, ?, ?, 'completed', ?, ?)
+                    """,
+                    ("job-analysis", code, name, cursor.lastrowid, report.lastrowid),
+                )
+            db.commit()
+
+        with patch(
+            "services.batch_report_service.quote_service.get_indices",
+            new=AsyncMock(return_value={
+                "sh": {"name": "上证指数", "change_pct": 0.5},
+                "sz": {"name": "深证成指", "change_pct": -0.2},
+            }),
+        ):
+            result = await batch_report_service.get_batch_analysis("job-analysis")
+
+        self.assertEqual(result["overview"]["total"], 3)
+        self.assertEqual(result["signal_distribution"]["BUY"], 1)
+        self.assertEqual(result["signal_distribution"]["SELL"], 1)
+        self.assertEqual(result["breadth"]["up"], 1)
+        self.assertEqual(result["breadth"]["down"], 1)
+        self.assertIn("默认", result["industry_groups"])
+        self.assertEqual(result["market"]["indices_count"], 2)
+        self.assertTrue(result["observations"])
+
     async def test_model_preflight_estimates_calls_and_fallback_capacity(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute(
@@ -982,6 +1081,187 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["fallback_count"], 1)
         self.assertEqual(result["status"], "ok")
 
+    async def test_preflight_estimates_worker_throughput_duration_and_model_pool_risk(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('model_providers', ?)",
+                (
+                    json.dumps(
+                        [
+                            {"id": "mimo", "name": "MiMo", "base_url": "https://mimo.example/v1", "api_key": "sk", "deep_model": "mimo-deep"},
+                            {"id": "backup", "name": "Backup", "base_url": "", "api_key": "", "deep_model": "backup-deep"},
+                        ],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('batch_worker_pool', ?)",
+                (
+                    json.dumps(
+                        [
+                            {"id": "w1", "name": "Worker 1", "enabled": True, "provider_ids": ["mimo"], "model_tier": "deep"},
+                            {"id": "w2", "name": "Worker 2", "enabled": True, "provider_ids": ["backup"], "model_tier": "deep"},
+                            {"id": "w3", "name": "Worker 3", "enabled": False, "provider_ids": ["mimo"], "model_tier": "quick"},
+                        ],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.commit()
+
+        result = batch_report_service.preflight_batch_models(
+            job_type="report_generation",
+            codes=["000001", "000002", "600519"],
+            debate_rounds=2,
+            risk_rounds=2,
+            allowed_worker_ids=["w1", "w2"],
+            primary_provider_ids=["mimo"],
+            model_fallback_enabled=True,
+            fallback_provider_ids=["backup"],
+        )
+
+        self.assertEqual(result["worker_count"], 2)
+        self.assertEqual(result["enabled_worker_count"], 2)
+        self.assertEqual(result["selected_worker_ids"], ["w1", "w2"])
+        self.assertEqual(result["estimated_role_calls"], 63)
+        self.assertGreater(result["throughput"]["role_calls_per_hour"], 0)
+        self.assertIn("duration_range_hours", result)
+        self.assertTrue(any(risk["provider_id"] == "backup" for risk in result["model_pool_risks"]))
+
+    async def test_create_job_persists_task_level_worker_and_model_strategy(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            allowed_worker_ids=["worker-a"],
+            primary_provider_ids=["mimo"],
+            fallback_provider_ids=["backup"],
+            model_fallback_enabled=True,
+            quota_exhausted_action="switch_model",
+            auto_start=False,
+        )
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        payload = json.loads(job["payload_json"])
+        self.assertEqual(payload["allowed_worker_ids"], ["worker-a"])
+        self.assertEqual(payload["primary_provider_ids"], ["mimo"])
+        self.assertEqual(payload["fallback_provider_ids"], ["backup"])
+        self.assertEqual(payload["quota_exhausted_action"], "switch_model")
+
+    async def test_allowed_worker_job_stays_pending_for_background_worker(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001"],
+            allowed_worker_ids=["worker-a"],
+        )
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        self.assertEqual(job["status"], "pending")
+        self.assertEqual(json.loads(job["payload_json"])["allowed_worker_ids"], ["worker-a"])
+
+    async def test_claim_next_job_respects_allowed_worker_ids(self):
+        first = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001"],
+            allowed_worker_ids=["worker-a"],
+            auto_start=False,
+        )
+        second = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000002"],
+            allowed_worker_ids=[],
+            auto_start=False,
+        )
+
+        claimed_b = batch_report_service.claim_next_job(worker_id="worker-b", cooperative=False)
+        self.assertEqual(claimed_b["job_id"], second["job_id"])
+        claimed_a = batch_report_service.claim_next_job(worker_id="worker-a", cooperative=False)
+        self.assertEqual(claimed_a["job_id"], first["job_id"])
+
+    async def test_retry_failed_can_filter_error_type_and_override_model_pool(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("UPDATE batch_job_items SET status='failed', error_type='network', error='net' WHERE code='000001'")
+            db.execute("UPDATE batch_job_items SET status='failed', error_type='quota_exhausted', error='quota' WHERE code='000002'")
+            db.commit()
+
+        result = await batch_report_service.retry_failed(
+            created["job_id"],
+            error_type="network",
+            model_provider_ids=["backup"],
+            model_tier="quick",
+            auto_start=False,
+        )
+        job = batch_report_service.get_research_job(created["job_id"])
+        statuses = {item["code"]: item["status"] for item in job["items"]}
+        payload = json.loads(job["payload_json"])
+
+        self.assertEqual(result["reset_count"], 1)
+        self.assertEqual(statuses["000001"], "pending")
+        self.assertEqual(statuses["000002"], "failed")
+        self.assertEqual(payload["primary_provider_ids"], ["backup"])
+        self.assertEqual(payload["snapshot_model_tier"], "quick")
+
+    async def test_worker_status_includes_configured_model_pool_counts_and_runtime_model(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('model_providers', ?)",
+                (
+                    json.dumps(
+                        [
+                            {"id": "mimo", "name": "MiMo", "base_url": "https://mimo.example/v1", "api_key": "sk", "deep_model": "mimo-deep"},
+                            {"id": "backup", "name": "Backup", "base_url": "https://backup.example/v1", "api_key": "sk", "deep_model": "backup-deep"},
+                        ],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('batch_worker_pool', ?)",
+                (
+                    json.dumps(
+                        [{"id": "worker-a", "name": "Worker A", "enabled": True, "provider_ids": ["mimo", "backup"], "model_tier": "deep"}],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='running', worker_id='worker-a', lease_owner='worker-a',
+                    current_code='000001', heartbeat_at=datetime('now'), lease_until=datetime('now', '+10 minutes'),
+                    runtime_json=?
+                WHERE job_id=?
+                """,
+                (
+                    json.dumps({"quota": {"active_model": {"model": "backup-deep"}, "events": [{"fallback_model": "backup-deep"}]}}),
+                    created["job_id"],
+                ),
+            )
+            db.execute("UPDATE batch_job_items SET status='completed' WHERE code='000001'")
+            db.execute("UPDATE batch_job_items SET status='failed', error_type='network' WHERE code='000002'")
+            db.commit()
+
+        status = batch_report_service.get_worker_status()
+        worker = next(item for item in status["workers"] if item["worker_id"] == "worker-a")
+
+        self.assertEqual(worker["state"], "running")
+        self.assertEqual(worker["current_code"], "000001")
+        self.assertEqual(worker["counts"]["completed"], 1)
+        self.assertEqual(worker["counts"]["failed"], 1)
+        self.assertEqual(worker["model_pool"][0]["provider_id"], "mimo")
+        self.assertEqual(worker["current_model"], "backup-deep")
+        self.assertEqual(worker["fallback_model"], "backup-deep")
+
     async def test_position_plan_job_uses_existing_reports_without_generating_reports(self):
         with sqlite3.connect(self.db_path) as db:
             db.executemany(
@@ -997,13 +1277,17 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             db.commit()
 
-        created = await batch_report_service.create_research_job(
-            job_type="position_plan",
-            codes=["000001", "000002", "600519"],
-            auto_start=False,
-            output_dir=Path(self.tmp.name),
-        )
-        await batch_report_service.run_research_job(created["job_id"])
+        with patch(
+            "services.batch_report_service.batch_research.collect_position_plan_market_context",
+            new=AsyncMock(return_value={"captured_at": "2026-06-03T10:15:00", "status": "ok", "items": {}, "summary": []}),
+        ):
+            created = await batch_report_service.create_research_job(
+                job_type="position_plan",
+                codes=["000001", "000002", "600519"],
+                auto_start=False,
+                output_dir=Path(self.tmp.name),
+            )
+            await batch_report_service.run_research_job(created["job_id"])
 
         job = batch_report_service.get_research_job(created["job_id"])
         result = json.loads(job["result_json"])
@@ -1078,6 +1362,9 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         with patch(
+            "services.batch_report_service.batch_research.collect_position_plan_market_context",
+            new=AsyncMock(return_value={"captured_at": "2026-06-03T10:15:00", "status": "ok", "items": {}, "summary": []}),
+        ), patch(
             "services.batch_report_service.batch_research._call_position_plan_role_llm",
             new=AsyncMock(side_effect=role_outputs),
             create=True,
@@ -1103,6 +1390,160 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["plan"]["role_discussion"]), 5)
         self.assertEqual(result["plan"]["recommendations"][0]["suggested_amount"], 12000.123)
         self.assertIn("multi_role_position_plan", result["outputs"]["markdown"])
+
+    async def test_position_plan_job_adds_decision_market_context_to_prompt_and_storage(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('cash_balance_default', '253375.680')")
+            db.execute(
+                """
+                INSERT INTO portfolio
+                    (code, name, total_shares, available_shares, avg_cost, current_price, market_value, unrealized_pnl, unrealized_pnl_pct)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 1000, 1000, 10.000, 11.000, 11000.000, 1000.000, 10.000),
+            )
+            db.executemany(
+                """
+                INSERT INTO analysis_reports
+                    (code, task_id, signal, confidence, risk_score,
+                     market_report, final_decision, trader_plan, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                [
+                    ("000001", "r1", "BUY", 0.82, 24, "旧报告价格 10.000", "建议分批买入", "回踩买入"),
+                    ("600519", "r2", "HOLD", 0.61, 55, "旧报告震荡", "暂缓", "等待突破"),
+                ],
+            )
+            report_ids = [row[0] for row in db.execute("SELECT id FROM analysis_reports ORDER BY id ASC").fetchall()]
+            db.commit()
+
+        market_context = {
+            "captured_at": "2026-06-03T10:15:00",
+            "status": "partial",
+            "items": {
+                "000001": {
+                    "status": "ok",
+                    "quote": {"code": "000001", "name": "平安银行", "price": 11.23, "change_pct": 2.345},
+                    "kline_summary": {"day": {"count": 60, "last_close": 11.23, "return_5d_pct": 3.456}},
+                },
+                "600519": {"status": "failed", "error": "timeout"},
+            },
+            "summary": [
+                {"code": "000001", "price": 11.23, "change_pct": 2.345, "status": "ok"},
+                {"code": "600519", "status": "failed", "error": "timeout"},
+            ],
+        }
+        role_outputs = [
+            "组合经理：参考实时行情后仅小仓位。",
+            "风控经理：实时校准后保留现金。",
+            "交易员：等待分时回落。",
+            "反方审查：行情过热。",
+            json.dumps(
+                {
+                    "summary": "实时行情校准后只观察。",
+                    "actions": [{"code": "000001", "action": "watch", "suggested_amount": 0, "position_pct": 0, "reason": "当前涨幅偏高"}],
+                    "risk_controls": ["缺失实时行情的股票不直接执行"],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+
+        with patch(
+            "services.batch_report_service.batch_research.collect_position_plan_market_context",
+            new=AsyncMock(return_value=market_context),
+            create=True,
+        ) as collect_context, patch(
+            "services.batch_report_service.batch_research._call_position_plan_role_llm",
+            new=AsyncMock(side_effect=role_outputs),
+            create=True,
+        ) as call_role:
+            created = await batch_report_service.create_research_job(
+                job_type="position_plan",
+                report_ids=report_ids,
+                multi_role=True,
+                auto_start=False,
+                output_dir=Path(self.tmp.name),
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        collect_context.assert_awaited_once()
+        first_prompt = call_role.await_args_list[0].args[1]
+        self.assertIn("决策实时行情快照", first_prompt)
+        self.assertIn("11.230", first_prompt)
+        self.assertIn("缺失实时行情", first_prompt)
+        self.assertIn("当前组合与资金快照", first_prompt)
+        self.assertIn("可用现金：253375.680", first_prompt)
+        self.assertIn("平安银行", first_prompt)
+        self.assertIn("1000.000", first_prompt)
+        self.assertIn("建仓建议必须是调仓建议，不允许默认全仓重建", first_prompt)
+
+        with sqlite3.connect(self.db_path) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute("SELECT decision_market_snapshot_json, market_context_captured_at FROM position_plans").fetchone()
+        saved_context = json.loads(row["decision_market_snapshot_json"])
+        self.assertEqual(saved_context["items"]["000001"]["quote"]["price"], 11.23)
+        self.assertEqual(row["market_context_captured_at"], "2026-06-03T10:15:00")
+
+    async def test_position_plan_auto_generates_today_reports_for_current_holdings(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio
+                    (code, name, total_shares, available_shares, avg_cost, current_price, market_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("000002", "万科A", 2000, 2000, 8.000, 8.500, 17000.000),
+            )
+            db.execute(
+                """
+                INSERT INTO analysis_reports
+                    (code, task_id, signal, confidence, risk_score, final_decision, trader_plan, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("000001", "selected-report", "BUY", 0.82, 24, "建议建仓", "分批"),
+            )
+            selected_report_id = db.execute("SELECT id FROM analysis_reports WHERE code='000001'").fetchone()[0]
+            db.commit()
+
+        async def fake_report_item(item, payload, recent_codes, config):
+            with sqlite3.connect(self.db_path) as db:
+                cursor = db.execute(
+                    """
+                    INSERT INTO analysis_reports
+                        (code, task_id, signal, confidence, risk_score, final_decision, trader_plan, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    (item["code"], f"auto-holding-{item['code']}", "HOLD", 0.7, 40, "持仓股补充日报告", "保留观察"),
+                )
+                report_id = cursor.lastrowid
+                db.commit()
+            batch_report_service._update_item_id(item["id"], status="completed", report_id=report_id, completed_at=batch_report_service._now_expr(), error="")
+
+        with patch(
+            "services.batch_report_service.batch_research.collect_position_plan_market_context",
+            new=AsyncMock(return_value={"captured_at": "2026-06-03T10:15:00", "status": "ok", "items": {}, "summary": []}),
+        ), patch(
+            "services.batch_report_service._run_data_prefetch_item",
+            new=AsyncMock(),
+        ), patch(
+            "services.batch_report_service._run_report_item",
+            new=AsyncMock(side_effect=fake_report_item),
+        ) as run_report:
+            created = await batch_report_service.create_research_job(
+                job_type="position_plan",
+                report_ids=[selected_report_id],
+                auto_start=False,
+                output_dir=Path(self.tmp.name),
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        result = json.loads(job["result_json"])
+        codes = {item["code"] for item in result["plan"]["recommendations"]}
+        self.assertEqual(run_report.await_count, 1)
+        self.assertIn("000002", codes)
+        self.assertEqual(result["plan"]["auto_holding_reports"]["generated_count"], 1)
+        self.assertIn("000002", result["plan"]["auto_holding_reports"]["generated_codes"])
 
     async def test_retry_failed_resets_only_failed_items(self):
         created = await batch_report_service.create_research_job(
@@ -1245,6 +1686,17 @@ class BatchResearchApiTests(unittest.TestCase):
         pause_job.assert_called_once_with("job-1")
         get_logs.assert_called_once_with("job-1", limit=200)
         get_artifacts.assert_called_once_with("job-1")
+
+    def test_batch_analysis_route_uses_service_layer(self):
+        with patch(
+            "services.batch_report_service.get_batch_analysis",
+            new=AsyncMock(return_value={"job_id": "job-1", "overview": {}}),
+        ) as get_analysis:
+            resp = self.client.get("/api/batch-research/jobs/job-1/analysis")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["job_id"], "job-1")
+        get_analysis.assert_awaited_once_with("job-1")
 
     def test_preflight_route_uses_service_layer(self):
         with patch(

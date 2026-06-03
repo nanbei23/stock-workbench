@@ -95,6 +95,11 @@
     </div>
   </div>
 
+  <div class="stock-list-filter">
+    <input type="search" id="stockListFilter" placeholder="搜索股票名称 / 代码"
+           oninput="filterWatchlistStocks(this.value)">
+  </div>
+
   <!-- 搜索框（默认隐藏） -->
   <div class="stock-search" id="searchBox" style="display:none;">
     <input type="text" id="searchInput" maxlength="6" inputmode="numeric" placeholder="股票代码，例如 000001"
@@ -422,7 +427,7 @@
 {% block scripts %}
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/js/chart.js"></script>
-<script src="/static/js/stock.js?v=2.9.1"></script>
+<script src="/static/js/stock.js?v=2.9.2-ui-search"></script>
 <script src="/static/js/strategy.js"></script>
 <script>
 function switchDetail(name) {

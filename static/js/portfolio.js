@@ -31,6 +31,8 @@ let calendarMonth = new Date().getMonth() + 1;
 let _selectedStockCode = null;
 const _tabLoaded = {};
 let _stopLossPct = 8; // 默认值，将从API加载
+let _portfolioPositionsCache = [];
+let _portfolioFilterText = '';
 
 function selectedAccountId() {
   return localStorage.getItem('accountId') || 'default';
@@ -328,19 +330,42 @@ async function loadPortfolio() {
   try {
     const data = await portfolioGet(withAccount('/api/portfolio'));
     const positions = data.positions || [];
-    const listEl = document.getElementById('portfolioList');
+    _portfolioPositionsCache = positions.slice();
+    renderPortfolioList();
+  } catch (e) {
+    console.error('loadPortfolio error:', e);
+  }
+}
+
+function portfolioMatchesSearch(position, query) {
+  if (!query) return true;
+  return [position.code, position.name, position.account_id]
+    .some(value => String(value || '').toLowerCase().includes(query));
+}
+
+function filterPortfolioStocks(value) {
+  _portfolioFilterText = value || '';
+  renderPortfolioList();
+}
+
+function renderPortfolioList() {
+  const listEl = document.getElementById('portfolioList');
+  if (!listEl) return;
+  const query = String(_portfolioFilterText || '').trim().toLowerCase();
+  const positions = _portfolioPositionsCache.filter(position => portfolioMatchesSearch(position, query));
     
-    if (positions.length === 0) {
-      listEl.innerHTML = '<div class="empty-state" style="padding:32px 16px;"><div class="icon ui-glyph" data-icon="仓"></div><p>暂无持仓</p></div>';
-      return;
-    }
+  if (positions.length === 0) {
+    const message = query ? '没有匹配的持仓' : '暂无持仓';
+    listEl.innerHTML = `<div class="empty-state" style="padding:32px 16px;"><div class="icon ui-glyph" data-icon="仓"></div><p>${message}</p></div>`;
+    return;
+  }
     
-    listEl.innerHTML = positions.map(p => {
-      const cls = priceClass(p.unrealized_pnl);
-      const code = esc(p.code);
-      const name = esc(p.name);
-      const clickCode = jsArg(p.code);
-      return `
+  listEl.innerHTML = positions.map(p => {
+    const cls = priceClass(p.unrealized_pnl);
+    const code = esc(p.code);
+    const name = esc(p.name);
+    const clickCode = jsArg(p.code);
+    return `
         <div class="stock-card" onclick="showPositionDetail('${clickCode}')">
           <div class="stock-card-inner">
             <div class="sc-left">
@@ -370,10 +395,7 @@ async function loadPortfolio() {
           <div class="stock-card-bar ${cls}"></div>
         </div>
       `;
-    }).join('');
-  } catch (e) {
-    console.error('loadPortfolio error:', e);
-  }
+  }).join('');
 }
 
 // ── 止损百分比设置 ──────────────────────────────────────

@@ -45,6 +45,9 @@
         createBatchResearch(payload) {
             return post('/api/batch-research/jobs', payload || {});
         },
+        preflightBatchResearch(payload) {
+            return post('/api/batch-research/preflight', payload || {});
+        },
         batchResearchJobs(params) {
             const query = params ? `?${new URLSearchParams(params).toString()}` : '';
             return get(`/api/batch-research/jobs${query}`);

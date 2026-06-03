@@ -94,6 +94,7 @@ def _row_to_plan(row: sqlite3.Row) -> dict[str, Any]:
         "role_models_json": {},
         "cash_snapshot_json": {},
         "portfolio_snapshot_json": {},
+        "decision_market_snapshot_json": {},
         "risk_controls_json": [],
         "role_discussion_json": [],
         "recommendations_json": [],
@@ -154,17 +155,20 @@ def persist_position_plan(
     with _connect(db_path) as conn:
         cash_snapshot = _cash_snapshot(conn)
         portfolio_snapshot = _portfolio_snapshot(conn)
+        decision_market_snapshot = plan.get("decision_market_snapshot") or {}
+        market_context_captured_at = decision_market_snapshot.get("captured_at") if isinstance(decision_market_snapshot, dict) else None
         conn.execute(
             """
             INSERT INTO position_plans
                 (plan_id, title, status, stage, parent_plan_id, context_strategy,
                  source_report_ids, candidate_count, selected_count, model_strategy,
                  model_config_json, role_models_json, cash_snapshot_json,
-                 portfolio_snapshot_json, summary, risk_controls_json,
+                 portfolio_snapshot_json, decision_market_snapshot_json,
+                 market_context_captured_at, summary, risk_controls_json,
                  role_discussion_json, recommendations_json, review_result_json,
                  output_markdown, output_json, batch_job_id)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -181,6 +185,8 @@ def persist_position_plan(
                 _dumps(payload.get("role_models") or {}),
                 _dumps(cash_snapshot),
                 _dumps(portfolio_snapshot),
+                _dumps(decision_market_snapshot),
+                market_context_captured_at,
                 plan.get("summary") or "",
                 _dumps(plan.get("risk_controls") or []),
                 _dumps(plan.get("role_discussion") or []),

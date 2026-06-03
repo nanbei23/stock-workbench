@@ -125,6 +125,36 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"status": "ok", "code": "600519"})
         self.assertEqual(group_name, "默认")
 
+    async def test_get_watchlist_includes_latest_report_signal(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO watchlist (code, name, sort_order) VALUES (?, ?, ?)",
+                ("000001", "平安银行", 1),
+            )
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("000001", "old-report", "SELL", "2026-05-20 09:30:00"),
+            )
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("000001", "new-report", "BUY", "2026-05-21 09:30:00"),
+            )
+            db.commit()
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={})):
+            result = await portfolio_service.get_watchlist()
+
+        stock = result["stocks"][0]
+        self.assertEqual(stock["last_report_signal"], "BUY")
+        self.assertEqual(stock["last_report_id"], 2)
+        self.assertEqual(stock["last_report_created_at"], "2026-05-21 09:30:00")
+
     async def test_portfolio_overview_defaults_cash_to_zero(self):
         result = await portfolio_service.get_portfolio_overview("default")
 

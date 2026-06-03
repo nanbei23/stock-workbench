@@ -56,9 +56,11 @@ async def create_account(name: str, broker: str = "", account_id: str | None = N
 
 async def get_watchlist():
     async def _load(db):
-        return await repo.fetch_watchlist_and_positions(db)
+        stocks, portfolio_map = await repo.fetch_watchlist_and_positions(db)
+        latest_reports = await repo.fetch_latest_report_map(db, [stock["code"] for stock in stocks])
+        return stocks, portfolio_map, latest_reports
 
-    stocks, portfolio_map = await _with_db(_load)
+    stocks, portfolio_map, latest_reports = await _with_db(_load)
     if stocks:
         quotes = await get_batch_quotes([stock["code"] for stock in stocks])
         for stock in stocks:
@@ -90,6 +92,12 @@ async def get_watchlist():
                 if stock["prev_close"] and stock["total_shares"] and stock["price"]
                 else 0
             )
+            latest_report = latest_reports.get(stock["code"], {})
+            stock["last_report_id"] = latest_report.get("id")
+            stock["last_report_signal"] = latest_report.get("signal")
+            stock["last_report_confidence"] = latest_report.get("confidence")
+            stock["last_report_risk_score"] = latest_report.get("risk_score")
+            stock["last_report_created_at"] = latest_report.get("created_at")
     return {"count": len(stocks), "stocks": stocks}
 
 

@@ -26,6 +26,28 @@ async def fetch_watchlist_and_positions(db):
     return stocks, portfolio_map
 
 
+async def fetch_latest_report_map(db, codes: list[str]):
+    if not codes:
+        return {}
+    placeholders = ",".join("?" for _ in codes)
+    rows = await db.execute_fetchall(
+        f"""
+        SELECT id, code, signal, confidence, risk_score, created_at
+        FROM analysis_reports
+        WHERE code IN ({placeholders})
+        ORDER BY code ASC, datetime(created_at) DESC, id DESC
+        """,
+        codes,
+    )
+    latest = {}
+    for row in rows:
+        code = row["code"]
+        if code in latest:
+            continue
+        latest[code] = dict(row)
+    return latest
+
+
 async def next_watchlist_sort_order(db):
     row = await (await db.execute("SELECT COALESCE(MAX(sort_order), 0) FROM watchlist")).fetchone()
     return (row[0] if row else 0) + 1

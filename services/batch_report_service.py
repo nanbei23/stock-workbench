@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 from config import DB_PATH
 from scripts import batch_research
+from services import market_permission_service, quote_service, settings_service
 from services import position_plan_service
 
 
@@ -46,6 +47,16 @@ QUOTA_MARKERS = (
 )
 CONTEXT_LIMIT_MARKERS = ("context length", "maximum context", "tokens exceed", "上下文")
 GUARD_PAUSED_STATUS = "guard_paused"
+ERROR_TYPE_LABELS = {
+    "quota_exhausted": "额度失败",
+    "network": "网络失败",
+    "rate_limit": "限流失败",
+    "context_limit": "上下文过长",
+    "snapshot_incomplete": "快照不完整",
+    "json_parse": "模型 JSON 输出失败",
+    "role_failure": "单角色失败",
+    "unknown": "未知失败",
+}
 
 
 class ModelQuotaError(RuntimeError):
@@ -75,6 +86,10 @@ def _loads(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _clean_str_list(values: list[Any] | None) -> list[str]:
+    return [str(item).strip() for item in (values or []) if str(item).strip()]
 
 
 def _iso_now() -> str:
@@ -181,6 +196,34 @@ def _stock_candidate(item: dict[str, Any]) -> batch_research.StockCandidate:
     )
 
 
+def _trading_permission_settings() -> dict[str, Any]:
+    settings = dict(settings_service.DEFAULTS)
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT key, value FROM settings
+                WHERE key IN ('trade_market_main', 'trade_market_gem', 'trade_market_star', 'trade_market_bse')
+                """
+            ).fetchall()
+        settings.update({row["key"]: row["value"] for row in rows})
+    except Exception:
+        pass
+    return settings
+
+
+def _filter_stocks_by_trading_permissions(stocks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    return market_permission_service.filter_allowed_stocks(stocks, settings=_trading_permission_settings())
+
+
+def _excluded_market_summary(excluded: list[dict[str, Any]]) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for item in excluded:
+        label = str(item.get("market_label") or item.get("market_key") or "未知")
+        summary[label] = summary.get(label, 0) + 1
+    return summary
+
+
 def _ranked_candidate(item: dict[str, Any]) -> batch_research.RankedCandidate:
     return batch_research.RankedCandidate(
         code=item["code"],
@@ -215,10 +258,15 @@ def preflight_batch_models(
     risk_rounds: int = 1,
     model_fallback_enabled: bool = True,
     fallback_provider_ids: list[str] | None = None,
-    **_extra,
+    allowed_worker_ids: list[str] | None = None,
+    primary_provider_ids: list[str] | None = None,
+    **extra,
 ) -> dict[str, Any]:
     clean_report_ids = [int(report_id) for report_id in (report_ids or []) if int(report_id) > 0]
     stocks = _load_report_codes(clean_report_ids) if job_type == "position_plan" and clean_report_ids else _load_watchlist_codes(group, codes or None)
+    stocks, excluded_by_permission = _filter_stocks_by_trading_permissions(stocks)
+    if job_type == "position_plan" and clean_report_ids:
+        clean_report_ids = [int(stock["report_id"]) for stock in stocks if stock.get("report_id")]
     if top_n > 0:
         stocks = stocks[:top_n]
     primary = batch_research._snapshot_llm_config(DB_PATH, model_tier="deep")
@@ -227,21 +275,80 @@ def preflight_batch_models(
     fallbacks = _fallback_model_configs(fallback_payload)
     missing = [key for key in ("base_url", "api_key", "model") if not primary.get(key)]
     status = "ok" if not missing else "warning"
+    all_workers, selected_workers, selected_worker_ids = _worker_pool_for_payload({"allowed_worker_ids": allowed_worker_ids or []})
+    worker_count = len(selected_workers) if selected_workers else 1
+    role_calls = int(role_calls)
+    estimated_calls = len(stocks) * role_calls
+    depth = str(extra.get("analysis_depth") or "standard")
+    mode = str(extra.get("model_mode") or "balanced")
+    base_seconds = 50 if depth == "quick" else 80 if mode == "economy" else 120 if depth == "standard" else 170
+    if job_type == "position_plan":
+        base_seconds = 90
+    role_calls_per_hour = max(1, int(worker_count * 3600 / base_seconds))
+    low_hours = round(estimated_calls / role_calls_per_hour * 0.85, 2) if estimated_calls else 0.0
+    high_hours = round(estimated_calls / role_calls_per_hour * 1.35, 2) if estimated_calls else 0.0
+    configured_provider_ids = set(primary_provider_ids or [])
+    configured_provider_ids.update(fallback_provider_ids or [])
+    for worker in selected_workers:
+        configured_provider_ids.update(worker.get("provider_ids") or [])
+    provider_pool = _public_provider_pool(list(configured_provider_ids), model_tier=extra.get("snapshot_model_tier") or "deep")
+    model_pool_risks = [
+        {
+            "provider_id": item["provider_id"],
+            "name": item["name"],
+            "model": item["model"],
+            "risk": "missing_config",
+            "message": f"{item['name']} 缺少 {', '.join(item['missing'])}",
+        }
+        for item in provider_pool
+        if not item.get("ready")
+    ]
+    if estimated_calls >= 1000 and not fallbacks:
+        model_pool_risks.append(
+            {
+                "provider_id": "fallback",
+                "name": "备用模型",
+                "model": "",
+                "risk": "no_fallback",
+                "message": "预计调用量较高，但没有可用备用模型池",
+            }
+        )
+    recommendations = []
+    if estimated_calls >= 1500:
+        recommendations.append("预计调用量较高，建议启用多 worker、多模型池或降低辩论轮数。")
+    if high_hours >= 6:
+        recommendations.append("预计为 6 小时以上长任务，建议使用后台守护 worker 并确认断点续跑。")
     return {
         "status": status,
         "job_type": job_type,
         "stock_count": len(stocks),
+        "excluded_by_permission_count": len(excluded_by_permission),
+        "excluded_by_permission": _excluded_market_summary(excluded_by_permission),
         "role_calls_per_stock": role_calls,
-        "estimated_role_calls": len(stocks) * role_calls,
+        "estimated_role_calls": estimated_calls,
         "primary_ready": not missing,
         "primary_missing": missing,
         "primary_model": primary.get("model", ""),
         "fallback_enabled": bool(model_fallback_enabled),
         "fallback_count": len(fallbacks),
         "fallback_models": [{"profile": item.get("_profile", ""), "model": item.get("model", "")} for item in fallbacks],
+        "enabled_worker_count": len([worker for worker in all_workers if worker.get("enabled")]),
+        "worker_count": worker_count,
+        "selected_worker_ids": selected_worker_ids,
+        "throughput": {
+            "role_calls_per_hour": role_calls_per_hour,
+            "worker_count": worker_count,
+            "seconds_per_role_call": base_seconds,
+        },
+        "duration_range_hours": {"low": low_hours, "high": high_hours},
+        "estimated_duration_text": f"{low_hours:g}-{high_hours:g} 小时" if high_hours else "0 小时",
+        "model_pool_risks": model_pool_risks,
+        "recommendations": recommendations,
         "warnings": [
             *([f"主模型缺少 {', '.join(missing)}"] if missing else []),
+            *([f"交易权限已排除 {len(excluded_by_permission)} 只标的: {_excluded_market_summary(excluded_by_permission)}"] if excluded_by_permission else []),
             *(["没有可用备用模型，额度耗尽时会进入 quota_paused"] if model_fallback_enabled and not fallbacks else []),
+            *[item["message"] for item in model_pool_risks],
         ],
     }
 
@@ -404,15 +511,18 @@ def upsert_item_step(
     step_order: int = 0,
     status: str = "completed",
     error: str = "",
+    model_config: dict[str, Any] | None = None,
+    duration_ms: int | None = None,
+    error_type: str | None = None,
 ) -> dict[str, Any]:
     with _connect() as conn:
         conn.execute(
             """
             INSERT INTO batch_job_item_steps
                 (item_id, job_id, role_key, role_name, step_order, status, content, error,
-                 heartbeat_at, started_at, completed_at)
+                 error_type, model_config_json, duration_ms, heartbeat_at, started_at, completed_at)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'),
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'),
                  CASE WHEN ? IN ('completed', 'failed', 'skipped', 'cancelled') THEN datetime('now') ELSE NULL END)
             ON CONFLICT(item_id, role_key) DO UPDATE SET
                 role_name=excluded.role_name,
@@ -420,12 +530,28 @@ def upsert_item_step(
                 status=excluded.status,
                 content=excluded.content,
                 error=excluded.error,
+                error_type=excluded.error_type,
+                model_config_json=excluded.model_config_json,
+                duration_ms=excluded.duration_ms,
                 heartbeat_at=datetime('now'),
                 started_at=COALESCE(batch_job_item_steps.started_at, excluded.started_at),
                 completed_at=excluded.completed_at,
                 updated_at=datetime('now')
             """,
-            (item_id, job_id, role_key, role_name, step_order, status, content or "", error or "", status),
+            (
+                item_id,
+                job_id,
+                role_key,
+                role_name,
+                step_order,
+                status,
+                content or "",
+                error or "",
+                error_type or _classify_item_error(status, error or ""),
+                json.dumps(model_config or {}, ensure_ascii=False, default=str),
+                duration_ms,
+                status,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -675,6 +801,127 @@ def _llm_error_type(error: str) -> str:
     return "unknown"
 
 
+def _classify_item_error(status: str, error: str, error_type: str | None = None) -> str:
+    if error_type:
+        return error_type
+    lower = (error or "").lower()
+    if status == "waiting_snapshot" or "快照" in error or "snapshot" in lower:
+        return "snapshot_incomplete"
+    if "json" in lower or "parse" in lower or "解析" in error:
+        return "json_parse"
+    if "角色" in error or "role" in lower:
+        return "role_failure"
+    return _llm_error_type(error)
+
+
+def get_failure_groups(job_id: str) -> dict[str, Any]:
+    with _connect() as conn:
+        item_rows = conn.execute(
+            """
+            SELECT id, code, name, status, error, error_type
+            FROM batch_job_items
+            WHERE job_id = ?
+              AND status IN ('failed', 'timeout', 'cancelled', 'waiting_snapshot', 'quota_paused')
+            ORDER BY id ASC
+            """,
+            (job_id,),
+        ).fetchall()
+        step_rows = conn.execute(
+            """
+            SELECT item_id, role_key, role_name, status, error, error_type
+            FROM batch_job_item_steps
+            WHERE job_id = ?
+              AND status IN ('failed', 'timeout', 'cancelled', 'quota_paused')
+            ORDER BY item_id ASC, step_order ASC
+            """,
+            (job_id,),
+        ).fetchall()
+    groups: dict[str, dict[str, Any]] = {}
+    for row in item_rows:
+        kind = _classify_item_error(row["status"], row["error"] or "", row["error_type"])
+        group = groups.setdefault(kind, {"error_type": kind, "label": ERROR_TYPE_LABELS.get(kind, kind), "count": 0, "items": []})
+        group["count"] += 1
+        group["items"].append({"item_id": row["id"], "code": row["code"], "name": row["name"], "status": row["status"], "error": row["error"] or ""})
+    for row in step_rows:
+        kind = _classify_item_error(row["status"], row["error"] or "", row["error_type"])
+        group = groups.setdefault(kind, {"error_type": kind, "label": ERROR_TYPE_LABELS.get(kind, kind), "count": 0, "items": []})
+        group.setdefault("steps", []).append({"item_id": row["item_id"], "role_key": row["role_key"], "role_name": row["role_name"], "error": row["error"] or ""})
+    return {"job_id": job_id, "groups": sorted(groups.values(), key=lambda item: item["count"], reverse=True)}
+
+
+def get_runtime_stats(job_id: str) -> dict[str, Any]:
+    with _connect() as conn:
+        item_rows = conn.execute(
+            """
+            SELECT id, code, name, status, started_at, completed_at
+            FROM batch_job_items
+            WHERE job_id = ?
+            ORDER BY id ASC
+            """,
+            (job_id,),
+        ).fetchall()
+        step_rows = conn.execute(
+            """
+            SELECT item_id, role_key, role_name, status, model_config_json, duration_ms, started_at, completed_at, error_type
+            FROM batch_job_item_steps
+            WHERE job_id = ?
+            ORDER BY item_id ASC, step_order ASC, id ASC
+            """,
+            (job_id,),
+        ).fetchall()
+        log_rows = conn.execute(
+            """
+            SELECT event, data_json, created_at
+            FROM batch_job_logs
+            WHERE job_id = ?
+            ORDER BY id ASC
+            """,
+            (job_id,),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in item_rows:
+        started = _parse_dt(row["started_at"])
+        completed = _parse_dt(row["completed_at"])
+        duration_ms = int((completed - started).total_seconds() * 1000) if started and completed else 0
+        items.append({"item_id": row["id"], "code": row["code"], "name": row["name"], "status": row["status"], "duration_ms": duration_ms})
+    role_stats: dict[str, dict[str, Any]] = {}
+    model_stats: dict[str, dict[str, Any]] = {}
+    for row in step_rows:
+        model_config = _loads(row["model_config_json"], {})
+        model = model_config.get("model") or ""
+        duration_ms = int(row["duration_ms"] or 0)
+        if not duration_ms:
+            started = _parse_dt(row["started_at"])
+            completed = _parse_dt(row["completed_at"])
+            duration_ms = int((completed - started).total_seconds() * 1000) if started and completed else 0
+        role = role_stats.setdefault(row["role_key"], {"role_key": row["role_key"], "role_name": row["role_name"], "count": 0, "failed": 0, "duration_ms": 0})
+        role["count"] += 1
+        role["duration_ms"] += duration_ms
+        if row["status"] != "completed":
+            role["failed"] += 1
+        if model:
+            model_item = model_stats.setdefault(model, {"model": model, "count": 0, "failed": 0, "duration_ms": 0})
+            model_item["count"] += 1
+            model_item["duration_ms"] += duration_ms
+            if row["status"] != "completed":
+                model_item["failed"] += 1
+    fallback_events = []
+    for row in log_rows:
+        if "fallback" not in (row["event"] or ""):
+            continue
+        data = _loads(row["data_json"], {})
+        fallback_events.append({"event": row["event"], "created_at": row["created_at"], **data})
+    slowest_items = sorted(items, key=lambda item: item["duration_ms"], reverse=True)[:10]
+    return {
+        "job_id": job_id,
+        "items": items,
+        "slowest_items": slowest_items,
+        "roles": list(role_stats.values()),
+        "models": list(model_stats.values()),
+        "fallback_events": fallback_events,
+    }
+
+
 def _retry_after_seconds(error_type: str, consecutive_failures: int) -> int:
     failures = max(1, int(consecutive_failures or 1))
     if error_type == "quota_exhausted":
@@ -732,6 +979,62 @@ def _provider_configs_by_ids(provider_ids: list[str], *, model_tier: str | None 
     return configs
 
 
+def _load_worker_pool_config() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'batch_worker_pool'").fetchone()
+    workers = _loads(row["value"] if row else "[]", [])
+    normalized: list[dict[str, Any]] = []
+    for index, worker in enumerate(workers if isinstance(workers, list) else []):
+        if not isinstance(worker, dict):
+            continue
+        worker_id = str(worker.get("id") or worker.get("name") or f"worker-{index + 1}").strip()
+        normalized.append(
+            {
+                "id": worker_id or f"worker-{index + 1}",
+                "name": worker.get("name") or worker_id or f"Worker {index + 1}",
+                "enabled": bool(worker.get("enabled", True)),
+                "provider_ids": _clean_str_list(worker.get("provider_ids") or []),
+                "model_tier": worker.get("model_tier") if worker.get("model_tier") in {"quick", "deep"} else "deep",
+                "sleep_seconds": int(worker.get("sleep_seconds") or 5),
+                "stale_minutes": int(worker.get("stale_minutes") or 15),
+            }
+        )
+    return normalized
+
+
+def _public_provider_pool(provider_ids: list[str], *, model_tier: str = "deep") -> list[dict[str, Any]]:
+    providers = _load_model_providers()
+    provider_by_id = {str(provider.get("id")): provider for provider in providers}
+    output: list[dict[str, Any]] = []
+    for provider_id in provider_ids:
+        provider = provider_by_id.get(str(provider_id))
+        if not provider:
+            output.append({"provider_id": provider_id, "name": provider_id, "model": "", "ready": False, "missing": ["provider"]})
+            continue
+        config = _provider_to_config(provider, model_tier=model_tier)
+        missing = [key for key in ("base_url", "api_key", "model") if not config.get(key)]
+        output.append(
+            {
+                "provider_id": provider_id,
+                "name": provider.get("name") or provider_id,
+                "model": config.get("model") or "",
+                "model_tier": model_tier,
+                "ready": not missing,
+                "missing": missing,
+            }
+        )
+    return output
+
+
+def _worker_pool_for_payload(payload: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    payload = payload or {}
+    workers = _load_worker_pool_config()
+    enabled = [worker for worker in workers if worker.get("enabled")]
+    allowed = set(_clean_str_list(payload.get("allowed_worker_ids") or []))
+    selected = [worker for worker in enabled if not allowed or worker["id"] in allowed]
+    return workers, selected, [worker["id"] for worker in selected]
+
+
 def _primary_model_config(payload: dict[str, Any], *, model_tier: str) -> dict[str, str]:
     provider_ids = [str(item) for item in (payload.get("_worker_model_provider_ids") or payload.get("primary_provider_ids") or []) if str(item)]
     provider_configs = _provider_configs_by_ids(provider_ids, model_tier=model_tier)
@@ -742,6 +1045,8 @@ def _primary_model_config(payload: dict[str, Any], *, model_tier: str) -> dict[s
 
 def _fallback_model_configs(payload: dict[str, Any]) -> list[dict[str, str]]:
     if payload.get("model_fallback_enabled") is False:
+        return []
+    if payload.get("quota_exhausted_action") == "pause":
         return []
     providers = _load_model_providers()
     provider_ids = [str(item) for item in payload.get("fallback_provider_ids") or [] if str(item)]
@@ -825,7 +1130,7 @@ def _mark_quota_paused(
         status="quota_paused",
         error=error,
     )
-    _update_item_id(item_id, status="quota_paused", error=error, completed_at=None)
+    _update_item_id(item_id, status="quota_paused", error=error, error_type=_classify_item_error("quota_paused", error), completed_at=None)
     _update_job(
         job_id,
         status="quota_paused",
@@ -1069,9 +1374,17 @@ async def _run_snapshot_tradingagents_graph_with_steps(
             step_order=step_order,
             status="running",
             error="",
+            model_config={"model": config.get("model", ""), "profile": config.get("_profile", ""), "provider_id": config.get("_provider_id", "")},
         )
         touch_job(job_id)
-        log_job_event(job_id, "info", "role_started", f"{persisted_name} 开始", {"role_key": persisted_key}, item_id=item_id)
+        log_job_event(
+            job_id,
+            "info",
+            "role_started",
+            f"{persisted_name} 开始",
+            {"role_key": persisted_key, "model": config.get("model", ""), "provider_id": config.get("_provider_id", "")},
+            item_id=item_id,
+        )
         prompt = batch_research._snapshot_tradingagents_state_prompt(
             ranked,
             snapshot,
@@ -1081,6 +1394,7 @@ async def _run_snapshot_tradingagents_graph_with_steps(
             output_key=output_key,
             state=state,
         )
+        role_started_at = datetime.now()
         try:
             content = await _call_role_with_retries(
                 role,
@@ -1114,8 +1428,18 @@ async def _run_snapshot_tradingagents_graph_with_steps(
                 step_order=step_order,
                 status="failed",
                 error=str(exc),
+                error_type=_classify_item_error("failed", str(exc)),
+                model_config={"model": config.get("model", ""), "profile": config.get("_profile", ""), "provider_id": config.get("_provider_id", "")},
+                duration_ms=int((datetime.now() - role_started_at).total_seconds() * 1000),
             )
-            log_job_event(job_id, "error", "role_failed", f"{persisted_name} 失败", {"role_key": persisted_key, "error": str(exc)}, item_id=item_id)
+            log_job_event(
+                job_id,
+                "error",
+                "role_failed",
+                f"{persisted_name} 失败",
+                {"role_key": persisted_key, "error": str(exc), "error_type": _classify_item_error("failed", str(exc)), "model": config.get("model", "")},
+                item_id=item_id,
+            )
             raise
         upsert_item_step(
             item_id,
@@ -1126,8 +1450,22 @@ async def _run_snapshot_tradingagents_graph_with_steps(
             step_order=step_order,
             status="completed",
             error="",
+            model_config={"model": config.get("model", ""), "profile": config.get("_profile", ""), "provider_id": config.get("_provider_id", "")},
+            duration_ms=int((datetime.now() - role_started_at).total_seconds() * 1000),
         )
-        log_job_event(job_id, "info", "role_completed", f"{persisted_name} 完成", {"role_key": persisted_key}, item_id=item_id)
+        log_job_event(
+            job_id,
+            "info",
+            "role_completed",
+            f"{persisted_name} 完成",
+            {
+                "role_key": persisted_key,
+                "model": config.get("model", ""),
+                "provider_id": config.get("_provider_id", ""),
+                "duration_ms": int((datetime.now() - role_started_at).total_seconds() * 1000),
+            },
+            item_id=item_id,
+        )
         role_discussion.append(
             {
                 "role_key": role_key,
@@ -1293,13 +1631,36 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300, cooperative: boo
     lease = max(30, int(lease_seconds or 300))
     token = uuid.uuid4().hex
     joined_running = False
+    worker_filter_sql = """
+      AND (
+        json_extract(COALESCE(payload_json, '{}'), '$.allowed_worker_ids') IS NULL
+        OR json_array_length(json_extract(COALESCE(payload_json, '{}'), '$.allowed_worker_ids')) = 0
+        OR EXISTS (
+          SELECT 1
+          FROM json_each(json_extract(COALESCE(payload_json, '{}'), '$.allowed_worker_ids'))
+          WHERE value = ?
+        )
+      )
+    """
+    worker_filter_bj_sql = """
+      AND (
+        json_extract(COALESCE(bj.payload_json, '{}'), '$.allowed_worker_ids') IS NULL
+        OR json_array_length(json_extract(COALESCE(bj.payload_json, '{}'), '$.allowed_worker_ids')) = 0
+        OR EXISTS (
+          SELECT 1
+          FROM json_each(json_extract(COALESCE(bj.payload_json, '{}'), '$.allowed_worker_ids'))
+          WHERE value = ?
+        )
+      )
+    """
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            """
+            f"""
             SELECT job_id
             FROM batch_jobs
             WHERE COALESCE(pause_requested, 0) = 0
+              {worker_filter_sql}
               AND (
                 status IN ('pending', 'interrupted')
                 OR (
@@ -1310,16 +1671,18 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300, cooperative: boo
               )
             ORDER BY created_at ASC
             LIMIT 1
-            """
+            """,
+            (worker,),
         ).fetchone()
         if not row and cooperative:
             row = conn.execute(
-                """
+                f"""
                 SELECT bj.job_id
                 FROM batch_jobs bj
                 WHERE bj.job_type = 'report_generation'
                   AND bj.status = 'running'
                   AND COALESCE(bj.pause_requested, 0) = 0
+                  {worker_filter_bj_sql}
                   AND EXISTS (
                     SELECT 1
                     FROM batch_job_items bi
@@ -1335,7 +1698,8 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300, cooperative: boo
                   )
                 ORDER BY bj.created_at ASC
                 LIMIT 1
-                """
+                """,
+                (worker,),
             ).fetchone()
             joined_running = bool(row)
         if not row:
@@ -1527,16 +1891,31 @@ def mark_stalled_jobs(*, stale_minutes: int = 15) -> int:
 def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
     now = datetime.now(UTC).replace(tzinfo=None)
     threshold = now - timedelta(minutes=max(1, int(stale_minutes or 15)))
+    configured_workers = {worker["id"]: worker for worker in _load_worker_pool_config()}
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT worker_id, lease_owner, status, job_id, job_type, current_code, heartbeat_at, lease_until, updated_at
+            SELECT worker_id, lease_owner, status, job_id, job_type, current_code, heartbeat_at, lease_until, updated_at,
+                   payload_json, runtime_json
             FROM batch_jobs
             WHERE worker_id IS NOT NULL OR lease_owner IS NOT NULL
             ORDER BY COALESCE(heartbeat_at, updated_at, created_at) DESC
             LIMIT 200
             """
         ).fetchall()
+        item_rows = conn.execute(
+            """
+            SELECT job_id,
+                   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                   SUM(CASE WHEN status IN ('failed', 'timeout', 'cancelled') THEN 1 ELSE 0 END) AS failed,
+                   SUM(CASE WHEN status = 'waiting_snapshot' THEN 1 ELSE 0 END) AS waiting,
+                   SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                   SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+            FROM batch_job_items
+            GROUP BY job_id
+            """
+        ).fetchall()
+    counts_by_job = {row["job_id"]: {key: int(row[key] or 0) for key in ("completed", "failed", "waiting", "running", "pending")} for row in item_rows}
     by_worker: dict[str, dict[str, Any]] = {}
     for row in rows:
         worker_id = row["worker_id"] or row["lease_owner"] or "unknown"
@@ -1544,12 +1923,21 @@ def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
         lease_until = _parse_dt(row["lease_until"])
         state = "offline"
         if heartbeat and heartbeat >= threshold and (not lease_until or lease_until >= now):
-            state = "online"
+            state = "running" if row["status"] == "running" and row["current_code"] else "online"
         elif row["status"] == "running":
             state = "stale"
+        runtime = _loads(row["runtime_json"], {})
+        quota = runtime.get("quota") if isinstance(runtime, dict) else {}
+        active_model = quota.get("active_model") if isinstance(quota, dict) else {}
+        latest_event = (quota.get("events") or [])[-1] if isinstance(quota, dict) and quota.get("events") else {}
+        config = configured_workers.get(worker_id, {})
+        provider_ids = config.get("provider_ids") or _clean_str_list((_loads(row["payload_json"], {}) or {}).get("_worker_model_provider_ids"))
+        model_tier = config.get("model_tier") or (_loads(row["payload_json"], {}) or {}).get("_worker_model_tier") or "deep"
         current = by_worker.get(worker_id)
         record = {
             "worker_id": worker_id,
+            "name": config.get("name") or worker_id,
+            "enabled": config.get("enabled", True),
             "state": state,
             "job_id": row["job_id"],
             "job_type": row["job_type"],
@@ -1557,15 +1945,44 @@ def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
             "current_code": row["current_code"],
             "heartbeat_at": row["heartbeat_at"],
             "lease_until": row["lease_until"],
+            "counts": counts_by_job.get(row["job_id"], {"completed": 0, "failed": 0, "waiting": 0, "running": 0, "pending": 0}),
+            "model_pool": _public_provider_pool(provider_ids, model_tier=model_tier),
+            "current_model": (active_model or {}).get("model") or quota.get("model", "") if isinstance(quota, dict) else "",
+            "fallback_model": latest_event.get("fallback_model", "") if isinstance(latest_event, dict) else "",
+            "runtime": runtime,
         }
-        if not current or (record["state"] == "online" and current["state"] != "online"):
+        if not current or (record["state"] in {"running", "online"} and current["state"] not in {"running", "online"}):
             by_worker[worker_id] = record
+    for worker_id, config in configured_workers.items():
+        if worker_id in by_worker:
+            continue
+        by_worker[worker_id] = {
+            "worker_id": worker_id,
+            "name": config.get("name") or worker_id,
+            "enabled": bool(config.get("enabled", True)),
+            "state": "idle" if config.get("enabled") else "disabled",
+            "job_id": "",
+            "job_type": "",
+            "job_status": "",
+            "current_code": "",
+            "heartbeat_at": "",
+            "lease_until": "",
+            "counts": {"completed": 0, "failed": 0, "waiting": 0, "running": 0, "pending": 0},
+            "model_pool": _public_provider_pool(config.get("provider_ids") or [], model_tier=config.get("model_tier") or "deep"),
+            "current_model": "",
+            "fallback_model": "",
+            "runtime": {},
+        }
     workers = list(by_worker.values())
     summary = {
         "total": len(workers),
-        "online": sum(1 for worker in workers if worker["state"] == "online"),
+        "online": sum(1 for worker in workers if worker["state"] in {"online", "running"}),
+        "running": sum(1 for worker in workers if worker["state"] == "running"),
+        "idle": sum(1 for worker in workers if worker["state"] == "idle"),
         "stale": sum(1 for worker in workers if worker["state"] == "stale"),
         "offline": sum(1 for worker in workers if worker["state"] == "offline"),
+        "disabled": sum(1 for worker in workers if worker["state"] == "disabled"),
+        "latest_heartbeat_at": max([worker.get("heartbeat_at") or "" for worker in workers], default=""),
     }
     return {"summary": summary, "workers": workers}
 
@@ -1666,6 +2083,12 @@ async def create_research_job(
     context_strategy: str = "auto",
     model_strategy: str = "single",
     role_models: dict[str, Any] | None = None,
+    allowed_worker_ids: list[str] | None = None,
+    primary_provider_ids: list[str] | None = None,
+    model_fallback_enabled: bool = True,
+    fallback_provider_ids: list[str] | None = None,
+    quota_exhausted_action: str = "switch_model",
+    failure_retry_mode: str = "manual",
     title: str | None = None,
     trade_date: str | None = None,
     output_dir: Path | str | None = None,
@@ -1679,10 +2102,13 @@ async def create_research_job(
     if job_type in {"data_prefetch", "report_generation"} and not explicit_codes and not allow_all:
         raise HTTPException(400, "请先选择股票；如需全量批量任务，请显式启用 allow_all")
     stocks = _load_report_codes(clean_report_ids) if job_type == "position_plan" and clean_report_ids else _load_watchlist_codes(group, codes or None)
+    stocks, excluded_by_permission = _filter_stocks_by_trading_permissions(stocks)
+    if job_type == "position_plan" and clean_report_ids:
+        clean_report_ids = [int(stock["report_id"]) for stock in stocks if stock.get("report_id")]
     if top_n > 0:
         stocks = stocks[:top_n]
     if not stocks:
-        raise HTTPException(400, "没有可执行的股票")
+        raise HTTPException(400, "没有可执行的股票；请检查交易权限设置或重新选择标的")
     job_id = f"{job_type[:2]}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{str(uuid.uuid4())[:6]}"
     max_consecutive_failures = int(extra.pop("max_consecutive_failures", 5) or 0)
     max_failure_rate = float(extra.pop("max_failure_rate", 0.25) or 0)
@@ -1693,6 +2119,7 @@ async def create_research_job(
         "allow_all": allow_all,
         "codes": [stock["code"] for stock in stocks],
         "report_ids": clean_report_ids,
+        "excluded_by_permission": excluded_by_permission,
         "top_n": top_n,
         "skip_recent_days": skip_recent_days,
         "refresh_snapshots": refresh_snapshots,
@@ -1709,6 +2136,12 @@ async def create_research_job(
         "context_strategy": context_strategy,
         "model_strategy": model_strategy,
         "role_models": role_models or {},
+        "allowed_worker_ids": _clean_str_list(allowed_worker_ids),
+        "primary_provider_ids": _clean_str_list(primary_provider_ids),
+        "model_fallback_enabled": bool(model_fallback_enabled),
+        "fallback_provider_ids": _clean_str_list(fallback_provider_ids),
+        "quota_exhausted_action": quota_exhausted_action if quota_exhausted_action in {"switch_model", "pause"} else "switch_model",
+        "failure_retry_mode": failure_retry_mode if failure_retry_mode in {"manual", "auto_switch_model", "auto_downgrade"} else "manual",
         "title": title,
         "trade_date": trade_date or date.today().isoformat(),
         "output_dir": str(output_dir) if output_dir else str(Path("data") / "batch_research"),
@@ -1725,7 +2158,7 @@ async def create_research_job(
         f"{_job_name(job_type)} 已创建",
         {"total_count": len(stocks), "job_type": job_type, "codes": [stock["code"] for stock in stocks]},
     )
-    if auto_start:
+    if auto_start and not payload["allowed_worker_ids"]:
         _schedule_job(job_id)
     return {"job_id": job_id, "job_type": job_type, "status": "pending", "total_count": len(stocks)}
 
@@ -1767,7 +2200,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
         return
     snapshot = _snapshot_by_id(int(item["locked_snapshot_id"])) if item.get("locked_snapshot_id") else batch_research._latest_snapshot(DB_PATH, code)
     if not snapshot or not (snapshot.get("validation") or {}).get("ok"):
-        _update_item_id(item["id"], status="waiting_snapshot", completed_at=_now_expr(), error="缺少完整七层快照")
+        _update_item_id(item["id"], status="waiting_snapshot", completed_at=_now_expr(), error="缺少完整七层快照", error_type="snapshot_incomplete")
         log_job_event(payload.get("job_id") or item["job_id"], "warning", "snapshot_missing", "缺少完整七层快照", {"code": code}, item_id=item["id"])
         return
     _update_item_id(item["id"], status="running", snapshot_id=snapshot["id"], locked_snapshot_id=snapshot["id"], started_at=_now_expr(), error="")
@@ -1832,9 +2265,154 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
     log_job_event(payload.get("job_id") or item["job_id"], "info", "item_completed", f"{code} 报告生成完成", {"report_id": report_id}, item_id=item["id"])
 
 
+def _current_position_stocks() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.code,
+                   COALESCE(NULLIF(p.name, ''), NULLIF(w.name, ''), p.code) AS name,
+                   COALESCE(NULLIF(w.group_name, ''), '持仓') AS group_name,
+                   p.total_shares,
+                   p.market_value
+            FROM portfolio p
+            LEFT JOIN watchlist w ON w.code = p.code
+            WHERE p.total_shares > 0
+            ORDER BY p.market_value DESC, p.code
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _today_report_by_code(codes: list[str]) -> dict[str, dict[str, Any]]:
+    if not codes:
+        return {}
+    placeholders = ",".join("?" for _ in codes)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, code, signal, created_at
+            FROM analysis_reports
+            WHERE code IN ({placeholders})
+              AND date(created_at, 'localtime') = date('now', 'localtime')
+            ORDER BY code ASC, datetime(created_at) DESC, id DESC
+            """,
+            codes,
+        ).fetchall()
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row["code"] not in latest:
+            latest[row["code"]] = dict(row)
+    return latest
+
+
+def _insert_or_get_position_plan_item(job_id: str, stock: dict[str, Any]) -> dict[str, Any]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM batch_job_items WHERE job_id = ? AND code = ? ORDER BY id ASC LIMIT 1",
+            (job_id, stock["code"]),
+        ).fetchone()
+        if row:
+            return dict(row)
+        cursor = conn.execute(
+            """
+            INSERT INTO batch_job_items (job_id, code, name, status)
+            VALUES (?, ?, ?, 'pending')
+            """,
+            (job_id, stock["code"], stock.get("name") or stock["code"]),
+        )
+        conn.execute("UPDATE batch_jobs SET total_count = total_count + 1, updated_at = datetime('now') WHERE job_id = ?", (job_id,))
+        conn.commit()
+        row = conn.execute("SELECT * FROM batch_job_items WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def _load_item(item_id: int) -> dict[str, Any]:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM batch_job_items WHERE id = ?", (item_id,)).fetchone()
+    return dict(row) if row else {}
+
+
+async def _ensure_current_holding_reports(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("include_current_positions") is False:
+        return {"enabled": False, "report_ids": [], "generated_codes": [], "reused_codes": [], "failed": []}
+    holdings = _current_position_stocks()
+    if not holdings:
+        return {"enabled": True, "report_ids": [], "generated_codes": [], "reused_codes": [], "failed": []}
+
+    today_reports = _today_report_by_code([stock["code"] for stock in holdings])
+    report_ids: list[int] = []
+    generated_codes: list[str] = []
+    reused_codes: list[str] = []
+    failed: list[dict[str, str]] = []
+    config = _primary_model_config(payload, model_tier=payload.get("_worker_model_tier") or payload.get("snapshot_model_tier") or "deep")
+    report_payload = {
+        **payload,
+        "job_id": job_id,
+        "skip_recent_days": 0,
+        "analysis_mode": payload.get("holding_report_analysis_mode") or payload.get("analysis_mode") or "snapshot-tradingagents",
+        "analysis_depth": payload.get("analysis_depth") or "standard",
+        "model_mode": payload.get("model_mode") or "balanced",
+    }
+
+    for stock in holdings:
+        code = stock["code"]
+        existing = today_reports.get(code)
+        if existing:
+            report_ids.append(int(existing["id"]))
+            reused_codes.append(code)
+            continue
+        item = _insert_or_get_position_plan_item(job_id, stock)
+        try:
+            snapshot = batch_research._latest_snapshot(DB_PATH, code)
+            if not snapshot or not (snapshot.get("validation") or {}).get("ok"):
+                log_job_event(job_id, "info", "holding_snapshot_started", f"{code} 持仓股缺少完整快照，开始预取", item_id=item["id"])
+                await _run_data_prefetch_item(item, {**payload, "job_id": job_id})
+                item = _load_item(item["id"])
+            log_job_event(job_id, "info", "holding_report_started", f"{code} 持仓股当日报告缺失，开始补充生成", item_id=item["id"])
+            await _run_report_item(item, report_payload, set(), config)
+            item = _load_item(item["id"])
+            if item.get("report_id"):
+                report_ids.append(int(item["report_id"]))
+                generated_codes.append(code)
+                continue
+            latest = _today_report_by_code([code]).get(code)
+            if latest:
+                report_ids.append(int(latest["id"]))
+                generated_codes.append(code)
+            else:
+                failed.append({"code": code, "error": item.get("error") or "持仓股报告生成后未找到当日报告"})
+        except Exception as exc:  # noqa: BLE001 - position planning should report exact missing holding
+            failed.append({"code": code, "error": str(exc)})
+            _update_item_id(item["id"], status="failed", error=str(exc), error_type=_classify_item_error("failed", str(exc)), completed_at=_now_expr())
+            log_job_event(job_id, "error", "holding_report_failed", f"{code} 持仓股补充报告失败", {"error": str(exc)}, item_id=item["id"])
+
+    return {
+        "enabled": True,
+        "holding_count": len(holdings),
+        "report_ids": report_ids,
+        "generated_count": len(generated_codes),
+        "generated_codes": generated_codes,
+        "reused_count": len(reused_codes),
+        "reused_codes": reused_codes,
+        "failed": failed,
+    }
+
+
 async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
-    stocks = [batch_research.StockCandidate(item["code"], item.get("name") or item["code"], "默认", 0) for item in items]
+    auto_holding_reports = await _ensure_current_holding_reports(job_id, payload)
+    base_report_ids = [int(report_id) for report_id in payload.get("report_ids") or [] if int(report_id) > 0]
+    merged_report_ids = list(dict.fromkeys(base_report_ids + [int(report_id) for report_id in auto_holding_reports.get("report_ids") or [] if int(report_id) > 0]))
+    if merged_report_ids:
+        payload["report_ids"] = merged_report_ids
+        report_stocks = _load_report_codes(merged_report_ids)
+        by_code = {stock["code"]: stock for stock in report_stocks}
+        for item in items:
+            by_code.setdefault(item["code"], {"code": item["code"], "name": item.get("name") or item["code"], "group_name": "默认"})
+        stocks = [batch_research.StockCandidate(stock["code"], stock.get("name") or stock["code"], stock.get("group_name") or "默认", 0) for stock in by_code.values()]
+    else:
+        stocks = [batch_research.StockCandidate(item["code"], item.get("name") or item["code"], "默认", 0) for item in items]
     output_dir = Path(payload.get("output_dir") or Path("data") / "batch_research")
+    market_context = await batch_research.collect_position_plan_market_context(stocks)
     if payload.get("multi_role"):
         config = batch_research._snapshot_llm_config(DB_PATH, model_tier=payload.get("snapshot_model_tier") or "deep")
         plan = await batch_research.build_multi_role_position_plan(
@@ -1847,9 +2425,12 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
             context_strategy=payload.get("context_strategy") or "auto",
             model_strategy=payload.get("model_strategy") or "single",
             role_models=payload.get("role_models") or {},
+            decision_market_context=market_context,
         )
     else:
         plan = batch_research.build_position_plan(DB_PATH, stocks, top_n=int(payload.get("plan_top_n") or 10))
+        plan["decision_market_snapshot"] = market_context
+    plan["auto_holding_reports"] = auto_holding_reports
     outputs = batch_research.write_position_plan(output_dir, plan)
     persisted = position_plan_service.persist_position_plan(
         plan,
@@ -1926,6 +2507,223 @@ def run_batch_quality_check(job_id: str) -> dict[str, Any]:
     record_job_artifact(job_id, "quality_json", "批次质量巡检", data=quality)
     log_job_event(job_id, "info", "quality_checked", "批次质量巡检完成", quality)
     return quality
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    try:
+        return round(float(str(value).replace(",", "")), 3)
+    except (TypeError, ValueError):
+        return default
+
+
+def _pct(value: float, total: int) -> float:
+    return round(value / total * 100, 3) if total else 0.0
+
+
+def _snapshot_change_pct(row: sqlite3.Row) -> float | None:
+    for raw in (row["snapshot_json"], row["market_snapshot"]):
+        parsed = _loads(raw, {})
+        if not isinstance(parsed, dict):
+            continue
+        quote = (
+            parsed.get("market", {}).get("quote")
+            if isinstance(parsed.get("market"), dict)
+            else parsed.get("quote")
+        )
+        if not isinstance(quote, dict):
+            market_snapshot = parsed.get("snapshot")
+            if isinstance(market_snapshot, dict):
+                quote = market_snapshot.get("market", {}).get("quote") if isinstance(market_snapshot.get("market"), dict) else {}
+        for key in ("change_pct", "pct_chg", "change_percent"):
+            if isinstance(quote, dict) and quote.get(key) is not None:
+                return _num(quote.get(key))
+    return None
+
+
+def _batch_analysis_observations(
+    *,
+    total: int,
+    positive_signals: int,
+    negative_signals: int,
+    up: int,
+    down: int,
+    high_risk_count: int,
+    top_group: str,
+    market_avg_change: float,
+) -> list[str]:
+    observations: list[str] = []
+    if total <= 0:
+        return ["暂无可分析的批量报告。"]
+    observations.append(f"正向信号占比 {_pct(positive_signals, total):.1f}%，负向信号占比 {_pct(negative_signals, total):.1f}%。")
+    observations.append(f"样本内上涨比例 {_pct(up, total):.1f}%，下跌比例 {_pct(down, total):.1f}%。")
+    if high_risk_count:
+        observations.append(f"风险评分高于 60 的报告有 {high_risk_count} 份，建仓前应优先复核这些标的。")
+    if top_group:
+        observations.append(f"样本最集中的行业/分组是 {top_group}，需要注意组合集中度。")
+    if market_avg_change > 0.3 and positive_signals >= negative_signals:
+        observations.append("大盘偏强且报告信号不弱，可优先看强信号标的的执行价位。")
+    elif market_avg_change < -0.3 and positive_signals:
+        observations.append("大盘偏弱但仍有正向信号，建议降低首批仓位或等待回踩确认。")
+    else:
+        observations.append("大盘环境中性或分化，建议结合行业分组和风险评分分层筛选。")
+    return observations
+
+
+async def get_batch_analysis(job_id: str) -> dict[str, Any]:
+    job = get_research_job(job_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT bi.id AS item_id, bi.code, bi.name, bi.status, bi.report_id,
+                   COALESCE(NULLIF(w.group_name, ''), '默认') AS group_name,
+                   ar.signal, ar.confidence, ar.risk_score, ar.final_decision,
+                   ar.trader_plan, ar.market_snapshot,
+                   s.snapshot_json
+            FROM batch_job_items bi
+            LEFT JOIN analysis_reports ar ON ar.id = bi.report_id
+            LEFT JOIN watchlist w ON w.code = bi.code
+            LEFT JOIN stock_data_snapshots s ON s.id = COALESCE(bi.locked_snapshot_id, bi.snapshot_id)
+            WHERE bi.job_id = ?
+            ORDER BY bi.id ASC
+            """,
+            (job_id,),
+        ).fetchall()
+
+    signal_distribution = {signal: 0 for signal in ["STRONG_BUY", "BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL", "STRONG_SELL", "UNKNOWN"]}
+    industry_groups: dict[str, dict[str, Any]] = {}
+    up = down = flat = missing_change = 0
+    confidence_values: list[float] = []
+    risk_values: list[float] = []
+    high_risk_count = 0
+    completed = 0
+    positive_signals = 0
+    negative_signals = 0
+    stock_rows: list[dict[str, Any]] = []
+
+    for row in rows:
+        signal = str(row["signal"] or "UNKNOWN").upper()
+        if signal not in signal_distribution:
+            signal = "UNKNOWN"
+        signal_distribution[signal] += 1
+        if row["status"] == "completed" and row["report_id"]:
+            completed += 1
+        if signal in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
+            positive_signals += 1
+        if signal in {"UNDERWEIGHT", "SELL", "STRONG_SELL"}:
+            negative_signals += 1
+        confidence = _num(row["confidence"], None) if row["confidence"] is not None else None
+        risk = _num(row["risk_score"], None) if row["risk_score"] is not None else None
+        if confidence is not None:
+            confidence_values.append(confidence if confidence <= 1 else confidence / 100)
+        if risk is not None:
+            risk100 = risk * 100 if risk <= 1 else risk
+            risk_values.append(risk100)
+            if risk100 >= 60:
+                high_risk_count += 1
+        change_pct = _snapshot_change_pct(row)
+        if change_pct is None:
+            missing_change += 1
+        elif change_pct > 0:
+            up += 1
+        elif change_pct < 0:
+            down += 1
+        else:
+            flat += 1
+
+        group_name = row["group_name"] or "默认"
+        group = industry_groups.setdefault(
+            group_name,
+            {"count": 0, "positive_signals": 0, "negative_signals": 0, "avg_confidence": 0.0, "avg_risk": 0.0, "_confidence": [], "_risk": [], "avg_change_pct": 0.0, "_change": []},
+        )
+        group["count"] += 1
+        if signal in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
+            group["positive_signals"] += 1
+        if signal in {"UNDERWEIGHT", "SELL", "STRONG_SELL"}:
+            group["negative_signals"] += 1
+        if confidence is not None:
+            group["_confidence"].append(confidence if confidence <= 1 else confidence / 100)
+        if risk is not None:
+            group["_risk"].append(risk * 100 if risk <= 1 else risk)
+        if change_pct is not None:
+            group["_change"].append(change_pct)
+        stock_rows.append(
+            {
+                "code": row["code"],
+                "name": row["name"] or row["code"],
+                "status": row["status"],
+                "signal": signal,
+                "confidence": confidence,
+                "risk_score": risk,
+                "change_pct": change_pct,
+                "group_name": group_name,
+                "report_id": row["report_id"],
+            }
+        )
+
+    for group in industry_groups.values():
+        group["avg_confidence"] = round(sum(group["_confidence"]) / len(group["_confidence"]), 3) if group["_confidence"] else 0.0
+        group["avg_risk"] = round(sum(group["_risk"]) / len(group["_risk"]), 3) if group["_risk"] else 0.0
+        group["avg_change_pct"] = round(sum(group["_change"]) / len(group["_change"]), 3) if group["_change"] else 0.0
+        group.pop("_confidence", None)
+        group.pop("_risk", None)
+        group.pop("_change", None)
+
+    try:
+        indices = await asyncio.wait_for(quote_service.get_indices(), timeout=3)
+    except Exception as exc:  # noqa: BLE001
+        indices = {"error": str(exc)}
+    index_items = [item for item in (indices or {}).values() if isinstance(item, dict) and item.get("change_pct") is not None]
+    market_avg_change = round(sum(_num(item.get("change_pct")) for item in index_items) / len(index_items), 3) if index_items else 0.0
+    market = {
+        "indices": indices,
+        "indices_count": len(index_items),
+        "avg_change_pct": market_avg_change,
+        "positive_indices": sum(1 for item in index_items if _num(item.get("change_pct")) > 0),
+        "negative_indices": sum(1 for item in index_items if _num(item.get("change_pct")) < 0),
+    }
+    total = len(rows)
+    top_group = ""
+    if industry_groups:
+        top_group = max(industry_groups.items(), key=lambda item: item[1]["count"])[0]
+    return {
+        "job_id": job_id,
+        "generated_at": _iso_now(),
+        "overview": {
+            "name": job.get("name"),
+            "job_type": job.get("job_type"),
+            "status": job.get("status"),
+            "total": total,
+            "completed": completed,
+            "failed": int(job.get("failed_count") or 0),
+            "waiting": int(job.get("waiting_count") or 0),
+            "avg_confidence": round(sum(confidence_values) / len(confidence_values), 3) if confidence_values else 0.0,
+            "avg_risk": round(sum(risk_values) / len(risk_values), 3) if risk_values else 0.0,
+        },
+        "signal_distribution": signal_distribution,
+        "breadth": {
+            "up": up,
+            "down": down,
+            "flat": flat,
+            "missing": missing_change,
+            "up_ratio": _pct(up, total),
+            "down_ratio": _pct(down, total),
+        },
+        "industry_groups": industry_groups,
+        "market": market,
+        "top_positive": sorted([item for item in stock_rows if item["signal"] in {"STRONG_BUY", "BUY", "OVERWEIGHT"}], key=lambda item: (item["confidence"] or 0), reverse=True)[:10],
+        "top_risk": sorted([item for item in stock_rows if item["risk_score"] is not None], key=lambda item: item["risk_score"] or 0, reverse=True)[:10],
+        "stocks": stock_rows,
+        "observations": _batch_analysis_observations(
+            total=total,
+            positive_signals=positive_signals,
+            negative_signals=negative_signals,
+            up=up,
+            down=down,
+            high_risk_count=high_risk_count,
+            top_group=top_group,
+            market_avg_change=market_avg_change,
+        ),
+    }
 
 
 def _write_post_batch_artifacts(job_id: str, payload: dict[str, Any], counts: dict[str, int]) -> dict[str, Any]:
@@ -2022,7 +2820,7 @@ async def run_research_job(
                     except Exception as exc:
                         _record_runtime_failure(job_id, "snapshot", str(exc), base_concurrency=requested_concurrency)
                         log_job_event(job_id, "error", "item_failed", f"{item['code']} 七层数据预取失败", {"error": str(exc)}, item_id=item["id"])
-                        _update_item_id(item["id"], status="failed", error=str(exc), error_type=_llm_error_type(str(exc)), completed_at=_now_expr())
+                        _update_item_id(item["id"], status="failed", error=str(exc), error_type=_classify_item_error("failed", str(exc)), completed_at=_now_expr())
                         _maybe_guard_pause(job_id, payload, error=str(exc))
                     finally:
                         _recount_job(job_id)
@@ -2060,7 +2858,7 @@ async def run_research_job(
                     except Exception as exc:
                         _record_runtime_failure(job_id, "llm", str(exc), base_concurrency=requested_concurrency)
                         log_job_event(job_id, "error", "item_failed", f"{item['code']} 报告生成失败", {"error": str(exc)}, item_id=item["id"])
-                        _update_item_id(item["id"], status="failed", error=str(exc), error_type=_llm_error_type(str(exc)), completed_at=_now_expr())
+                        _update_item_id(item["id"], status="failed", error=str(exc), error_type=_classify_item_error("failed", str(exc)), completed_at=_now_expr())
                         _maybe_guard_pause(job_id, payload, error=str(exc))
                     finally:
                         _recount_job(job_id)
@@ -2151,18 +2949,38 @@ async def resume_job(job_id: str) -> dict[str, Any]:
     return get_research_job(job_id)
 
 
-async def retry_failed(job_id: str, *, auto_start: bool = True) -> dict[str, Any]:
+async def retry_failed(
+    job_id: str,
+    *,
+    error_type: str | None = None,
+    model_provider_ids: list[str] | None = None,
+    model_tier: str | None = None,
+    auto_start: bool = True,
+) -> dict[str, Any]:
+    filters = ""
+    params: list[Any] = [job_id]
+    if error_type:
+        filters = " AND COALESCE(error_type, 'unknown') = ?"
+        params.append(error_type)
     with _connect() as conn:
+        job_row = conn.execute("SELECT payload_json FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        payload = _loads(job_row["payload_json"] if job_row else "{}", {})
+        if model_provider_ids:
+            payload["primary_provider_ids"] = _clean_str_list(model_provider_ids)
+            payload["fallback_provider_ids"] = []
+        if model_tier in {"quick", "deep"}:
+            payload["snapshot_model_tier"] = model_tier
         cursor = conn.execute(
-            """
+            f"""
             UPDATE batch_job_items
             SET status='pending', error='', retry_count=COALESCE(retry_count, 0) + 1, updated_at=datetime('now')
             WHERE job_id = ? AND status IN ('failed', 'timeout', 'cancelled', 'waiting_snapshot', 'quota_paused')
+            {filters}
             """,
-            (job_id,),
+            params,
         )
         step_cursor = conn.execute(
-            """
+            f"""
             UPDATE batch_job_item_steps
             SET status='pending',
                 error='',
@@ -2172,15 +2990,27 @@ async def retry_failed(job_id: str, *, auto_start: bool = True) -> dict[str, Any
                 updated_at=datetime('now')
             WHERE job_id = ?
               AND status IN ('failed', 'timeout', 'cancelled', 'quota_paused')
+              {filters}
             """,
-            (job_id,),
+            params,
+        )
+        conn.execute(
+            "UPDATE batch_jobs SET payload_json=?, status='pending', pause_requested=0, error='', updated_at=datetime('now') WHERE job_id = ?",
+            (json.dumps(payload, ensure_ascii=False, default=str), job_id),
         )
         conn.commit()
         reset_count = cursor.rowcount + step_cursor.rowcount
     _recount_job(job_id)
     if auto_start and reset_count:
         _schedule_job(job_id)
-    return {"job_id": job_id, "reset_count": reset_count, "status": "pending" if reset_count else get_research_job(job_id)["status"]}
+    log_job_event(
+        job_id,
+        "info",
+        "retry_failed",
+        "已重置失败项",
+        {"reset_count": reset_count, "error_type": error_type or "", "model_provider_ids": model_provider_ids or [], "model_tier": model_tier or ""},
+    )
+    return {"job_id": job_id, "reset_count": reset_count, "error_type": error_type or "", "status": "pending" if reset_count else get_research_job(job_id)["status"]}
 
 
 async def run_worker_once(

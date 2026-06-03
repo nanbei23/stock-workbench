@@ -43,6 +43,10 @@ class BatchResearchCreatePayload(BaseModel):
     context_strategy: str = "auto"
     model_strategy: str = "single"
     role_models: dict = Field(default_factory=dict)
+    allowed_worker_ids: list[str] = Field(default_factory=list)
+    primary_provider_ids: list[str] = Field(default_factory=list)
+    quota_exhausted_action: str = "switch_model"
+    failure_retry_mode: str = "manual"
     title: Optional[str] = None
     trade_date: Optional[str] = None
     output_dir: Optional[Path] = None
@@ -57,6 +61,12 @@ class BatchReportCreatePayload(BaseModel):
     risk_rounds: Optional[int] = 1
     batch_size: int = Field(default=2, ge=1, le=10)
     trade_date: Optional[str] = None
+
+
+class BatchRetryPayload(BaseModel):
+    error_type: Optional[str] = None
+    model_provider_ids: list[str] = Field(default_factory=list)
+    model_tier: Optional[str] = None
 
 
 @router.post("/batch-research/jobs")
@@ -98,6 +108,21 @@ async def get_batch_research_logs(job_id: str, limit: int = Query(default=200, g
     return batch_report_service.get_job_logs(job_id, limit=limit)
 
 
+@router.get("/batch-research/jobs/{job_id}/failure-groups")
+async def get_batch_research_failure_groups(job_id: str):
+    return batch_report_service.get_failure_groups(job_id)
+
+
+@router.get("/batch-research/jobs/{job_id}/runtime-stats")
+async def get_batch_research_runtime_stats(job_id: str):
+    return batch_report_service.get_runtime_stats(job_id)
+
+
+@router.get("/batch-research/jobs/{job_id}/analysis")
+async def get_batch_research_analysis(job_id: str):
+    return await batch_report_service.get_batch_analysis(job_id)
+
+
 @router.get("/batch-research/jobs/{job_id}/artifacts")
 async def get_batch_research_artifacts(job_id: str):
     return batch_report_service.get_job_artifacts(job_id)
@@ -119,8 +144,14 @@ async def resume_batch_research_job(job_id: str):
 
 
 @router.post("/batch-research/jobs/{job_id}/retry-failed")
-async def retry_failed_batch_research_items(job_id: str):
-    return await batch_report_service.retry_failed(job_id)
+async def retry_failed_batch_research_items(job_id: str, payload: BatchRetryPayload | None = None):
+    payload = payload or BatchRetryPayload()
+    return await batch_report_service.retry_failed(
+        job_id,
+        error_type=payload.error_type,
+        model_provider_ids=payload.model_provider_ids,
+        model_tier=payload.model_tier,
+    )
 
 
 @router.post("/batch-research/jobs/{job_id}/cancel")

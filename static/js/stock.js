@@ -8,6 +8,9 @@ let currentChartType = 'candlestick';
 let currentPrevClose = null;  // 昨收价，用于分时图涨跌色参考
 let dragSrcEl = null;   // 当前拖拽的卡片
 let watchPoolCollapsed = localStorage.getItem('watch_pool_collapsed') !== 'false';
+let watchlistStocksCache = [];
+let watchlistSignalsCache = {};
+let watchlistFilterText = '';
 const WATCH_POOL_GROUP = '观察池';
 
 const STOCK_SIGNAL_LABEL = {
@@ -116,6 +119,7 @@ async function loadWatchlist() {
   try {
     const data = await API.get('/api/watchlist');
     const stocks = data.stocks || [];
+    watchlistStocksCache = stocks.slice();
 
     if (stocks.length === 0) {
       listEl.innerHTML = panelState('暂无自选股', '选');
@@ -128,16 +132,45 @@ async function loadWatchlist() {
       const sigData = await API.get('/api/signal/signals/latest');
       if (sigData && sigData.signals) signals = sigData.signals;
     } catch (e) {}
+    watchlistSignalsCache = signals;
 
-    const coreStocks = stocks.filter(s => !isWatchPoolStock(s));
-    const poolStocks = stocks.filter(isWatchPoolStock);
-    listEl.innerHTML = renderWatchlistSections(coreStocks, poolStocks, signals);
+    renderWatchlist();
   } catch (e) {
     console.error('loadWatchlist error:', e);
     listEl.innerHTML = panelState('加载失败，请刷新重试');
   }
 
   initDragDrop();
+}
+
+function normalizeStockSearch(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function stockMatchesSearch(stock, query) {
+  if (!query) return true;
+  return [stock.code, stock.name, stock.pinyin, stock.group_name]
+    .some(value => String(value || '').toLowerCase().includes(query));
+}
+
+function renderWatchlist() {
+  const listEl = document.getElementById('stockList');
+  if (!listEl) return;
+  const query = normalizeStockSearch(watchlistFilterText);
+  const filtered = watchlistStocksCache.filter(stock => stockMatchesSearch(stock, query));
+  if (!filtered.length) {
+    listEl.innerHTML = panelState(query ? '没有匹配的自选股' : '暂无自选股', '选');
+    return;
+  }
+  const coreStocks = filtered.filter(s => !isWatchPoolStock(s));
+  const poolStocks = filtered.filter(isWatchPoolStock);
+  listEl.innerHTML = renderWatchlistSections(coreStocks, poolStocks, watchlistSignalsCache);
+  initDragDrop();
+}
+
+function filterWatchlistStocks(value) {
+  watchlistFilterText = value || '';
+  renderWatchlist();
 }
 
 function isWatchPoolStock(stock) {

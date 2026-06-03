@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import models.database as database
 from api.settings_api import router as settings_router
 from repositories import settings_repository
-from services import settings_service
+from services import market_permission_service, settings_service
 
 
 class SettingsServiceTests(unittest.TestCase):
@@ -36,6 +36,40 @@ class SettingsServiceTests(unittest.TestCase):
 
         self.assertEqual(result["refresh_interval"], "15")
         self.assertIn("quick_think_model", result)
+
+    def test_trading_market_permissions_default_all_enabled(self):
+        result = settings_service.get_all_settings()
+
+        self.assertEqual(result["trade_market_main"], "true")
+        self.assertEqual(result["trade_market_gem"], "true")
+        self.assertEqual(result["trade_market_star"], "true")
+        self.assertEqual(result["trade_market_bse"], "true")
+
+    def test_market_permission_classifier_and_filter_respect_settings(self):
+        settings = {
+            "trade_market_main": "true",
+            "trade_market_gem": "true",
+            "trade_market_star": "false",
+            "trade_market_bse": "false",
+        }
+
+        self.assertEqual(market_permission_service.classify_stock_market("688498")["key"], "star")
+        self.assertEqual(market_permission_service.classify_stock_market("300502")["key"], "gem")
+        self.assertEqual(market_permission_service.classify_stock_market("600519")["key"], "main")
+        self.assertEqual(market_permission_service.classify_stock_market("830799")["key"], "bse")
+
+        filtered, excluded = market_permission_service.filter_allowed_stocks(
+            [
+                {"code": "688498", "name": "源杰科技"},
+                {"code": "300502", "name": "新易盛"},
+                {"code": "600519", "name": "贵州茅台"},
+                {"code": "830799", "name": "艾融软件"},
+            ],
+            settings=settings,
+        )
+
+        self.assertEqual([item["code"] for item in filtered], ["300502", "600519"])
+        self.assertEqual([item["market_key"] for item in excluded], ["star", "bse"])
 
     def test_reset_restores_defaults(self):
         settings_service.update_setting("quick_think_model", "custom-model")

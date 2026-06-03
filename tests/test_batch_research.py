@@ -482,6 +482,14 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('cash_balance_default', '253375.680')")
             conn.execute(
                 """
+                INSERT INTO portfolio
+                    (code, name, total_shares, available_shares, avg_cost, current_price, market_value, unrealized_pnl, unrealized_pnl_pct)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 1000, 1000, 10.000, 11.000, 11000.000, 1000.000, 10.000),
+            )
+            conn.execute(
+                """
                 INSERT INTO analysis_reports
                     (code, task_id, signal, confidence, risk_score, final_decision, trader_plan, created_at)
                 VALUES
@@ -510,8 +518,12 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(plan["cash"], 253375.68)
+        self.assertEqual(plan["portfolio_context"]["position_count"], 1)
+        self.assertEqual(plan["portfolio_context"]["total_assets"], 264375.68)
         self.assertEqual(plan["available_reports"], 2)
         self.assertEqual(plan["recommendations"][0]["code"], "000001")
+        self.assertEqual(plan["recommendations"][0]["current_position"]["shares"], 1000)
+        self.assertLessEqual(plan["recommendations"][0]["suggested_amount"], 253375.68 * 0.15)
         self.assertGreater(plan["recommendations"][0]["suggested_amount"], 0)
         self.assertEqual(plan["recommendations"][1]["action"], "watch")
 
