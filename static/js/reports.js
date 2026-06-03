@@ -139,6 +139,7 @@
             skipped: '已跳过',
             waiting_snapshot: '缺少快照',
             cancelled: '已取消',
+            manual_completed: '手动完成',
             interrupted: '已中断',
             pausing: '暂停中',
             paused: '已暂停',
@@ -149,7 +150,7 @@
     }
 
     function statusClass(value) {
-        if (value === 'completed' || value === 'skipped') return 'signal-buy';
+        if (value === 'completed' || value === 'skipped' || value === 'manual_completed') return 'signal-buy';
         if (value === 'running' || value === 'pending' || value === 'pausing' || value === 'paused' || value === 'quota_paused' || value === 'guard_paused') return 'signal-hold';
         return 'signal-sell';
     }
@@ -158,7 +159,8 @@
         return {
             running: '运行中',
             online: '在线',
-            idle: '空闲',
+            idle: '在线空闲',
+            not_started: '未启动',
             stale: '卡死/陈旧',
             offline: '离线',
             disabled: '已停用'
@@ -266,11 +268,13 @@
                     <tbody>${workers.map(worker => {
                         const pool = (worker.model_pool || []).map(item => `${item.ready ? '' : '!'}${escapeHtml(item.name || item.provider_id)} / ${escapeHtml(item.model || '--')}`).join('<br>') || '--';
                         const counts = worker.counts || {};
+                        const currentMain = worker.current_code || worker.current_stage || worker.job_type || '--';
+                        const currentSub = [worker.current_stage && worker.current_code ? worker.current_stage : '', worker.current_model || '', worker.fallback_model ? `-> ${worker.fallback_model}` : ''].filter(Boolean).join(' ');
                         return `<tr>
                             <td><strong>${escapeHtml(worker.name || worker.worker_id)}</strong><span>${escapeHtml(worker.worker_id)}</span></td>
                             <td><span class="report-signal ${escapeHtml(statusClass(worker.state === 'running' ? 'running' : worker.state === 'stale' || worker.state === 'offline' ? 'failed' : 'completed'))}">${escapeHtml(workerStateLabel(worker.state))}</span></td>
                             <td>${pool}</td>
-                            <td>${escapeHtml(worker.current_code || '--')}<span>${escapeHtml(worker.current_model || '')}${worker.fallback_model ? ` -> ${escapeHtml(worker.fallback_model)}` : ''}</span></td>
+                            <td>${escapeHtml(currentMain)}<span>${escapeHtml(currentSub)}</span></td>
                             <td>完成 ${Number(counts.completed || 0)} / 失败 ${Number(counts.failed || 0)}<span>等待 ${Number(counts.pending || 0)} / 待数据 ${Number(counts.waiting || 0)}</span></td>
                             <td>${escapeHtml(formatTime(worker.heartbeat_at))}</td>
                         </tr>`;
@@ -866,13 +870,15 @@
                 const total = Number(job.total_count || 0);
                 const done = Number(job.completed_count || 0) + Number(job.skipped_count || 0);
                 const progress = total ? `${done}/${total}` : '--';
-                const canResume = ['pending', 'failed', 'interrupted', 'quota_paused', 'guard_paused'].includes(job.status);
+                const canResume = ['pending', 'failed', 'interrupted', 'quota_paused', 'guard_paused', 'manual_completed'].includes(job.status);
                 const canRetry = Number(job.failed_count || 0) || Number(job.waiting_count || 0);
                 const canCancel = ['pending', 'running', 'quota_paused', 'guard_paused'].includes(job.status);
                 const canPause = ['pending', 'running', 'pausing'].includes(job.status);
+                const canManualComplete = ['pending', 'running', 'pausing', 'paused', 'quota_paused', 'guard_paused'].includes(job.status);
                 const actions = [
                     `<button class="btn btn-sm" onclick="previewBatchJob('${encodeURIComponent(job.job_id)}')">详情</button>`,
                     canPause ? `<button class="btn btn-sm" onclick="pauseBatchJob('${escapeAttr(job.job_id)}')">暂停</button>` : '',
+                    canManualComplete ? `<button class="btn btn-sm" onclick="manualCompleteBatchJob('${escapeAttr(job.job_id)}')">手动完成</button>` : '',
                     canResume ? `<button class="btn btn-sm" onclick="resumeBatchJob('${escapeAttr(job.job_id)}')">继续</button>` : '',
                     canRetry ? `<button class="btn btn-sm" onclick="retryBatchJob('${escapeAttr(job.job_id)}')">重试</button>` : '',
                     canCancel ? `<button class="btn btn-sm" onclick="cancelBatchJob('${escapeAttr(job.job_id)}')">取消</button>` : '',
@@ -969,6 +975,7 @@
                 </div>
                 <div class="preview-actions">
                     <button class="btn btn-sm" onclick="pauseBatchJob('${escapeAttr(job.job_id)}')">暂停</button>
+                    <button class="btn btn-sm" onclick="manualCompleteBatchJob('${escapeAttr(job.job_id)}')">手动完成</button>
                     <button class="btn btn-sm" onclick="resumeBatchJob('${escapeAttr(job.job_id)}')">继续</button>
                     <button class="btn btn-sm" onclick="retryBatchJob('${escapeAttr(job.job_id)}')">重试失败</button>
                     <button class="btn btn-sm" onclick="cancelBatchJob('${escapeAttr(job.job_id)}')">取消</button>
@@ -1091,6 +1098,14 @@
 
     async function pauseBatchJob(jobId) {
         await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/pause`, { method: 'POST' });
+        jobsLoaded = false;
+        await loadBatchJobs();
+        await previewBatchJob(encodeURIComponent(jobId));
+    }
+
+    async function manualCompleteBatchJob(jobId) {
+        if (!confirm('确认手动完成这个批量任务？剩余股票不会继续执行，但之后可以点“继续”恢复。')) return;
+        await requestJson(`/api/batch-research/jobs/${encodeURIComponent(jobId)}/manual-complete`, { method: 'POST' });
         jobsLoaded = false;
         await loadBatchJobs();
         await previewBatchJob(encodeURIComponent(jobId));
@@ -1267,6 +1282,7 @@
     window.exportReportLibrary = exportReportLibrary;
     window.resumeBatchJob = resumeBatchJob;
     window.pauseBatchJob = pauseBatchJob;
+    window.manualCompleteBatchJob = manualCompleteBatchJob;
     window.retryBatchJob = retryBatchJob;
     window.cancelBatchJob = cancelBatchJob;
     window.previewBatchJob = previewBatchJob;

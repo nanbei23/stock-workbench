@@ -138,6 +138,11 @@ async def pause_batch_research_job(job_id: str):
     return batch_report_service.pause_job(job_id)
 
 
+@router.post("/batch-research/jobs/{job_id}/manual-complete")
+async def manual_complete_batch_research_job(job_id: str):
+    return batch_report_service.manual_complete_job(job_id)
+
+
 @router.post("/batch-research/jobs/{job_id}/resume")
 async def resume_batch_research_job(job_id: str):
     return await batch_report_service.resume_job(job_id)

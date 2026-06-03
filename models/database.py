@@ -276,6 +276,26 @@ CREATE TABLE IF NOT EXISTS batch_job_artifacts (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS batch_worker_heartbeats (
+    worker_id TEXT PRIMARY KEY,
+    pid INTEGER,
+    state TEXT NOT NULL DEFAULT 'idle',
+    model_provider_ids_json TEXT DEFAULT '[]',
+    model_tier TEXT DEFAULT '',
+    last_seen_at TEXT DEFAULT (datetime('now')),
+    last_loop_at TEXT,
+    last_claim_at TEXT,
+    current_job_id TEXT,
+    current_job_type TEXT,
+    current_item_id INTEGER,
+    current_code TEXT,
+    current_stage TEXT,
+    last_result_json TEXT DEFAULT '{}',
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS position_plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     plan_id TEXT UNIQUE NOT NULL,
@@ -600,6 +620,7 @@ CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_item_order ON batch_job_item
 CREATE INDEX IF NOT EXISTS idx_batch_job_item_steps_job_status ON batch_job_item_steps(job_id, status);
 CREATE INDEX IF NOT EXISTS idx_batch_job_logs_job_created ON batch_job_logs(job_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_batch_job_artifacts_job_created ON batch_job_artifacts(job_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_batch_worker_heartbeats_seen ON batch_worker_heartbeats(last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_position_plans_status_created ON position_plans(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_position_plans_stage_created ON position_plans(stage, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_position_plan_items_plan ON position_plan_items(plan_id);
@@ -1233,6 +1254,35 @@ async def ensure_batch_runtime_ops(db):
     )
 
 
+async def ensure_batch_worker_heartbeats_table(db):
+    """Backfill worker process heartbeat table for operational diagnostics."""
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS batch_worker_heartbeats (
+            worker_id TEXT PRIMARY KEY,
+            pid INTEGER,
+            state TEXT NOT NULL DEFAULT 'idle',
+            model_provider_ids_json TEXT DEFAULT '[]',
+            model_tier TEXT DEFAULT '',
+            last_seen_at TEXT DEFAULT (datetime('now')),
+            last_loop_at TEXT,
+            last_claim_at TEXT,
+            current_job_id TEXT,
+            current_job_type TEXT,
+            current_item_id INTEGER,
+            current_code TEXT,
+            current_stage TEXT,
+            last_result_json TEXT DEFAULT '{}',
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_worker_heartbeats_seen
+            ON batch_worker_heartbeats(last_seen_at DESC);
+        """
+    )
+
+
 async def init_db():
     """初始化数据库，创建所有表"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1241,6 +1291,7 @@ async def init_db():
         await run_migrations(db)
         await ensure_batch_job_item_steps_table(db)
         await ensure_batch_runtime_ops(db)
+        await ensure_batch_worker_heartbeats_table(db)
         await ensure_position_plan_adoption_columns(db)
         await ensure_position_plan_market_context_columns(db)
         await db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")

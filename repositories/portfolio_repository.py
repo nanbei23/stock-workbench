@@ -95,6 +95,15 @@ async def delete_watchlist_stock(db, code: str):
     return cursor.rowcount
 
 
+async def delete_watchlist_stocks(db, codes: list[str]):
+    if not codes:
+        return 0
+    placeholders = ",".join("?" for _ in codes)
+    cursor = await db.execute(f"DELETE FROM watchlist WHERE code IN ({placeholders})", codes)
+    await db.commit()
+    return cursor.rowcount
+
+
 async def update_watchlist_stock(db, code: str, updates: dict):
     if not updates:
         return None

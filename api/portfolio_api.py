@@ -57,6 +57,10 @@ class WatchlistImportMdRequest(BaseModel):
     group_name: str = "默认"
 
 
+class WatchlistBatchDeleteRequest(BaseModel):
+    codes: list[str]
+
+
 class TradeAddRequest(BaseModel):
     code: str
     name: str = ""
@@ -127,6 +131,18 @@ async def remove_from_watchlist(code: str):
         raise
     except Exception as e:
         logger.error("remove_from_watchlist(%s) error: %s", code, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/watchlist")
+async def remove_watchlist_batch(req: WatchlistBatchDeleteRequest):
+    """批量删除自选股。"""
+    try:
+        return await portfolio_service.remove_watchlist_batch(req.codes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("remove_watchlist_batch error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

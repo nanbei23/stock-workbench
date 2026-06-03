@@ -702,6 +702,82 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(job["lease_token"])
         self.assertEqual(runtime["worker"]["lease_owner"], "worker-a")
 
+    async def test_position_plan_is_left_pending_for_worker_pool_by_default(self):
+        with patch("services.batch_report_service._schedule_job") as schedule:
+            created = await batch_report_service.create_research_job(
+                job_type="position_plan",
+                codes=["000001", "000002"],
+            )
+
+        job = batch_report_service.get_research_job(created["job_id"])
+
+        schedule.assert_not_called()
+        self.assertEqual(job["status"], "pending")
+        self.assertFalse(job["worker_id"])
+
+    async def test_running_position_plan_without_valid_lease_can_be_reclaimed(self):
+        created = await batch_report_service.create_research_job(
+            job_type="position_plan",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='running',
+                    worker_id='web-85050',
+                    heartbeat_at=datetime('now', '-20 minutes'),
+                    lease_owner=NULL,
+                    lease_token=NULL,
+                    lease_until=NULL
+                WHERE job_id=?
+                """,
+                (created["job_id"],),
+            )
+            db.commit()
+
+        reclaimed = batch_report_service.claim_next_job(worker_id="worker-b", lease_seconds=60)
+        job = batch_report_service.get_research_job(created["job_id"])
+
+        self.assertEqual(reclaimed["job_id"], created["job_id"])
+        self.assertEqual(job["lease_owner"], "worker-b")
+        self.assertEqual(job["worker_id"], "worker-b")
+
+    async def test_retry_failed_position_plan_stays_pending_for_worker_pool(self):
+        created = await batch_report_service.create_research_job(
+            job_type="position_plan",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                UPDATE batch_job_items
+                SET status='failed', error='quota exhausted'
+                WHERE job_id=? AND code='000001'
+                """,
+                (created["job_id"],),
+            )
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='failed', failed_count=1, error='quota exhausted'
+                WHERE job_id=?
+                """,
+                (created["job_id"],),
+            )
+            db.commit()
+
+        with patch("services.batch_report_service._schedule_job") as schedule:
+            result = await batch_report_service.retry_failed(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+
+        schedule.assert_not_called()
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(job["status"], "pending")
+
     async def test_expired_lease_can_be_reclaimed_by_another_worker(self):
         created = await batch_report_service.create_research_job(
             job_type="report_generation",
@@ -1262,6 +1338,87 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker["current_model"], "backup-deep")
         self.assertEqual(worker["fallback_model"], "backup-deep")
 
+    async def test_worker_status_marks_configured_workers_without_heartbeat_as_not_started(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('batch_worker_pool', ?)",
+                (
+                    json.dumps(
+                        [
+                            {"id": "worker-1", "name": "Worker 1", "enabled": True, "provider_ids": ["mimo"], "model_tier": "deep"},
+                            {"id": "worker-2", "name": "Worker 2", "enabled": True, "provider_ids": ["mimo"], "model_tier": "deep"},
+                            {"id": "worker-3", "name": "Worker 3", "enabled": True, "provider_ids": ["backup"], "model_tier": "deep"},
+                        ],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.commit()
+
+        status = batch_report_service.get_worker_status()
+        by_id = {row["worker_id"]: row for row in status["workers"]}
+
+        self.assertEqual(by_id["worker-1"]["state"], "not_started")
+        self.assertEqual(by_id["worker-2"]["state"], "not_started")
+        self.assertEqual(by_id["worker-3"]["state"], "not_started")
+        self.assertEqual(status["summary"]["idle"], 0)
+        self.assertEqual(status["summary"]["not_started"], 3)
+        self.assertEqual(status["summary"]["online"], 0)
+
+    async def test_worker_status_uses_independent_heartbeat_for_online_idle_workers(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('batch_worker_pool', ?)",
+                (
+                    json.dumps(
+                        [{"id": "worker-1", "name": "Worker 1", "enabled": True, "provider_ids": ["mimo"], "model_tier": "deep"}],
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.commit()
+
+        batch_report_service.record_worker_heartbeat(
+            "worker-1",
+            state="idle",
+            model_provider_ids=["mimo"],
+            model_tier="deep",
+            last_result={"ran": False},
+        )
+        status = batch_report_service.get_worker_status()
+        worker = next(item for item in status["workers"] if item["worker_id"] == "worker-1")
+
+        self.assertEqual(worker["state"], "idle")
+        self.assertTrue(worker["heartbeat_at"])
+        self.assertEqual(worker["pid"], os.getpid())
+        self.assertEqual(worker["last_result_json"]["ran"], False)
+        self.assertEqual(status["summary"]["idle"], 1)
+        self.assertEqual(status["summary"]["not_started"], 0)
+
+    async def test_worker_status_reports_position_plan_stage_from_heartbeat(self):
+        created = await batch_report_service.create_research_job(
+            job_type="position_plan",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        batch_report_service.record_worker_heartbeat(
+            "worker-plan",
+            state="running",
+            model_provider_ids=["mimo"],
+            model_tier="deep",
+            current_job_id=created["job_id"],
+            current_job_type="position_plan",
+            current_stage="组合级多角色讨论",
+        )
+        status = batch_report_service.get_worker_status()
+        worker = next(item for item in status["workers"] if item["worker_id"] == "worker-plan")
+
+        self.assertEqual(worker["state"], "running")
+        self.assertEqual(worker["job_id"], created["job_id"])
+        self.assertEqual(worker["job_type"], "position_plan")
+        self.assertEqual(worker["current_stage"], "组合级多角色讨论")
+        self.assertEqual(worker["counts"]["pending"], 2)
+
     async def test_position_plan_job_uses_existing_reports_without_generating_reports(self):
         with sqlite3.connect(self.db_path) as db:
             db.executemany(
@@ -1586,6 +1743,53 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["000002"], "completed")
         self.assertEqual(statuses["600519"], "cancelled")
 
+    async def test_manual_complete_stops_remaining_work_but_keeps_it_resumable(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002", "600519"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("UPDATE batch_jobs SET status='running', current_code='000001' WHERE job_id=?", (created["job_id"],))
+            db.execute("UPDATE batch_job_items SET status='running' WHERE code='000001'")
+            db.execute("UPDATE batch_job_items SET status='completed', report_id=123 WHERE code='000002'")
+            db.execute("UPDATE batch_job_items SET status='pending' WHERE code='600519'")
+            db.commit()
+
+        result = batch_report_service.manual_complete_job(created["job_id"])
+        job = batch_report_service.get_research_job(created["job_id"])
+        statuses = {item["code"]: item["status"] for item in job["items"]}
+
+        self.assertEqual(result["status"], "manual_completed")
+        self.assertEqual(job["status"], "manual_completed")
+        self.assertEqual(statuses["000001"], "pending")
+        self.assertEqual(statuses["000002"], "completed")
+        self.assertEqual(statuses["600519"], "pending")
+        self.assertEqual(job["completed_count"], 1)
+        self.assertEqual(job["current_code"], "")
+
+    async def test_resume_manual_completed_job_requeues_remaining_items(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("UPDATE batch_jobs SET status='manual_completed', completed_at=datetime('now') WHERE job_id=?", (created["job_id"],))
+            db.execute("UPDATE batch_job_items SET status='completed', report_id=123 WHERE code='000001'")
+            db.execute("UPDATE batch_job_items SET status='pending' WHERE code='000002'")
+            db.commit()
+
+        result = await batch_report_service.resume_job(created["job_id"])
+        job = batch_report_service.get_research_job(created["job_id"])
+        statuses = {item["code"]: item["status"] for item in job["items"]}
+
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(job["status"], "pending")
+        self.assertIsNone(job["completed_at"])
+        self.assertEqual(statuses["000001"], "completed")
+        self.assertEqual(statuses["000002"], "pending")
+
     async def test_mark_interrupted_jobs_recovers_stale_running_state(self):
         created = await batch_report_service.create_research_job(
             job_type="report_generation",
@@ -1675,15 +1879,19 @@ class BatchResearchApiTests(unittest.TestCase):
     def test_pause_resume_logs_and_artifact_routes(self):
         with patch("services.batch_report_service.pause_job", return_value={"job_id": "job-1", "status": "paused"}) as pause_job:
             pause_resp = self.client.post("/api/batch-research/jobs/job-1/pause")
+        with patch("services.batch_report_service.manual_complete_job", return_value={"job_id": "job-1", "status": "manual_completed"}) as manual_complete_job:
+            complete_resp = self.client.post("/api/batch-research/jobs/job-1/manual-complete")
         with patch("services.batch_report_service.get_job_logs", return_value={"count": 0, "logs": []}) as get_logs:
             logs_resp = self.client.get("/api/batch-research/jobs/job-1/logs")
         with patch("services.batch_report_service.get_job_artifacts", return_value={"count": 0, "artifacts": []}) as get_artifacts:
             artifacts_resp = self.client.get("/api/batch-research/jobs/job-1/artifacts")
 
         self.assertEqual(pause_resp.status_code, 200)
+        self.assertEqual(complete_resp.status_code, 200)
         self.assertEqual(logs_resp.status_code, 200)
         self.assertEqual(artifacts_resp.status_code, 200)
         pause_job.assert_called_once_with("job-1")
+        manual_complete_job.assert_called_once_with("job-1")
         get_logs.assert_called_once_with("job-1", limit=200)
         get_artifacts.assert_called_once_with("job-1")
 

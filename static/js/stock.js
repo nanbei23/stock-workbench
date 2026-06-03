@@ -11,11 +11,26 @@ let watchPoolCollapsed = localStorage.getItem('watch_pool_collapsed') !== 'false
 let watchlistStocksCache = [];
 let watchlistSignalsCache = {};
 let watchlistFilterText = '';
+let watchlistMarketFilter = 'tradable';
+const watchlistLastReportSignals = new Set();
+const selectedWatchlistCodes = new Set();
 const WATCH_POOL_GROUP = '观察池';
 
 const STOCK_SIGNAL_LABEL = {
   'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
-  'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出'
+  'HOLD': '持有', 'UNDERWEIGHT': '减持', 'SELL': '卖出', 'STRONG_SELL': '强烈卖出',
+  'NO_REPORT': '无报告'
+};
+
+const STOCK_SIGNAL_RANK = {
+  STRONG_BUY: 1,
+  BUY: 2,
+  OVERWEIGHT: 3,
+  HOLD: 4,
+  UNDERWEIGHT: 5,
+  SELL: 6,
+  STRONG_SELL: 7,
+  NO_REPORT: 8,
 };
 
 function panelState(message, iconCode = '') {
@@ -39,6 +54,22 @@ function signalBadge(signal) {
   const label = STOCK_SIGNAL_LABEL[signal.signal] || signal.signal;
   const sigCls = signal.signal.includes('BUY') ? 'signal-buy' : signal.signal.includes('SELL') ? 'signal-sell' : 'signal-hold';
   return `<div class="sc-signal ${sigCls}">${escapeHtml(label)}</div>`;
+}
+
+function lastReportSignal(stock) {
+  return stock.last_report_signal || 'NO_REPORT';
+}
+
+function lastReportSignalClass(signal) {
+  return String(signal || 'NO_REPORT').toLowerCase().replace(/_/g, '-');
+}
+
+function stockMarketInfo(code) {
+  return window.StockMarketPermissions?.classify?.(code) || { key: 'unknown', label: '未知' };
+}
+
+function stockMatchesMarket(stock, filter = watchlistMarketFilter) {
+  return window.StockMarketPermissions?.matchesFilter?.(stock.code, filter) ?? true;
 }
 
 function stockCardMetrics(s) {
@@ -120,9 +151,14 @@ async function loadWatchlist() {
     const data = await API.get('/api/watchlist');
     const stocks = data.stocks || [];
     watchlistStocksCache = stocks.slice();
+    const existingCodes = new Set(stocks.map(stock => String(stock.code)));
+    Array.from(selectedWatchlistCodes).forEach(code => {
+      if (!existingCodes.has(code)) selectedWatchlistCodes.delete(code);
+    });
 
     if (stocks.length === 0) {
       listEl.innerHTML = panelState('暂无自选股', '选');
+      updateWatchlistBatchBar();
       return;
     }
 
@@ -153,23 +189,79 @@ function stockMatchesSearch(stock, query) {
     .some(value => String(value || '').toLowerCase().includes(query));
 }
 
+function visibleWatchlistStocks() {
+  const query = normalizeStockSearch(watchlistFilterText);
+  return watchlistStocksCache
+    .filter(stock => {
+      const signal = lastReportSignal(stock);
+      const signalOk = !watchlistLastReportSignals.size || watchlistLastReportSignals.has(signal);
+      return stockMatchesSearch(stock, query) && stockMatchesMarket(stock, watchlistMarketFilter) && signalOk;
+    })
+    .sort((a, b) => {
+      const ar = STOCK_SIGNAL_RANK[lastReportSignal(a)] || 99;
+      const br = STOCK_SIGNAL_RANK[lastReportSignal(b)] || 99;
+      if (ar !== br) return ar - br;
+      return String(a.code || '').localeCompare(String(b.code || ''));
+    });
+}
+
 function renderWatchlist() {
   const listEl = document.getElementById('stockList');
   if (!listEl) return;
   const query = normalizeStockSearch(watchlistFilterText);
-  const filtered = watchlistStocksCache.filter(stock => stockMatchesSearch(stock, query));
+  const filtered = visibleWatchlistStocks();
   if (!filtered.length) {
-    listEl.innerHTML = panelState(query ? '没有匹配的自选股' : '暂无自选股', '选');
+    listEl.innerHTML = panelState(query || watchlistLastReportSignals.size || watchlistMarketFilter !== 'all' ? '没有匹配的自选股' : '暂无自选股', '选');
+    updateWatchlistBatchBar();
     return;
   }
   const coreStocks = filtered.filter(s => !isWatchPoolStock(s));
   const poolStocks = filtered.filter(isWatchPoolStock);
   listEl.innerHTML = renderWatchlistSections(coreStocks, poolStocks, watchlistSignalsCache);
   initDragDrop();
+  syncWatchlistSelectionInputs();
+  updateWatchlistBatchBar();
 }
 
 function filterWatchlistStocks(value) {
   watchlistFilterText = value || '';
+  renderWatchlist();
+}
+
+function renderWatchlistMarketFilterState() {
+  document.querySelectorAll('#watchlistMarketFilters .signal-filter-chip').forEach(btn => {
+    btn.classList.toggle('active', (btn.dataset.market || 'tradable') === watchlistMarketFilter);
+  });
+}
+
+function setWatchlistMarketFilter(filter) {
+  watchlistMarketFilter = filter || 'tradable';
+  renderWatchlistMarketFilterState();
+  renderWatchlist();
+}
+
+function renderWatchlistSignalFilterState() {
+  document.querySelectorAll('#watchlistLastSignalFilters .signal-filter-chip').forEach(btn => {
+    const signal = btn.dataset.signal || '';
+    btn.classList.toggle('active', signal ? watchlistLastReportSignals.has(signal) : watchlistLastReportSignals.size === 0);
+  });
+}
+
+function toggleWatchlistLastSignalFilter(signal) {
+  if (!signal) {
+    watchlistLastReportSignals.clear();
+  } else if (watchlistLastReportSignals.has(signal)) {
+    watchlistLastReportSignals.delete(signal);
+  } else {
+    watchlistLastReportSignals.add(signal);
+  }
+  renderWatchlistSignalFilterState();
+  renderWatchlist();
+}
+
+function clearWatchlistLastSignalFilters() {
+  watchlistLastReportSignals.clear();
+  renderWatchlistSignalFilterState();
   renderWatchlist();
 }
 
@@ -206,6 +298,11 @@ function renderStockCard(s, signal, options = {}) {
   const isActive = currentCode === s.code;
   const { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls } = stockCardMetrics(s);
   const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
+  const reportSignal = lastReportSignal(s);
+  const reportSignalLabel = STOCK_SIGNAL_LABEL[reportSignal] || reportSignal;
+  const reportSignalClass = lastReportSignalClass(reportSignal);
+  const market = stockMarketInfo(s.code);
+  const checked = selectedWatchlistCodes.has(String(s.code)) ? 'checked' : '';
   const poolAction = options.pool
     ? `<button class="btn-promote" onclick="event.stopPropagation();promoteWatchPoolStock('${escapeAttr(s.code)}')" title="提升为自选股">提升</button>`
     : '';
@@ -215,10 +312,14 @@ function renderStockCard(s, signal, options = {}) {
          data-code="${escapeAttr(s.code)}">
       <div class="stock-card-inner">
         <div class="sc-grip" title="拖拽排序">⋮⋮</div>
+        <label class="stock-select-check" onclick="event.stopPropagation()" title="勾选用于批量操作">
+          <input type="checkbox" data-code="${escapeAttr(s.code)}" ${checked} onchange="setWatchlistSelection('${escapeAttr(s.code)}', this.checked)">
+        </label>
         <div class="sc-left">
           <div>
             <div class="sc-name">${stockMoveBadge(s.change_pct)}${escapeHtml(s.name || s.code)}</div>
             <div class="sc-code">${escapeHtml(s.code)}</div>
+            <div class="sc-last-signal report-signal signal-${escapeHtml(reportSignalClass)}">上次 ${escapeHtml(reportSignalLabel)} · ${escapeHtml(market.label)}</div>
           </div>
           <div class="sc-price ${cls}">${formatPrice(s.price)}<span class="sc-price-unit">元</span></div>
         </div>
@@ -242,6 +343,70 @@ function renderStockCard(s, signal, options = {}) {
       ${poolAction}
       <button class="btn-remove" onclick="event.stopPropagation();removeStock('${escapeAttr(s.code)}')" title="删除">×</button>
     </div>`;
+}
+
+function syncWatchlistSelectionInputs() {
+  document.querySelectorAll('.stock-select-check input[type="checkbox"]').forEach(input => {
+    input.checked = selectedWatchlistCodes.has(String(input.dataset.code || ''));
+  });
+}
+
+function setWatchlistSelection(code, checked) {
+  const clean = String(code || '').trim();
+  if (!clean) return;
+  if (checked) selectedWatchlistCodes.add(clean);
+  else selectedWatchlistCodes.delete(clean);
+  updateWatchlistBatchBar();
+}
+
+function getSelectedWatchlistCodes() {
+  return Array.from(selectedWatchlistCodes);
+}
+
+function updateWatchlistBatchBar() {
+  const bar = document.getElementById('watchlistBatchBar');
+  const countEl = document.getElementById('watchlistBatchCount');
+  if (!bar || !countEl) return;
+  const count = selectedWatchlistCodes.size;
+  countEl.textContent = `已选 ${count} 只`;
+  bar.style.display = count > 0 ? '' : 'none';
+}
+
+function clearWatchlistSelection() {
+  selectedWatchlistCodes.clear();
+  syncWatchlistSelectionInputs();
+  updateWatchlistBatchBar();
+}
+
+function selectVisibleWatchlistStocks() {
+  visibleWatchlistStocks().forEach(stock => selectedWatchlistCodes.add(String(stock.code)));
+  syncWatchlistSelectionInputs();
+  updateWatchlistBatchBar();
+}
+
+async function batchDeleteWatchlistStocks() {
+  const codes = getSelectedWatchlistCodes();
+  if (!codes.length) return;
+  const label = codes.length > 1 ? `${codes.length} 只自选股` : codes[0];
+  if (!confirm(`确认从自选股中删除 ${label}？此操作会写入数据库。`)) return;
+  try {
+    await API.request('/api/watchlist', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes }),
+    });
+    if (codes.includes(currentCode)) {
+      currentCode = null;
+      document.getElementById('detailView').style.display = 'none';
+      document.getElementById('detailEmpty').style.display = 'block';
+    }
+    clearWatchlistSelection();
+    await loadWatchlist();
+    showToast('已批量删除自选股', 'success');
+  } catch (e) {
+    console.error('batchDeleteWatchlistStocks error:', e);
+    showToast('批量删除失败: ' + e.message, 'error');
+  }
 }
 
 function toggleWatchPool(event) {
@@ -883,6 +1048,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadIndices();
   loadSentiment();
   initKlineTabs();
+  if (window.StockMarketPermissions?.load) await window.StockMarketPermissions.load();
+  renderWatchlistMarketFilterState();
+  renderWatchlistSignalFilterState();
   await loadWatchlist();
 
   const params = new URLSearchParams(window.location.search);

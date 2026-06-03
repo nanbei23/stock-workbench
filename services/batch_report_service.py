@@ -47,6 +47,7 @@ QUOTA_MARKERS = (
 )
 CONTEXT_LIMIT_MARKERS = ("context length", "maximum context", "tokens exceed", "上下文")
 GUARD_PAUSED_STATUS = "guard_paused"
+MANUAL_COMPLETED_STATUS = "manual_completed"
 ERROR_TYPE_LABELS = {
     "quota_exhausted": "额度失败",
     "network": "网络失败",
@@ -86,6 +87,74 @@ def _loads(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def record_worker_heartbeat(
+    worker_id: str,
+    *,
+    state: str = "idle",
+    model_provider_ids: list[str] | None = None,
+    model_tier: str | None = None,
+    current_job_id: str | None = None,
+    current_job_type: str | None = None,
+    current_item_id: int | None = None,
+    current_code: str | None = None,
+    current_stage: str | None = None,
+    last_result: dict[str, Any] | None = None,
+    error: str = "",
+    mark_claim: bool = False,
+) -> dict[str, Any]:
+    worker = str(worker_id or f"worker-{os.getpid()}").strip() or f"worker-{os.getpid()}"
+    providers = [str(item).strip() for item in (model_provider_ids or []) if str(item).strip()]
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO batch_worker_heartbeats
+                (worker_id, pid, state, model_provider_ids_json, model_tier,
+                 last_seen_at, last_loop_at, last_claim_at, current_job_id,
+                 current_job_type, current_item_id, current_code, current_stage,
+                 last_result_json, error)
+            VALUES
+                (?, ?, ?, ?, ?, datetime('now'), datetime('now'),
+                 CASE WHEN ? THEN datetime('now') ELSE NULL END,
+                 ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(worker_id) DO UPDATE SET
+                pid=excluded.pid,
+                state=excluded.state,
+                model_provider_ids_json=excluded.model_provider_ids_json,
+                model_tier=excluded.model_tier,
+                last_seen_at=datetime('now'),
+                last_loop_at=datetime('now'),
+                last_claim_at=CASE WHEN ? THEN datetime('now') ELSE batch_worker_heartbeats.last_claim_at END,
+                current_job_id=excluded.current_job_id,
+                current_job_type=excluded.current_job_type,
+                current_item_id=excluded.current_item_id,
+                current_code=excluded.current_code,
+                current_stage=excluded.current_stage,
+                last_result_json=excluded.last_result_json,
+                error=excluded.error,
+                updated_at=datetime('now')
+            """,
+            (
+                worker,
+                os.getpid(),
+                state,
+                json.dumps(providers, ensure_ascii=False),
+                model_tier or "",
+                1 if mark_claim else 0,
+                current_job_id or "",
+                current_job_type or "",
+                current_item_id,
+                current_code or "",
+                current_stage or "",
+                json.dumps(last_result or {}, ensure_ascii=False, default=str),
+                error or "",
+                1 if mark_claim else 0,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM batch_worker_heartbeats WHERE worker_id=?", (worker,)).fetchone()
+    return dict(row)
 
 
 def _clean_str_list(values: list[Any] | None) -> list[str]:
@@ -472,6 +541,15 @@ def touch_job(job_id: str, *, worker_id: str | None = None, current_code: str | 
         fields["worker_id"] = worker_id
         fields["lease_owner"] = worker_id
         fields["lease_until"] = (datetime.now() + timedelta(minutes=15)).isoformat(timespec="seconds")
+        job = get_research_job(job_id)
+        record_worker_heartbeat(
+            worker_id,
+            state="running",
+            current_job_id=job_id,
+            current_job_type=job.get("job_type") or "",
+            current_code=current_code or "",
+            current_stage="处理股票" if current_code else "任务运行中",
+        )
     if current_code is not None:
         fields["current_code"] = current_code
     _update_job(job_id, **fields)
@@ -1665,14 +1743,25 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300, cooperative: boo
                 status IN ('pending', 'interrupted')
                 OR (
                   status = 'running'
-                  AND lease_until IS NOT NULL
-                  AND datetime(lease_until) < datetime('now')
+                  AND (
+                    (
+                      lease_until IS NOT NULL
+                      AND datetime(lease_until) < datetime('now')
+                    )
+                    OR (
+                      lease_until IS NULL
+                      AND (
+                        heartbeat_at IS NULL
+                        OR datetime(heartbeat_at) < datetime('now', ?)
+                      )
+                    )
+                  )
                 )
               )
             ORDER BY created_at ASC
             LIMIT 1
             """,
-            (worker,),
+            (worker, f"-{lease} seconds"),
         ).fetchone()
         if not row and cooperative:
             row = conn.execute(
@@ -1724,12 +1813,23 @@ def claim_next_job(*, worker_id: str, lease_seconds: int = 300, cooperative: boo
                     status IN ('pending', 'interrupted')
                     OR (
                       status = 'running'
-                      AND lease_until IS NOT NULL
-                      AND datetime(lease_until) < datetime('now')
+                      AND (
+                        (
+                          lease_until IS NOT NULL
+                          AND datetime(lease_until) < datetime('now')
+                        )
+                        OR (
+                          lease_until IS NULL
+                          AND (
+                            heartbeat_at IS NULL
+                            OR datetime(heartbeat_at) < datetime('now', ?)
+                          )
+                        )
+                      )
                     )
                   )
                 """,
-                (worker, worker, token, f"+{lease} seconds", job_id),
+                (worker, worker, token, f"+{lease} seconds", job_id, f"-{lease} seconds"),
             )
             if cursor.rowcount != 1:
                 conn.commit()
@@ -1915,6 +2015,17 @@ def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
             GROUP BY job_id
             """
         ).fetchall()
+        has_worker_heartbeats = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='batch_worker_heartbeats'"
+        ).fetchone()
+        heartbeat_rows = conn.execute(
+            """
+            SELECT *
+            FROM batch_worker_heartbeats
+            ORDER BY COALESCE(last_seen_at, updated_at, created_at) DESC
+            LIMIT 500
+            """
+        ).fetchall() if has_worker_heartbeats else []
     counts_by_job = {row["job_id"]: {key: int(row[key] or 0) for key in ("completed", "failed", "waiting", "running", "pending")} for row in item_rows}
     by_worker: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -1939,20 +2050,64 @@ def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
             "name": config.get("name") or worker_id,
             "enabled": config.get("enabled", True),
             "state": state,
+            "pid": "",
             "job_id": row["job_id"],
             "job_type": row["job_type"],
             "job_status": row["status"],
             "current_code": row["current_code"],
+            "current_stage": "",
             "heartbeat_at": row["heartbeat_at"],
+            "last_loop_at": "",
+            "last_claim_at": "",
             "lease_until": row["lease_until"],
             "counts": counts_by_job.get(row["job_id"], {"completed": 0, "failed": 0, "waiting": 0, "running": 0, "pending": 0}),
             "model_pool": _public_provider_pool(provider_ids, model_tier=model_tier),
             "current_model": (active_model or {}).get("model") or quota.get("model", "") if isinstance(quota, dict) else "",
             "fallback_model": latest_event.get("fallback_model", "") if isinstance(latest_event, dict) else "",
+            "last_result_json": {},
+            "error": "",
             "runtime": runtime,
         }
         if not current or (record["state"] in {"running", "online"} and current["state"] not in {"running", "online"}):
             by_worker[worker_id] = record
+    for row in heartbeat_rows:
+        worker_id = row["worker_id"] or "unknown"
+        heartbeat = _parse_dt(row["last_seen_at"])
+        raw_state = row["state"] or "idle"
+        config = configured_workers.get(worker_id, {})
+        provider_ids = config.get("provider_ids") or _clean_str_list(_loads(row["model_provider_ids_json"], []))
+        model_tier = config.get("model_tier") or row["model_tier"] or "deep"
+        current_job_id = row["current_job_id"] or ""
+        state = "offline"
+        if heartbeat and heartbeat >= threshold:
+            state = "running" if raw_state == "running" and current_job_id else "idle"
+            if raw_state not in {"running", "idle", "polling", "no_job", "online"}:
+                state = raw_state
+        elif raw_state == "running":
+            state = "stale"
+        by_worker[worker_id] = {
+            "worker_id": worker_id,
+            "name": config.get("name") or worker_id,
+            "enabled": config.get("enabled", True),
+            "state": state,
+            "pid": row["pid"],
+            "job_id": current_job_id,
+            "job_type": row["current_job_type"] or "",
+            "job_status": "running" if state == "running" else "",
+            "current_code": row["current_code"] or "",
+            "current_stage": row["current_stage"] or "",
+            "heartbeat_at": row["last_seen_at"],
+            "last_loop_at": row["last_loop_at"],
+            "last_claim_at": row["last_claim_at"],
+            "lease_until": "",
+            "counts": counts_by_job.get(current_job_id, {"completed": 0, "failed": 0, "waiting": 0, "running": 0, "pending": 0}),
+            "model_pool": _public_provider_pool(provider_ids, model_tier=model_tier),
+            "current_model": "",
+            "fallback_model": "",
+            "last_result_json": _loads(row["last_result_json"], {}),
+            "error": row["error"] or "",
+            "runtime": {},
+        }
     for worker_id, config in configured_workers.items():
         if worker_id in by_worker:
             continue
@@ -1960,25 +2115,31 @@ def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
             "worker_id": worker_id,
             "name": config.get("name") or worker_id,
             "enabled": bool(config.get("enabled", True)),
-            "state": "idle" if config.get("enabled") else "disabled",
+            "state": "not_started" if config.get("enabled") else "disabled",
             "job_id": "",
             "job_type": "",
             "job_status": "",
             "current_code": "",
+            "current_stage": "",
             "heartbeat_at": "",
+            "last_loop_at": "",
+            "last_claim_at": "",
             "lease_until": "",
             "counts": {"completed": 0, "failed": 0, "waiting": 0, "running": 0, "pending": 0},
             "model_pool": _public_provider_pool(config.get("provider_ids") or [], model_tier=config.get("model_tier") or "deep"),
             "current_model": "",
             "fallback_model": "",
+            "last_result_json": {},
+            "error": "",
             "runtime": {},
         }
     workers = list(by_worker.values())
     summary = {
         "total": len(workers),
-        "online": sum(1 for worker in workers if worker["state"] in {"online", "running"}),
+        "online": sum(1 for worker in workers if worker["state"] in {"online", "running", "idle"}),
         "running": sum(1 for worker in workers if worker["state"] == "running"),
         "idle": sum(1 for worker in workers if worker["state"] == "idle"),
+        "not_started": sum(1 for worker in workers if worker["state"] == "not_started"),
         "stale": sum(1 for worker in workers if worker["state"] == "stale"),
         "offline": sum(1 for worker in workers if worker["state"] == "offline"),
         "disabled": sum(1 for worker in workers if worker["state"] == "disabled"),
@@ -2006,6 +2167,12 @@ def _is_job_cancelled(job_id: str) -> bool:
     with _connect() as conn:
         row = conn.execute("SELECT status FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
     return bool(row and row["status"] == "cancelled")
+
+
+def _is_job_manual_completed(job_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT status FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+    return bool(row and row["status"] == MANUAL_COMPLETED_STATUS)
 
 
 def cancel_job(job_id: str) -> dict[str, Any]:
@@ -2054,6 +2221,78 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     _recount_job(job_id)
     _update_job(job_id, status="cancelled", error="用户取消批量任务", current_code="", completed_at=_now_expr())
     return {"job_id": job_id, "status": "cancelled", "cancelled_items": cancelled_items}
+
+
+def manual_complete_job(job_id: str) -> dict[str, Any]:
+    job = get_research_job(job_id)
+    if job["status"] in {"cancelled", "failed", MANUAL_COMPLETED_STATUS}:
+        return {"job_id": job_id, "status": job["status"], "remaining_items": 0}
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE batch_job_items
+            SET status='pending',
+                error='',
+                started_at=NULL,
+                completed_at=NULL,
+                lease_owner=NULL,
+                lease_token=NULL,
+                lease_until=NULL,
+                updated_at=datetime('now')
+            WHERE job_id = ?
+              AND status IN ('running', 'quota_paused')
+            """,
+            (job_id,),
+        )
+        conn.execute(
+            """
+            UPDATE batch_job_item_steps
+            SET status='pending',
+                error='',
+                completed_at=NULL,
+                updated_at=datetime('now')
+            WHERE job_id = ?
+              AND status IN ('running', 'quota_paused')
+            """,
+            (job_id,),
+        )
+        conn.execute(
+            """
+            UPDATE batch_jobs
+            SET status=?,
+                pause_requested=0,
+                error='人工完成，剩余项目可继续',
+                current_code='',
+                lease_owner=NULL,
+                lease_token=NULL,
+                lease_until=NULL,
+                completed_at=datetime('now'),
+                updated_at=datetime('now')
+            WHERE job_id = ?
+            """,
+            (MANUAL_COMPLETED_STATUS, job_id),
+        )
+        conn.commit()
+        reset_running = cursor.rowcount
+    counts = _recount_job(job_id)
+    runtime = _runtime_state(job_id)
+    runtime["manual_complete"] = {
+        "state": "completed",
+        "completed_at": _iso_now(),
+        "reset_running_items": reset_running,
+        "counts": counts,
+    }
+    _save_runtime_state(job_id, runtime)
+    log_job_event(
+        job_id,
+        "info",
+        "job_manual_completed",
+        "用户手动完成批量任务，剩余项目保留为可继续",
+        {"reset_running_items": reset_running, "counts": counts},
+    )
+    job = get_research_job(job_id)
+    remaining = int(job["total_count"] or 0) - int(job["completed_count"] or 0) - int(job["skipped_count"] or 0)
+    return {"job_id": job_id, "status": MANUAL_COMPLETED_STATUS, "remaining_items": max(0, remaining)}
 
 
 def _schedule_job(job_id: str) -> None:
@@ -2158,7 +2397,7 @@ async def create_research_job(
         f"{_job_name(job_type)} 已创建",
         {"total_count": len(stocks), "job_type": job_type, "codes": [stock["code"] for stock in stocks]},
     )
-    if auto_start and not payload["allowed_worker_ids"]:
+    if auto_start and not payload["allowed_worker_ids"] and job_type != "position_plan":
         _schedule_job(job_id)
     return {"job_id": job_id, "job_type": job_type, "status": "pending", "total_count": len(stocks)}
 
@@ -2399,7 +2638,22 @@ async def _ensure_current_holding_reports(job_id: str, payload: dict[str, Any]) 
 
 
 async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: dict[str, Any]) -> dict[str, Any]:
+    worker_id = payload.get("worker_id") or ""
+
+    def mark_stage(stage: str) -> None:
+        if worker_id:
+            record_worker_heartbeat(
+                worker_id,
+                state="running",
+                current_job_id=job_id,
+                current_job_type="position_plan",
+                current_stage=stage,
+            )
+        _update_job(job_id, heartbeat_at=_now_expr(), current_code="")
+
+    mark_stage("补齐持仓当日报告")
     auto_holding_reports = await _ensure_current_holding_reports(job_id, payload)
+    mark_stage("整理来源报告")
     base_report_ids = [int(report_id) for report_id in payload.get("report_ids") or [] if int(report_id) > 0]
     merged_report_ids = list(dict.fromkeys(base_report_ids + [int(report_id) for report_id in auto_holding_reports.get("report_ids") or [] if int(report_id) > 0]))
     if merged_report_ids:
@@ -2412,9 +2666,11 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
     else:
         stocks = [batch_research.StockCandidate(item["code"], item.get("name") or item["code"], "默认", 0) for item in items]
     output_dir = Path(payload.get("output_dir") or Path("data") / "batch_research")
+    mark_stage("采集决策实时行情")
     market_context = await batch_research.collect_position_plan_market_context(stocks)
     if payload.get("multi_role"):
         config = batch_research._snapshot_llm_config(DB_PATH, model_tier=payload.get("snapshot_model_tier") or "deep")
+        mark_stage("组合级多角色讨论")
         plan = await batch_research.build_multi_role_position_plan(
             DB_PATH,
             stocks,
@@ -2428,10 +2684,13 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
             decision_market_context=market_context,
         )
     else:
+        mark_stage("生成建仓建议")
         plan = batch_research.build_position_plan(DB_PATH, stocks, top_n=int(payload.get("plan_top_n") or 10))
         plan["decision_market_snapshot"] = market_context
     plan["auto_holding_reports"] = auto_holding_reports
+    mark_stage("写出建仓建议文件")
     outputs = batch_research.write_position_plan(output_dir, plan)
+    mark_stage("写入建仓建议数据库")
     persisted = position_plan_service.persist_position_plan(
         plan,
         db_path=DB_PATH,
@@ -2446,6 +2705,7 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
             _update_item_id(item["id"], status="completed", report_id=report.get("report_id"), completed_at=_now_expr())
         else:
             _update_item_id(item["id"], status="waiting_snapshot", error="缺少分析报告", completed_at=_now_expr())
+    mark_stage("建仓建议完成")
     return {"plan": plan, "outputs": outputs, "position_plan": {"plan_id": persisted["plan_id"], "id": persisted["id"]}}
 
 
@@ -2788,6 +3048,8 @@ async def run_research_job(
     job_type = job["job_type"]
     if job.get("status") == "cancelled":
         return get_research_job(job_id)
+    if job.get("status") == MANUAL_COMPLETED_STATUS:
+        return get_research_job(job_id)
     if job.get("status") == "paused" and int(job.get("pause_requested") or 0):
         return get_research_job(job_id)
     worker_id = payload.get("worker_id") or f"web-{os.getpid()}"
@@ -2807,6 +3069,8 @@ async def run_research_job(
                     if _is_job_cancelled(job_id):
                         if item["status"] not in TERMINAL_ITEM_STATUS:
                             _update_item_id(item["id"], status="cancelled", error="用户取消批量任务", completed_at=_now_expr())
+                        return
+                    if _is_job_manual_completed(job_id):
                         return
                     if _is_job_pause_requested(job_id):
                         _mark_job_paused(job_id)
@@ -2846,6 +3110,8 @@ async def run_research_job(
                         if item["status"] not in TERMINAL_ITEM_STATUS:
                             _update_item_id(item["id"], status="cancelled", error="用户取消批量任务", completed_at=_now_expr())
                         return
+                    if _is_job_manual_completed(job_id):
+                        return
                     if _is_job_pause_requested(job_id):
                         _mark_job_paused(job_id)
                         return
@@ -2865,7 +3131,7 @@ async def run_research_job(
 
             lease_token = payload.get("lease_token") or uuid.uuid4().hex
             while True:
-                if _is_job_cancelled(job_id) or _is_job_pause_requested(job_id):
+                if _is_job_cancelled(job_id) or _is_job_manual_completed(job_id) or _is_job_pause_requested(job_id):
                     break
                 runnable_items = _claim_runnable_items(
                     job_id,
@@ -2887,6 +3153,8 @@ async def run_research_job(
             return refreshed
         if _is_job_cancelled(job_id):
             _update_job(job_id, status="cancelled", completed_at=_now_expr(), current_code="")
+            return get_research_job(job_id)
+        if _is_job_manual_completed(job_id):
             return get_research_job(job_id)
         if job_type == "report_generation" and _unfinished_item_count(job_id):
             _update_job(job_id, status="running", current_code="")
@@ -2918,6 +3186,8 @@ async def run_research_job(
 
 async def resume_job(job_id: str) -> dict[str, Any]:
     with _connect() as conn:
+        job_row = conn.execute("SELECT status FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        job_status = job_row["status"] if job_row else ""
         conn.execute(
             """
             UPDATE batch_job_items
@@ -2936,6 +3206,9 @@ async def resume_job(job_id: str) -> dict[str, Any]:
         )
         conn.commit()
     runtime = _runtime_state(job_id)
+    if runtime.get("manual_complete"):
+        runtime["manual_complete"]["state"] = "resumed"
+        runtime["manual_complete"]["resumed_at"] = _iso_now()
     if "quota" in runtime:
         runtime["quota"]["state"] = "resumed"
     if "guard" in runtime:
@@ -2943,9 +3216,10 @@ async def resume_job(job_id: str) -> dict[str, Any]:
         runtime["guard"]["resumed_at"] = _iso_now()
         runtime["guard"]["consecutive_failures"] = 0
     _save_runtime_state(job_id, runtime)
-    _update_job(job_id, status="pending", pause_requested=0, paused_at=None, error="", current_code="")
+    _update_job(job_id, status="pending", pause_requested=0, paused_at=None, error="", current_code="", completed_at=None)
     log_job_event(job_id, "info", "job_resumed", "批量任务继续执行")
-    _schedule_job(job_id)
+    if job_status != MANUAL_COMPLETED_STATUS or get_research_job(job_id).get("job_type") != "position_plan":
+        _schedule_job(job_id)
     return get_research_job(job_id)
 
 
@@ -2963,7 +3237,8 @@ async def retry_failed(
         filters = " AND COALESCE(error_type, 'unknown') = ?"
         params.append(error_type)
     with _connect() as conn:
-        job_row = conn.execute("SELECT payload_json FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        job_row = conn.execute("SELECT job_type, payload_json FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        job_type = job_row["job_type"] if job_row else ""
         payload = _loads(job_row["payload_json"] if job_row else "{}", {})
         if model_provider_ids:
             payload["primary_provider_ids"] = _clean_str_list(model_provider_ids)
@@ -3001,7 +3276,7 @@ async def retry_failed(
         conn.commit()
         reset_count = cursor.rowcount + step_cursor.rowcount
     _recount_job(job_id)
-    if auto_start and reset_count:
+    if auto_start and reset_count and job_type != "position_plan":
         _schedule_job(job_id)
     log_job_event(
         job_id,
@@ -3021,18 +3296,67 @@ async def run_worker_once(
     model_tier: str | None = None,
 ) -> dict[str, Any]:
     worker = worker_id or f"worker-{os.getpid()}"
+    record_worker_heartbeat(
+        worker,
+        state="polling",
+        model_provider_ids=model_provider_ids or [],
+        model_tier=model_tier,
+        current_stage="查找可领取任务",
+    )
     stalled = mark_stalled_jobs(stale_minutes=stale_minutes)
     claimed = claim_next_job(worker_id=worker, lease_seconds=max(60, int(stale_minutes or 15) * 60))
     if not claimed:
-        return {"worker_id": worker, "ran": False, "stalled": stalled, "model_provider_ids": model_provider_ids or []}
+        result = {"worker_id": worker, "ran": False, "stalled": stalled, "model_provider_ids": model_provider_ids or []}
+        record_worker_heartbeat(
+            worker,
+            state="idle",
+            model_provider_ids=model_provider_ids or [],
+            model_tier=model_tier,
+            current_stage="暂无可领取任务",
+            last_result=result,
+        )
+        return result
     job_id = claimed["job_id"]
-    await run_research_job(
-        job_id,
-        worker_id=worker,
-        worker_model_provider_ids=model_provider_ids or [],
-        worker_model_tier=model_tier,
+    record_worker_heartbeat(
+        worker,
+        state="running",
+        model_provider_ids=model_provider_ids or [],
+        model_tier=model_tier,
+        current_job_id=job_id,
+        current_job_type=claimed.get("job_type") or "",
+        current_stage="已领取任务",
+        mark_claim=True,
     )
-    return {"worker_id": worker, "ran": True, "job_id": job_id, "stalled": stalled, "model_provider_ids": model_provider_ids or []}
+    result = {"worker_id": worker, "ran": True, "job_id": job_id, "stalled": stalled, "model_provider_ids": model_provider_ids or []}
+    try:
+        await run_research_job(
+            job_id,
+            worker_id=worker,
+            worker_model_provider_ids=model_provider_ids or [],
+            worker_model_tier=model_tier,
+        )
+        record_worker_heartbeat(
+            worker,
+            state="idle",
+            model_provider_ids=model_provider_ids or [],
+            model_tier=model_tier,
+            current_stage="任务循环完成",
+            last_result=result,
+        )
+        return result
+    except Exception as exc:
+        record_worker_heartbeat(
+            worker,
+            state="error",
+            model_provider_ids=model_provider_ids or [],
+            model_tier=model_tier,
+            current_job_id=job_id,
+            current_job_type=claimed.get("job_type") or "",
+            current_stage="任务执行异常",
+            last_result={**result, "error": str(exc)},
+            error=str(exc),
+        )
+        raise
 
 
 # Compatibility wrappers for the old /api/batch-reports surface.

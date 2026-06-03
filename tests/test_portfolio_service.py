@@ -155,6 +155,35 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stock["last_report_id"], 2)
         self.assertEqual(stock["last_report_created_at"], "2026-05-21 09:30:00")
 
+    async def test_remove_watchlist_batch_deletes_selected_codes_only(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO watchlist (code, name, sort_order) VALUES (?, ?, ?)",
+                [
+                    ("000001", "平安银行", 1),
+                    ("000002", "万科A", 2),
+                    ("600519", "贵州茅台", 3),
+                ],
+            )
+            db.commit()
+
+        result = await portfolio_service.remove_watchlist_batch(["000001", "600519", "000001", "bad"])
+
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute("SELECT code FROM watchlist ORDER BY sort_order").fetchall()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["deleted"], 2)
+        self.assertEqual(result["codes"], ["000001", "600519"])
+        self.assertEqual(rows, [("000002",)])
+
+    async def test_remove_watchlist_batch_rejects_empty_codes(self):
+        with self.assertRaises(Exception) as ctx:
+            await portfolio_service.remove_watchlist_batch(["", "bad"])
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("请选择", ctx.exception.detail)
+
     async def test_portfolio_overview_defaults_cash_to_zero(self):
         result = await portfolio_service.get_portfolio_overview("default")
 
@@ -356,6 +385,21 @@ class PortfolioApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         update_watchlist.assert_awaited_once()
         self.assertEqual(update_watchlist.await_args.args[1].group_name, "默认")
+
+    def test_watchlist_batch_delete_route_uses_service_layer(self):
+        with patch(
+            "services.portfolio_service.remove_watchlist_batch",
+            new=AsyncMock(return_value={"status": "ok", "deleted": 2, "codes": ["000001", "600519"]}),
+        ) as remove_batch:
+            resp = self.client.request(
+                "DELETE",
+                "/api/watchlist",
+                json={"codes": ["000001", "600519"]},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["deleted"], 2)
+        remove_batch.assert_awaited_once_with(["000001", "600519"])
 
     def test_trade_route_accepts_three_decimal_shares(self):
         with patch(

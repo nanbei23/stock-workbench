@@ -22,6 +22,7 @@ from services import enhancement_service
 
 
 STOP = False
+LAST_WORKER_IDS: set[str] = set()
 
 
 def _request_stop(_signum, _frame) -> None:
@@ -77,6 +78,15 @@ def main() -> int:
     while not STOP:
         workers = _enabled_workers()
         commands = {worker["id"]: _worker_command(worker) for worker in workers}
+        worker_ids = set(commands)
+        global LAST_WORKER_IDS
+        if worker_ids != LAST_WORKER_IDS:
+            print(
+                f"enabled workers: {len(commands)}"
+                + (f" ({', '.join(sorted(commands))})" if commands else ""),
+                flush=True,
+            )
+            LAST_WORKER_IDS = worker_ids
         if not commands:
             print("No enabled batch workers configured; worker pool is idle.", flush=True)
             time.sleep(max(5.0, args.restart_delay))
@@ -93,7 +103,11 @@ def main() -> int:
             if proc and proc.poll() is None:
                 continue
             if proc and proc.returncode is not None:
-                print(f"{worker_id} exited with {proc.returncode}; restarting after {args.restart_delay}s", flush=True)
+                print(
+                    f"{worker_id} exited with {proc.returncode}; "
+                    f"command={' '.join(command)}; restarting after {args.restart_delay}s",
+                    flush=True,
+                )
                 time.sleep(max(1.0, args.restart_delay))
             print(f"starting {worker_id}: {' '.join(command)}", flush=True)
             processes[worker_id] = subprocess.Popen(command, cwd=str(ROOT), env=os.environ.copy())

@@ -249,6 +249,30 @@ async def remove_from_watchlist(code: str):
     return {"status": "ok", "code": code}
 
 
+def _clean_watchlist_codes(codes):
+    cleaned = []
+    seen = set()
+    for raw in codes or []:
+        code = str(raw or "").strip()
+        if not re.fullmatch(r"\d{6}", code) or code in seen:
+            continue
+        seen.add(code)
+        cleaned.append(code)
+    return cleaned
+
+
+async def remove_watchlist_batch(codes: list[str]):
+    clean_codes = _clean_watchlist_codes(codes)
+    if not clean_codes:
+        raise HTTPException(status_code=400, detail="请选择要删除的自选股")
+
+    async def _remove(db):
+        return await repo.delete_watchlist_stocks(db, clean_codes)
+
+    deleted = await _with_db(_remove)
+    return {"status": "ok", "deleted": deleted, "codes": clean_codes}
+
+
 async def update_watchlist(code: str, req):
     updates = {
         key: value

@@ -259,6 +259,23 @@ a { color: var(--color-accent); text-decoration: none; }
   gap: 0;
 }
 
+.stock-select-check {
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgba(0,0,0,0.04);
+  background: rgba(0,0,0,0.015);
+  cursor: pointer;
+}
+
+.stock-select-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
 /* 左侧拖拽手柄 */
 .sc-grip {
   flex: 0 0 24px;
@@ -466,6 +483,18 @@ a { color: var(--color-accent); text-decoration: none; }
 .stock-card .btn-promote:hover {
   background: var(--color-accent);
   color: white;
+}
+
+.watchlist-filter-tools {
+  flex-shrink: 0;
+}
+
+.watchlist-batch-bar {
+  justify-content: space-between;
+}
+
+.watchlist-batch-bar .btn {
+  flex: 0 0 auto;
 }
 
 /* --- 确认弹窗 --- */
