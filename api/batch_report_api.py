@@ -84,6 +84,14 @@ async def get_batch_research_workers(stale_minutes: int = Query(default=15, ge=1
     return batch_report_service.get_worker_status(stale_minutes=stale_minutes)
 
 
+@router.post("/batch-research/workers/reclaim-stale")
+async def reclaim_stale_batch_research_workers(
+    stale_minutes: int = Query(default=15, ge=1, le=120),
+    worker_id: Optional[str] = Query(default=None),
+):
+    return batch_report_service.reclaim_stale_workers(stale_minutes=stale_minutes, worker_id=worker_id)
+
+
 @router.get("/batch-research/jobs")
 async def list_batch_research_jobs(
     limit: int = Query(default=50, ge=1, le=200),

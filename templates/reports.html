@@ -52,9 +52,9 @@
             <label class="library-filter">
                 <span>分组</span>
                 <select id="reportGroupBy" class="form-input" onchange="filterReportLibrary()">
-                    <option value="none" selected>不分组</option>
                     <option value="batch">按批量任务折叠</option>
-                    <option value="date">按日期折叠</option>
+                    <option value="date" selected>按日期折叠</option>
+                    <option value="none">不分组</option>
                 </select>
             </label>
             <label class="library-filter">
@@ -105,10 +105,11 @@
                         <th>事实核查</th>
                         <th>模式</th>
                         <th>生成时间</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="reportLibraryRows">
-                    <tr><td colspan="8" class="empty-row">正在加载...</td></tr>
+                    <tr><td colspan="9" class="empty-row">正在加载...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -148,10 +149,11 @@
                         <th>模型</th>
                         <th>任务</th>
                         <th>时间</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="positionPlanRows">
-                    <tr><td colspan="8" class="empty-row">切换后加载...</td></tr>
+                    <tr><td colspan="9" class="empty-row">切换后加载...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -279,5 +281,5 @@
 
 {% block scripts %}
 <script src="/static/js/ai-task-client.js?v=2.9.2"></script>
-<script src="/static/js/reports.js?v=2.9.4-manual-complete"></script>
+<script src="/static/js/reports.js?v=2.9.5-release"></script>
 {% endblock %}

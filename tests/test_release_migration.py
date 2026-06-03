@@ -119,10 +119,21 @@ class ReleaseMigrationTests(unittest.TestCase):
         html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
 
         self.assertIn('id="reportGroupBy"', html)
+        self.assertIn('<option value="date" selected>按日期折叠</option>', html)
         self.assertIn("renderGroupedReportRows", js)
         self.assertIn("collapsedReportGroups", js)
+        self.assertIn("expandedReportGroups", js)
+        self.assertIn("groupBy === 'date' ? !expandedReportGroups.has(groupToken)", js)
         self.assertIn("toggleReportGroup", js)
         self.assertIn("report-group-header", js)
+
+    def test_reports_page_links_to_full_report_detail(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+
+        self.assertIn("<th>操作</th>", html)
+        self.assertIn('href="/reports/${id}"', js)
+        self.assertIn("打开完整详情页", js)
 
     def test_report_preview_renders_structured_json_sections(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")

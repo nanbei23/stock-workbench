@@ -1988,6 +1988,175 @@ def mark_stalled_jobs(*, stale_minutes: int = 15) -> int:
     return len(job_ids)
 
 
+def reclaim_stale_workers(*, stale_minutes: int = 15, worker_id: str | None = None) -> dict[str, Any]:
+    """Release running item leases owned by stale workers so healthy workers can continue."""
+    threshold = f"-{max(1, int(stale_minutes or 15))} minutes"
+    worker_filter = "AND worker_id = ?" if worker_id else ""
+    worker_params: list[Any] = [worker_id] if worker_id else []
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        heartbeat_rows = conn.execute(
+            f"""
+            SELECT worker_id, current_job_id, current_item_id
+            FROM batch_worker_heartbeats
+            WHERE worker_id IS NOT NULL
+              {worker_filter}
+              AND (
+                last_seen_at IS NULL
+                OR datetime(last_seen_at) < datetime('now', ?)
+              )
+              AND state IN ('running', 'polling', 'error')
+            """,
+            [*worker_params, threshold],
+        ).fetchall()
+        job_rows = conn.execute(
+            f"""
+            SELECT job_id, worker_id, lease_owner
+            FROM batch_jobs
+            WHERE status = 'running'
+              AND (? = '' OR worker_id = ? OR lease_owner = ?)
+              AND (
+                lease_until IS NOT NULL AND datetime(lease_until) < datetime('now')
+                OR heartbeat_at IS NULL
+                OR datetime(heartbeat_at) < datetime('now', ?)
+              )
+            """,
+            [worker_id or "", worker_id or "", worker_id or "", threshold],
+        ).fetchall()
+
+        stale_workers = {
+            str(row["worker_id"])
+            for row in heartbeat_rows
+            if row["worker_id"]
+        }
+        for row in job_rows:
+            if row["worker_id"]:
+                stale_workers.add(str(row["worker_id"]))
+            if row["lease_owner"]:
+                stale_workers.add(str(row["lease_owner"]))
+        if worker_id and not stale_workers:
+            stale_workers.add(worker_id)
+
+        heartbeat_item_ids = [int(row["current_item_id"]) for row in heartbeat_rows if row["current_item_id"]]
+        affected_item_rows: list[sqlite3.Row] = []
+        if stale_workers or heartbeat_item_ids:
+            worker_placeholders = ",".join("?" for _ in stale_workers) or "NULL"
+            item_placeholders = ",".join("?" for _ in heartbeat_item_ids) or "NULL"
+            affected_item_rows = conn.execute(
+                f"""
+                SELECT id, job_id, code, lease_owner
+                FROM batch_job_items
+                WHERE status = 'running'
+                  AND (
+                    lease_owner IN ({worker_placeholders})
+                    OR id IN ({item_placeholders})
+                  )
+                """,
+                [*stale_workers, *heartbeat_item_ids],
+            ).fetchall()
+
+        item_ids = [int(row["id"]) for row in affected_item_rows]
+        affected_jobs = {row["job_id"] for row in affected_item_rows}
+        affected_jobs.update(row["current_job_id"] for row in heartbeat_rows if row["current_job_id"])
+        affected_jobs.update(row["job_id"] for row in job_rows if row["job_id"])
+
+        if item_ids:
+            placeholders = ",".join("?" for _ in item_ids)
+            conn.execute(
+                f"""
+                UPDATE batch_job_items
+                SET status='pending',
+                    error='',
+                    error_type='',
+                    lease_owner=NULL,
+                    lease_token=NULL,
+                    lease_until=NULL,
+                    completed_at=NULL,
+                    updated_at=datetime('now')
+                WHERE id IN ({placeholders})
+                """,
+                item_ids,
+            )
+            conn.execute(
+                f"""
+                UPDATE batch_job_item_steps
+                SET status='pending',
+                    error='',
+                    error_type='',
+                    completed_at=NULL,
+                    updated_at=datetime('now')
+                WHERE item_id IN ({placeholders})
+                  AND status = 'running'
+                """,
+                item_ids,
+            )
+
+        for job_id in affected_jobs:
+            if not job_id:
+                continue
+            running_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM batch_job_items WHERE job_id = ? AND status = 'running'",
+                (job_id,),
+            ).fetchone()["count"]
+            next_status = "running" if int(running_count or 0) else "pending"
+            conn.execute(
+                """
+                UPDATE batch_jobs
+                SET status=CASE WHEN status IN ('running', 'interrupted') THEN ? ELSE status END,
+                    current_code='',
+                    worker_id=NULL,
+                    heartbeat_at=NULL,
+                    lease_owner=NULL,
+                    lease_token=NULL,
+                    lease_until=NULL,
+                    error=CASE WHEN status IN ('running', 'interrupted') THEN '' ELSE error END,
+                    completed_at=NULL,
+                    updated_at=datetime('now')
+                WHERE job_id = ?
+                  AND status NOT IN ('completed', 'cancelled', 'manual_completed')
+                """,
+                (next_status, job_id),
+            )
+
+        if stale_workers:
+            placeholders = ",".join("?" for _ in stale_workers)
+            conn.execute(
+                f"""
+                UPDATE batch_worker_heartbeats
+                SET state='reclaimed',
+                    current_job_id='',
+                    current_job_type='',
+                    current_item_id=NULL,
+                    current_code='',
+                    current_stage='已回收陈旧 worker',
+                    error='陈旧 worker 已回收，持有的股票已释放回队列',
+                    updated_at=datetime('now')
+                WHERE worker_id IN ({placeholders})
+                """,
+                list(stale_workers),
+            )
+        conn.commit()
+
+    for job_id in affected_jobs:
+        if not job_id:
+            continue
+        _recount_job(job_id)
+        log_job_event(
+            job_id,
+            "warning",
+            "stale_worker_reclaimed",
+            "陈旧 worker 已回收，未完成股票已释放回队列",
+            {"stale_minutes": stale_minutes, "workers": sorted(stale_workers), "item_ids": item_ids},
+        )
+    return {
+        "status": "ok",
+        "stale_minutes": stale_minutes,
+        "workers": sorted(stale_workers),
+        "reclaimed_items": len(item_ids),
+        "job_ids": sorted(job_id for job_id in affected_jobs if job_id),
+    }
+
+
 def get_worker_status(*, stale_minutes: int = 15) -> dict[str, Any]:
     now = datetime.now(UTC).replace(tzinfo=None)
     threshold = now - timedelta(minutes=max(1, int(stale_minutes or 15)))

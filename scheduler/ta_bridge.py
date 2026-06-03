@@ -58,6 +58,24 @@ class TokenTrackerCallback(BaseCallbackHandler):
 
 logger = logging.getLogger(__name__)
 
+
+def friendly_analysis_error(exc: Exception) -> str:
+    raw = str(exc)
+    lower = raw.lower()
+    if (
+        "401" in raw
+        or "authentication" in lower
+        or "invalid api key" in lower
+        or "invalid_request_error" in lower
+        or "invalid_key" in lower
+    ):
+        return "AI 引擎鉴权失败：当前保存的 API Key 无效或已过期。请到设置页的 AI 引擎中重新填写有效 Key，并点击测试连接确认。"
+    if "quota" in lower or "rate limit" in lower or "insufficient" in lower:
+        return "AI 引擎额度或限流异常：当前模型额度可能不足或请求过快。请切换模型、降低并发，或稍后重试。"
+    if "server disconnected" in lower or "connection" in lower or "timeout" in lower:
+        return "AI 引擎网络连接异常：模型服务连接中断或超时。请检查 Base URL、网络和代理后重试。"
+    return raw[:500]
+
 # ============================================================
 # Pipeline stages
 # ============================================================
@@ -476,7 +494,7 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
         logger.error("TradingAgents未安装: %s", e)
     except Exception as e:
         task.status = "failed"
-        task.error = str(e)
+        task.error = friendly_analysis_error(e)
         _save_stage_progress(task_id, code, task)
         logger.error("TradingAgents分析失败: %s", e, exc_info=True)
 

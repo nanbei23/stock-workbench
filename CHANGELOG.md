@@ -4,6 +4,32 @@
 
 No unreleased changes.
 
+## 2.9.5 - 2026-06-03
+
+### Added
+
+- Added a full AI report detail page at `/reports/{report_id}` with final decision, trade plan, debates, seven-layer details, fact-check, bystander verification, and raw-state audit sections.
+- Added report-library links from each report row and preview panel to the full report detail page.
+- Added regression coverage for report-detail routing, default date-grouped report lists, Sina financial report parsing, and semantic snapshot validation.
+
+### Changed
+
+- Changed the report library default grouping to collapsed date groups for large report sets.
+- Changed seven-layer batch prefetch to parse Sina's current `report_list` financial payload for balance-sheet and cash-flow data instead of relying on TradingAgents' stale A-share parser.
+- Changed saved snapshot loading to recompute validation dynamically so old semantic failures are no longer treated as complete snapshots.
+- Updated release metadata, package metadata, frontend cache versions, and README version to `2.9.5`.
+
+### Fixed
+
+- Fixed 600699-like cases where Sina had balance-sheet and cash-flow data but the old parser returned `No ... data found`.
+- Fixed snapshot validation so tool outputs such as `No balance sheet data found` and `Error retrieving ...` are treated as data errors rather than successful layers.
+- Fixed report-detail error states so missing reports no longer leave lower sections stuck on loading text.
+
+### Deployment
+
+- No database migration is required from `2.9.4`.
+- Existing malformed seven-layer snapshots and reports are not rewritten automatically; rerun data prefetch and report generation for affected stocks to pick up the corrected financial statements.
+
 ## 2.8.1 - 2026-06-02
 
 ### Added

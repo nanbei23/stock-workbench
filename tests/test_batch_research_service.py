@@ -943,6 +943,56 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["summary"]["online"], 1)
         self.assertEqual(status["summary"]["stale"], 1)
 
+    async def test_reclaim_stale_workers_requeues_running_items(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            item_id = db.execute(
+                "SELECT id FROM batch_job_items WHERE job_id=? AND code='000001'",
+                (created["job_id"],),
+            ).fetchone()[0]
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='running', worker_id='worker-stale', heartbeat_at=datetime('now', '-40 minutes'),
+                    lease_owner='worker-stale', lease_until=datetime('now', '-20 minutes'), current_code='000001'
+                WHERE job_id=?
+                """,
+                (created["job_id"],),
+            )
+            db.execute(
+                """
+                UPDATE batch_job_items
+                SET status='running', lease_owner='worker-stale', lease_token='old-token',
+                    lease_until=datetime('now', '-20 minutes')
+                WHERE id=?
+                """,
+                (item_id,),
+            )
+            db.execute(
+                """
+                INSERT INTO batch_worker_heartbeats
+                    (worker_id, state, last_seen_at, current_job_id, current_item_id, current_code)
+                VALUES
+                    ('worker-stale', 'running', datetime('now', '-40 minutes'), ?, ?, '000001')
+                """,
+                (created["job_id"], item_id),
+            )
+            db.commit()
+
+        result = batch_report_service.reclaim_stale_workers(stale_minutes=15)
+        job = batch_report_service.get_research_job(created["job_id"])
+        reclaimed_item = next(item for item in job["items"] if item["code"] == "000001")
+
+        self.assertEqual(result["workers"], ["worker-stale"])
+        self.assertEqual(result["reclaimed_items"], 1)
+        self.assertEqual(job["status"], "pending")
+        self.assertEqual(reclaimed_item["status"], "pending")
+        self.assertIsNone(reclaimed_item["lease_owner"])
+
     async def test_launchd_worker_scripts_exist_and_reference_project_root(self):
         root = Path(__file__).resolve().parents[1]
         scripts = [

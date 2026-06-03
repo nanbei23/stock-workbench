@@ -1,4 +1,4 @@
 """Application release metadata."""
 
 APP_NAME = "炒股小牛马工作台"
-APP_VERSION = "2.9.4"
+APP_VERSION = "2.9.5"

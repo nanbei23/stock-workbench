@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% set active = "reports" %}
+
+{% block title %}AI报告详情 - 炒股小牛马{% endblock %}
+
+{% block content %}
+<div class="position-plan-page report-detail-page" data-report-id="{{ report_id }}">
+  <section class="position-plan-hero">
+    <div>
+      <a class="text-link" href="/reports">返回 AI 报告库</a>
+      <h1 id="reportDetailTitle">AI报告详情</h1>
+      <p id="reportDetailSubtitle">正在读取完整报告、七层分析、多空辩论、风险复核和核验记录。</p>
+    </div>
+    <div class="position-plan-actions">
+      <a class="btn btn-sm" id="reportAiLink" href="/ai?report_id={{ report_id }}">AI分析台</a>
+      <a class="btn btn-sm" id="reportPdfLink" href="/api/ai/report/{{ report_id }}/pdf" target="_blank">PDF</a>
+      <button class="btn btn-sm" id="reportFactCheckBtn" type="button">重新事实核查</button>
+      <button class="btn btn-sm btn-primary" id="reportBystanderBtn" type="button">旁观者核对</button>
+    </div>
+  </section>
+
+  <section class="position-plan-meta-grid" id="reportMetaGrid">
+    <div><span>信号</span><strong>--</strong></div>
+    <div><span>置信度</span><strong>--</strong></div>
+    <div><span>风险</span><strong>--</strong></div>
+    <div><span>目标价</span><strong>--</strong></div>
+    <div><span>分析模式</span><strong>--</strong></div>
+    <div><span>生成时间</span><strong>--</strong></div>
+  </section>
+
+  <nav class="position-plan-anchor-nav">
+    <a href="#reportDecision">最终决策</a>
+    <a href="#reportTradePlan">交易计划</a>
+    <a href="#reportDebate">多空辩论</a>
+    <a href="#reportRisk">风险复核</a>
+    <a href="#reportLayers">七层分析明细</a>
+    <a href="#reportVerify">核验记录</a>
+  </nav>
+
+  <section class="position-plan-section" id="reportDecision">
+    <div class="section-heading">
+      <h2>最终决策</h2>
+      <span id="reportDecisionMeta">--</span>
+    </div>
+    <div class="position-plan-prose" id="reportDecisionBody">正在加载...</div>
+  </section>
+
+  <section class="position-plan-section" id="reportTradePlan">
+    <div class="section-heading">
+      <h2>交易计划</h2>
+      <span>用于人工复核，不会自动下单</span>
+    </div>
+    <div class="position-plan-prose" id="reportTradePlanBody">正在加载...</div>
+  </section>
+
+  <section class="position-plan-section" id="reportDebate">
+    <div class="section-heading">
+      <h2>多空辩论</h2>
+      <span>研究员观点与反方约束</span>
+    </div>
+    <div class="position-plan-prose" id="reportInvestmentDebateBody">正在加载...</div>
+  </section>
+
+  <section class="position-plan-section" id="reportRisk">
+    <div class="section-heading">
+      <h2>风险复核</h2>
+      <span>风控经理、交易员与最终约束</span>
+    </div>
+    <div class="position-plan-prose" id="reportRiskBody">正在加载...</div>
+  </section>
+
+  <section class="position-plan-section" id="reportLayers">
+    <div class="section-heading">
+      <h2>七层分析明细</h2>
+      <span id="reportLayerMeta">--</span>
+    </div>
+    <div class="position-plan-role-list" id="reportLayerList">
+      <div class="library-empty-state">正在加载七层分析...</div>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="reportVerify">
+    <div class="section-heading">
+      <h2>事实核查与旁观者核对</h2>
+      <span>用于追踪事实风险和同源幻觉</span>
+    </div>
+    <div class="position-plan-split">
+      <article>
+        <h3>事实核查</h3>
+        <div id="reportFactCheckBody" class="position-plan-prose compact">--</div>
+      </article>
+      <article>
+        <h3>旁观者核对</h3>
+        <div id="reportBystanderBody" class="position-plan-prose compact">--</div>
+      </article>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="reportRawState">
+    <div class="section-heading">
+      <h2>原始状态</h2>
+      <span>调试与审计使用</span>
+    </div>
+    <pre id="reportRawStateBody" class="json-block">{}</pre>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/report-detail.js?v=2.9.5-release"></script>
+{% endblock %}

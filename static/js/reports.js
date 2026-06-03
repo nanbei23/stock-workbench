@@ -19,10 +19,12 @@
     let modelProvidersLoaded = false;
     let modelProviders = [];
     let workerStatusCache = null;
+    let selectedPositionPlanId = '';
     const selected = new Set();
     const selectedSignals = new Set();
     let reportMarketFilter = 'all';
     const collapsedReportGroups = new Set();
+    const expandedReportGroups = new Set();
     const POSITION_PLAN_ROLES = [
         ['portfolio_manager', '组合经理'],
         ['risk_manager', '风控经理'],
@@ -261,15 +263,17 @@
                 <div><span>运行 / 空闲</span><strong>${Number(data.summary?.running || 0)} / ${Number(data.summary?.idle || 0)}</strong></div>
                 <div><span>卡死 / 离线</span><strong>${Number(data.summary?.stale || 0)} / ${Number(data.summary?.offline || 0)}</strong></div>
                 <div><span>最近心跳</span><strong>${escapeHtml(formatTime(data.summary?.latest_heartbeat_at || latestHeartbeat))}</strong></div>
+                <div><span>陈旧处理</span><strong>${Number(data.summary?.stale || 0) ? '<button class="btn btn-sm" onclick="reclaimStaleWorkers()">回收陈旧</button>' : '无需处理'}</strong></div>
             `;
             if (panel) {
                 panel.innerHTML = `<table class="report-library-table worker-status-table">
-                    <thead><tr><th>Worker</th><th>状态</th><th>模型池</th><th>当前</th><th>进度</th><th>心跳</th></tr></thead>
+                    <thead><tr><th>Worker</th><th>状态</th><th>模型池</th><th>当前</th><th>进度</th><th>心跳</th><th>操作</th></tr></thead>
                     <tbody>${workers.map(worker => {
                         const pool = (worker.model_pool || []).map(item => `${item.ready ? '' : '!'}${escapeHtml(item.name || item.provider_id)} / ${escapeHtml(item.model || '--')}`).join('<br>') || '--';
                         const counts = worker.counts || {};
                         const currentMain = worker.current_code || worker.current_stage || worker.job_type || '--';
                         const currentSub = [worker.current_stage && worker.current_code ? worker.current_stage : '', worker.current_model || '', worker.fallback_model ? `-> ${worker.fallback_model}` : ''].filter(Boolean).join(' ');
+                        const action = worker.state === 'stale' ? `<button class="btn btn-sm" onclick="reclaimStaleWorkers('${escapeAttr(worker.worker_id)}')">回收</button>` : '--';
                         return `<tr>
                             <td><strong>${escapeHtml(worker.name || worker.worker_id)}</strong><span>${escapeHtml(worker.worker_id)}</span></td>
                             <td><span class="report-signal ${escapeHtml(statusClass(worker.state === 'running' ? 'running' : worker.state === 'stale' || worker.state === 'offline' ? 'failed' : 'completed'))}">${escapeHtml(workerStateLabel(worker.state))}</span></td>
@@ -277,8 +281,9 @@
                             <td>${escapeHtml(currentMain)}<span>${escapeHtml(currentSub)}</span></td>
                             <td>完成 ${Number(counts.completed || 0)} / 失败 ${Number(counts.failed || 0)}<span>等待 ${Number(counts.pending || 0)} / 待数据 ${Number(counts.waiting || 0)}</span></td>
                             <td>${escapeHtml(formatTime(worker.heartbeat_at))}</td>
+                            <td>${action}</td>
                         </tr>`;
-                    }).join('') || '<tr><td colspan="6" class="library-empty-state">暂无 Worker 配置或运行记录</td></tr>'}</tbody>
+                    }).join('') || '<tr><td colspan="7" class="library-empty-state">暂无 Worker 配置或运行记录</td></tr>'}</tbody>
                 </table>`;
             }
         } catch (err) {
@@ -292,15 +297,26 @@
         }
     }
 
+    async function reclaimStaleWorkers(workerId = '') {
+        const target = workerId ? ` ${workerId}` : '全部陈旧 Worker';
+        if (!confirm(`确认回收${target}？它持有的未完成股票会释放回队列，由其他健康 Worker 继续领取。`)) return;
+        const query = new URLSearchParams({ stale_minutes: '15' });
+        if (workerId) query.set('worker_id', workerId);
+        const result = await requestJson(`/api/batch-research/workers/reclaim-stale?${query.toString()}`, { method: 'POST' });
+        alert(`已回收 ${result.workers?.length || 0} 个 Worker，释放 ${result.reclaimed_items || 0} 个股票任务。`);
+        await loadWorkerRuntimeSummary();
+        await loadBatchJobs();
+    }
+
     async function loadReportLibrary() {
         const tbody = document.getElementById('reportLibraryRows');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">正在加载...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="library-empty-state">正在加载...</td></tr>';
         try {
             const data = await requestJson('/api/ai/reports?limit=500');
             reports = data.reports || [];
             filterReportLibrary();
         } catch (err) {
-            if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`;
             updateSelectionSummary();
         }
     }
@@ -384,7 +400,7 @@
         const tbody = document.getElementById('reportLibraryRows');
         if (!tbody) return;
         if (!filtered.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">没有符合条件的报告</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="library-empty-state">没有符合条件的报告</td></tr>';
             updateSelectionSummary();
             return;
         }
@@ -407,6 +423,12 @@
             <td>${report.fact_accuracy == null ? '--' : `${Number(report.fact_accuracy).toFixed(1)}%`} / ${Number(report.hallucinations || 0)}项</td>
             <td>${escapeHtml(report.depth || 'standard')} · ${escapeHtml(report.model_mode || 'balanced')}</td>
             <td>${escapeHtml(formatTime(report.created_at))}</td>
+            <td onclick="event.stopPropagation()">
+                <div class="library-action-row compact-actions">
+                    <a class="btn btn-sm btn-primary" href="/reports/${id}">详情页</a>
+                    <a class="btn btn-sm" href="/ai?report_id=${id}">AI台</a>
+                </div>
+            </td>
         </tr>`;
     }
 
@@ -420,12 +442,12 @@
         }
         return Array.from(groups.values()).map(group => {
             const groupToken = `${groupBy}:${group.key}`;
-            const collapsed = collapsedReportGroups.has(groupToken);
+            const collapsed = groupBy === 'date' ? !expandedReportGroups.has(groupToken) : collapsedReportGroups.has(groupToken);
             const selectedCount = group.reports.filter(report => selected.has(Number(report.id))).length;
             const latest = group.reports[0]?.created_at;
             const rows = collapsed ? '' : group.reports.map(renderReportRow).join('');
             return `<tr class="report-group-header" onclick="toggleReportGroup('${escapeAttr(groupToken)}')">
-                <td colspan="8">
+                <td colspan="9">
                     <button type="button" class="report-group-toggle" aria-label="展开或折叠">${collapsed ? '+' : '-'}</button>
                     <strong>${escapeHtml(group.label)}</strong>
                     <span>${group.reports.length} 份报告 · 已选 ${selectedCount} · 最近 ${escapeHtml(formatTime(latest))}</span>
@@ -435,6 +457,12 @@
     }
 
     function toggleReportGroup(groupToken) {
+        if (String(groupToken).startsWith('date:')) {
+            if (expandedReportGroups.has(groupToken)) expandedReportGroups.delete(groupToken);
+            else expandedReportGroups.add(groupToken);
+            renderReportRows();
+            return;
+        }
         if (collapsedReportGroups.has(groupToken)) collapsedReportGroups.delete(groupToken);
         else collapsedReportGroups.add(groupToken);
         renderReportRows();
@@ -462,6 +490,7 @@
                 <h4>风险复核</h4>
                 <div class="preview-block">${formatMarkdown(report.risk_debate || '暂无')}</div>
                 <div class="preview-actions">
+                    <a class="btn btn-sm btn-primary" href="/reports/${Number(id)}">打开完整详情页</a>
                     <a class="btn btn-sm" href="/ai?report_id=${Number(id)}">在 AI 分析台打开</a>
                     <a class="btn btn-sm" href="/api/ai/report/${Number(id)}/pdf">PDF</a>
                 </div>
@@ -744,19 +773,21 @@
 
     async function loadPositionPlans() {
         const tbody = document.getElementById('positionPlanRows');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">正在加载...</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="9" class="library-empty-state">正在加载...</td></tr>';
         try {
             const data = await requestJson('/api/position-plans?limit=100');
             const plans = data.plans || [];
             plansLoaded = true;
             if (!plans.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">暂无建仓计划</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="library-empty-state">暂无建仓计划</td></tr>';
                 return;
             }
             tbody.innerHTML = plans.map(plan => {
                 const modelConfig = plan.model_config_json || {};
                 const marketCaptured = plan.market_context_captured_at || plan.decision_market_snapshot_json?.captured_at || '';
-                return `<tr onclick="previewPositionPlan('${encodeURIComponent(plan.plan_id)}')">
+                const encodedPlanId = encodeURIComponent(plan.plan_id);
+                const canAdopt = plan.stage === 'final' && plan.adoption_status !== 'adopted';
+                return `<tr class="${selectedPositionPlanId === plan.plan_id ? 'selected' : ''}" data-plan-id="${escapeAttr(plan.plan_id)}" onclick="previewPositionPlan('${encodedPlanId}')">
                     <td><strong>${escapeHtml(plan.title || plan.plan_id)}</strong><span>${escapeHtml(plan.plan_id)}</span></td>
                     <td>${escapeHtml(stageLabel(plan.stage))}</td>
                     <td><span class="report-signal ${escapeHtml(adoptionClass(plan.adoption_status))}">${escapeHtml(adoptionLabel(plan.adoption_status))}</span></td>
@@ -765,15 +796,33 @@
                     <td>${escapeHtml(strategyLabel(plan.model_strategy))}<span>${escapeHtml(modelConfig.snapshot_model_tier || '')}</span></td>
                     <td>${escapeHtml(plan.batch_job_id || '--')}<span>${marketCaptured ? `行情 ${escapeHtml(formatTime(marketCaptured))}` : '未校准行情'}</span></td>
                     <td>${escapeHtml(formatTime(plan.created_at))}</td>
+                    <td onclick="event.stopPropagation()">
+                        <div class="library-action-row">
+                            <button class="btn btn-sm btn-primary" onclick="previewPositionPlan('${encodedPlanId}')">详情</button>
+                            <a class="btn btn-sm" href="/position-plans/${encodedPlanId}">详情页</a>
+                            <a class="btn btn-sm" href="/api/position-plans/${encodedPlanId}/markdown" target="_blank">Markdown</a>
+                            ${canAdopt ? `<button class="btn btn-sm" onclick="adoptPositionPlan('${encodedPlanId}')">采纳</button>` : ''}
+                            <button class="btn btn-sm" onclick="archivePositionPlan('${encodedPlanId}')">归档</button>
+                        </div>
+                    </td>
                 </tr>`;
             }).join('');
+            syncSelectedPositionPlanRow();
         } catch (err) {
-            if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`;
         }
+    }
+
+    function syncSelectedPositionPlanRow() {
+        document.querySelectorAll('#positionPlanRows tr').forEach(row => {
+            row.classList.toggle('selected', row.dataset.planId === selectedPositionPlanId);
+        });
     }
 
     async function previewPositionPlan(encodedPlanId) {
         const planId = decodeURIComponent(encodedPlanId);
+        selectedPositionPlanId = planId;
+        syncSelectedPositionPlanRow();
         const meta = document.getElementById('reportPreviewMeta');
         const body = document.getElementById('reportPreview');
         if (meta) meta.textContent = planId;
@@ -827,11 +876,13 @@
                 <h4>采纳快照</h4>
                 <div class="preview-block">${formatJsonBlock(plan.confirmed_snapshot_json)}</div>
                 <div class="preview-actions">
+                    <a class="btn btn-sm btn-primary" href="/position-plans/${encodeURIComponent(planId)}">打开完整详情页</a>
                     <a class="btn btn-sm" href="/api/position-plans/${encodeURIComponent(planId)}/markdown" target="_blank">Markdown</a>
                     ${plan.stage === 'final' && plan.adoption_status !== 'adopted' ? `<button class="btn btn-sm btn-primary" onclick="adoptPositionPlan('${encodeURIComponent(planId)}')">采纳为最终建仓计划</button>` : ''}
                     <button class="btn btn-sm" onclick="archivePositionPlan('${encodeURIComponent(planId)}')">归档</button>
                 </div>
             `;
+            body?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } catch (err) {
             if (body) body.innerHTML = `<div class="library-empty-state">加载失败：${escapeHtml(err.message)}</div>`;
         }
@@ -1281,6 +1332,7 @@
     window.togglePlanRoleModelFields = togglePlanRoleModelFields;
     window.exportReportLibrary = exportReportLibrary;
     window.resumeBatchJob = resumeBatchJob;
+    window.reclaimStaleWorkers = reclaimStaleWorkers;
     window.pauseBatchJob = pauseBatchJob;
     window.manualCompleteBatchJob = manualCompleteBatchJob;
     window.retryBatchJob = retryBatchJob;

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% set active = "reports" %}
+
+{% block title %}建仓计划详情 - 炒股小牛马{% endblock %}
+
+{% block content %}
+<div class="position-plan-page" data-plan-id="{{ plan_id }}">
+  <section class="position-plan-hero">
+    <div>
+      <a class="text-link" href="/reports">返回 AI 报告库</a>
+      <h1 id="planDetailTitle">建仓计划详情</h1>
+      <p id="planDetailSubtitle">正在读取完整建仓建议、角色讨论、来源报告和审计快照。</p>
+    </div>
+    <div class="position-plan-actions">
+      <a class="btn btn-sm" id="planMarkdownLink" href="/api/position-plans/{{ plan_id }}/markdown" target="_blank">Markdown</a>
+      <button class="btn btn-sm btn-primary" id="planAdoptBtn" type="button">采纳为最终计划</button>
+      <button class="btn btn-sm" id="planArchiveBtn" type="button">归档</button>
+    </div>
+  </section>
+
+  <section class="position-plan-meta-grid" id="planMetaGrid">
+    <div><span>阶段</span><strong>--</strong></div>
+    <div><span>采纳状态</span><strong>--</strong></div>
+    <div><span>候选 / 入选</span><strong>--</strong></div>
+    <div><span>现金快照</span><strong>--</strong></div>
+    <div><span>持仓市值</span><strong>--</strong></div>
+    <div><span>行情校准</span><strong>--</strong></div>
+  </section>
+
+  <nav class="position-plan-anchor-nav">
+    <a href="#planItems">建议表</a>
+    <a href="#planSummary">摘要</a>
+    <a href="#planRoles">角色讨论</a>
+    <a href="#planSources">来源</a>
+    <a href="#planAudit">审计快照</a>
+    <a href="#planMarkdown">原文</a>
+  </nav>
+
+  <section class="position-plan-section" id="planItems">
+    <div class="section-heading">
+      <h2>最终建议表</h2>
+      <span id="planItemsMeta">--</span>
+    </div>
+    <div class="position-plan-table-wrap">
+      <table class="report-library-table">
+        <thead>
+          <tr>
+            <th>股票</th>
+            <th>动作</th>
+            <th>建议金额</th>
+            <th>仓位</th>
+            <th>股数</th>
+            <th>置信度</th>
+            <th>风险</th>
+            <th>理由</th>
+            <th>来源</th>
+          </tr>
+        </thead>
+        <tbody id="planItemRows">
+          <tr><td colspan="9" class="library-empty-state">正在加载...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="planSummary">
+    <div class="section-heading">
+      <h2>决策摘要</h2>
+      <span id="planModelLabel">--</span>
+    </div>
+    <div class="position-plan-prose" id="planSummaryBody">正在加载...</div>
+    <div class="position-plan-split">
+      <article>
+        <h3>风险控制</h3>
+        <div id="planRiskControls" class="position-plan-prose compact">--</div>
+      </article>
+      <article>
+        <h3>模型配置</h3>
+        <pre id="planModelConfig" class="json-block">{}</pre>
+      </article>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="planRoles">
+    <div class="section-heading">
+      <h2>多角色讨论全文</h2>
+      <span id="planRoleMeta">--</span>
+    </div>
+    <div id="planRoleDiscussion" class="position-plan-role-list">
+      <div class="library-empty-state">正在加载角色讨论...</div>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="planSources">
+    <div class="section-heading">
+      <h2>来源报告与实时行情</h2>
+      <span id="planSourceMeta">--</span>
+    </div>
+    <div class="position-plan-split">
+      <article>
+        <h3>来源报告</h3>
+        <div id="planSourceReports" class="source-report-list">--</div>
+      </article>
+      <article>
+        <h3>决策实时行情快照</h3>
+        <div id="planMarketSnapshot" class="source-report-list">--</div>
+      </article>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="planAudit">
+    <div class="section-heading">
+      <h2>现金、持仓与采纳快照</h2>
+      <span>用于回溯当时决策约束</span>
+    </div>
+    <div class="position-plan-split three">
+      <article>
+        <h3>现金快照</h3>
+        <pre id="planCashSnapshot" class="json-block">{}</pre>
+      </article>
+      <article>
+        <h3>持仓快照</h3>
+        <pre id="planPortfolioSnapshot" class="json-block">{}</pre>
+      </article>
+      <article>
+        <h3>采纳快照</h3>
+        <pre id="planConfirmedSnapshot" class="json-block">{}</pre>
+      </article>
+    </div>
+  </section>
+
+  <section class="position-plan-section" id="planMarkdown">
+    <div class="section-heading">
+      <h2>Markdown 原文</h2>
+      <span>完整输出，适合审计和外部存档</span>
+    </div>
+    <div class="position-plan-prose raw-markdown" id="planMarkdownBody">正在加载...</div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/position-plan-detail.js?v=2.9.4-plan-page"></script>
+{% endblock %}

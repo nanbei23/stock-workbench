@@ -7253,6 +7253,15 @@ body.dense-watch-mode .portfolio-container {
   gap: 6px;
 }
 
+.report-library-table .compact-actions {
+  min-width: 128px;
+}
+
+.report-library-table .compact-actions .btn {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
 .report-tab-panel {
   display: none;
 }
@@ -7480,6 +7489,276 @@ body.dense-watch-mode .portfolio-container {
   font-size: 0.86rem;
 }
 
+.position-plan-page {
+  display: grid;
+  gap: 14px;
+  width: min(1760px, calc(100vw - 24px));
+  margin: 0 auto;
+  padding: 12px 0 28px;
+}
+
+.position-plan-hero,
+.position-plan-section,
+.position-plan-meta-grid,
+.position-plan-anchor-nav {
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.position-plan-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+}
+
+.position-plan-hero h1 {
+  margin: 6px 0 6px;
+  color: var(--text-primary);
+  font-size: 1.35rem;
+  line-height: 1.25;
+}
+
+.position-plan-hero p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.position-plan-actions,
+.position-plan-anchor-nav,
+.position-plan-section .section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.position-plan-actions {
+  justify-content: flex-end;
+}
+
+.position-plan-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.position-plan-meta-grid div {
+  display: grid;
+  gap: 5px;
+  min-height: 74px;
+  padding: 14px 16px;
+  border-right: 1px solid var(--border-light);
+}
+
+.position-plan-meta-grid div:last-child {
+  border-right: 0;
+}
+
+.position-plan-meta-grid span,
+.position-plan-section .section-heading span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.position-plan-meta-grid strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.position-plan-anchor-nav {
+  position: sticky;
+  top: 54px;
+  z-index: 5;
+  padding: 8px;
+}
+
+.position-plan-anchor-nav a,
+.text-link {
+  color: var(--color-accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.position-plan-anchor-nav a {
+  padding: 7px 10px;
+  border-radius: 6px;
+}
+
+.position-plan-anchor-nav a:hover {
+  background: var(--bg-hover);
+}
+
+.position-plan-section {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.position-plan-section .section-heading {
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.position-plan-section h2,
+.position-plan-section h3 {
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.position-plan-section h2 {
+  font-size: 1.05rem;
+}
+
+.position-plan-section h3 {
+  margin-bottom: 10px;
+  font-size: 0.95rem;
+}
+
+.position-plan-table-wrap {
+  overflow-x: auto;
+}
+
+.plan-item-reason {
+  display: block;
+  min-width: 220px;
+  max-width: 520px;
+  white-space: normal;
+}
+
+.position-plan-prose {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  line-height: 1.75;
+}
+
+.position-plan-prose.compact {
+  font-size: 0.86rem;
+}
+
+.position-plan-prose p,
+.position-plan-prose ul,
+.position-plan-prose ol,
+.position-plan-prose pre {
+  margin: 0 0 10px;
+}
+
+.position-plan-prose pre,
+.json-block {
+  overflow: auto;
+  max-height: 520px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.position-plan-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.position-plan-split.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.position-plan-split article,
+.position-plan-role-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.position-plan-role-list {
+  display: grid;
+  gap: 12px;
+}
+
+.position-plan-role-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.position-plan-role-card header strong {
+  color: var(--text-primary);
+}
+
+.position-plan-role-card header span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.report-detail-page .position-plan-role-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.report-detail-page .report-layer-card {
+  align-content: start;
+}
+
+.report-detail-page .position-plan-prose .structured-report {
+  margin-top: 0;
+}
+
+.source-report-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-report-chip,
+.source-report-row {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-hover);
+}
+
+.source-report-chip {
+  padding: 7px 10px;
+  color: var(--text-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.source-report-row {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+}
+
+.source-report-row strong {
+  color: var(--text-primary);
+}
+
+.source-report-row span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
 @media (max-width: 1180px) {
   .report-library {
     grid-template-columns: 240px minmax(420px, 1fr);
@@ -7488,6 +7767,16 @@ body.dense-watch-mode .portfolio-container {
   .report-library-preview {
     grid-column: 1 / -1;
     max-height: 42vh;
+  }
+
+  .position-plan-meta-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .position-plan-split,
+  .position-plan-split.three,
+  .report-detail-page .position-plan-role-list {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -7523,5 +7812,32 @@ body.dense-watch-mode .portfolio-container {
   .report-library-table th,
   .report-library-table td {
     padding: 9px 10px;
+  }
+
+  .position-plan-page {
+    width: calc(100vw - 20px);
+    padding-bottom: 80px;
+  }
+
+  .position-plan-hero {
+    flex-direction: column;
+    padding: 14px;
+  }
+
+  .position-plan-actions {
+    justify-content: flex-start;
+  }
+
+  .position-plan-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .position-plan-meta-grid div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .position-plan-anchor-nav {
+    position: static;
   }
 }

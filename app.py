@@ -67,6 +67,22 @@ async def page_ai(request: Request):
 async def page_reports(request: Request):
     return templates.TemplateResponse(request=request, name="reports.html")
 
+@app.get("/reports/{report_id}", response_class=HTMLResponse)
+async def page_report_detail(request: Request, report_id: int):
+    return templates.TemplateResponse(
+        request=request,
+        name="report_detail.html",
+        context={"report_id": report_id},
+    )
+
+@app.get("/position-plans/{plan_id}", response_class=HTMLResponse)
+async def page_position_plan_detail(request: Request, plan_id: str):
+    return templates.TemplateResponse(
+        request=request,
+        name="position_plan_detail.html",
+        context={"plan_id": plan_id},
+    )
+
 @app.get("/hotspots", response_class=HTMLResponse)
 async def page_hotspots(request: Request):
     return templates.TemplateResponse(request=request, name="hotspots.html")

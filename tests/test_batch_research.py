@@ -52,6 +52,63 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ranked[0].code, "000001")
         self.assertGreater(ranked[0].score, ranked[1].score)
 
+    def test_sina_report_list_payload_renders_financial_statement(self):
+        payload = {
+            "result": {
+                "data": {
+                    "report_date": [
+                        {"date_value": "20260331", "date_description": "2026一季报"},
+                    ],
+                    "report_list": {
+                        "20260331": {
+                            "rType": "合并期末",
+                            "rCurrency": "CNY",
+                            "data": [
+                                {"item_title": "货币资金", "item_value": "123456789.120000"},
+                                {"item_title": "流动资产合计", "item_value": "987654321.000000"},
+                            ],
+                        }
+                    },
+                }
+            }
+        }
+
+        rendered = batch_research._format_sina_financial_report(
+            "600699",
+            "资产负债表",
+            "quarterly",
+            payload,
+            source="sina direct HTTP",
+            retrieved_at="2026-06-03 18:00:00",
+        )
+
+        self.assertIn("# Balance Sheet for 600699", rendered)
+        self.assertIn("report_date,report_name,rType,rCurrency,item_title,item_value", rendered)
+        self.assertIn("20260331,2026一季报,合并期末,CNY,货币资金,123456789.120000", rendered)
+
+    def test_validate_snapshot_flags_semantic_financial_failures(self):
+        snapshot = {
+            "market": {"quote": {"ok": True, "payload": {"price": 10}}},
+            "social": {"news": {"ok": True, "payload": "ok"}},
+            "news": {"stock_news": {"ok": True, "payload": "ok"}},
+            "fundamentals": {
+                "fundamentals": {"ok": True, "payload": "估值数据"},
+                "balance_sheet": {"ok": True, "payload": "No balance sheet data found for A-stock '600699'"},
+                "cashflow": {"ok": True, "payload": "Error retrieving cash flow for 600699: timeout"},
+            },
+            "policy": {"global_news": {"ok": True, "payload": "ok"}},
+            "hot_money": {"news": {"ok": True, "payload": "ok"}},
+            "lockup": {"fundamentals": {"ok": True, "payload": "ok"}},
+        }
+
+        validation = batch_research.validate_snapshot(snapshot)
+
+        self.assertFalse(validation["ok"])
+        self.assertIn("fundamentals", validation["layer_errors"])
+        joined = "\n".join(validation["layer_errors"]["fundamentals"])
+        self.assertIn("balance_sheet", joined)
+        self.assertIn("cashflow", joined)
+
     def test_resolve_role_model_configs_uses_private_provider_key(self):
         provider_payload = [
             {
@@ -143,6 +200,32 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0][0], "000001")
         self.assertEqual(json.loads(rows[0][1])["market"]["quote"]["price"], 10.0)
         self.assertTrue(json.loads(rows[0][2])["ok"])
+
+    async def test_fetch_seven_layer_snapshot_uses_fixed_sina_financial_reports(self):
+        stock = batch_research.StockCandidate("600699", "均胜电子", "默认", 1)
+
+        async def fake_invoke_tool(_tool, payload):
+            if "curr_date" in payload or "start_date" in payload or "ticker" in payload:
+                return {"ok": True, "payload": "tool ok"}
+            return {"ok": True, "payload": "ok"}
+
+        async def fake_financial(code, report_type, **_kwargs):
+            return {"ok": True, "payload": f"{code} {report_type} fixed"}
+
+        with patch("data.helpers.tencent_quote_batch", new=AsyncMock(return_value={"600699": {"price": 26.93}})), patch(
+            "scripts.batch_research._invoke_tool",
+            new=AsyncMock(side_effect=fake_invoke_tool),
+        ), patch(
+            "scripts.batch_research._invoke_sina_financial_report",
+            new=AsyncMock(side_effect=fake_financial),
+        ) as financial:
+            snapshot = await batch_research.fetch_seven_layer_snapshot(stock, trade_date="2026-06-03")
+
+        self.assertEqual(financial.await_count, 2)
+        self.assertEqual(financial.await_args_list[0].args[:2], ("600699", "资产负债表"))
+        self.assertEqual(financial.await_args_list[1].args[:2], ("600699", "现金流量表"))
+        self.assertEqual(snapshot["fundamentals"]["balance_sheet"]["payload"], "600699 资产负债表 fixed")
+        self.assertEqual(snapshot["fundamentals"]["cashflow"]["payload"], "600699 现金流量表 fixed")
 
     async def test_snapshot_analysis_uses_saved_snapshot_without_tradingagents(self):
         snapshot = {

@@ -17,6 +17,20 @@ from config import DB_PATH
 
 logger = logging.getLogger(__name__)
 
+TRADINGAGENTS_OPENAI_COMPATIBLE_PROVIDER = "deepseek"
+TRADINGAGENTS_SUPPORTED_PROVIDERS = {
+    "anthropic",
+    "deepseek",
+    "glm",
+    "google",
+    "minimax",
+    "ollama",
+    "openai",
+    "openrouter",
+    "qwen",
+    "xai",
+}
+
 # ============================================================
 # Database helper (sync sqlite3 — same pattern as ai_api.py)
 # ============================================================
@@ -46,6 +60,15 @@ def get_llm_config() -> dict:
         db.close()
 
 
+def _tradingagents_provider(raw_provider: str, custom_endpoint: str) -> str:
+    provider = (raw_provider or "").strip().lower()
+    if provider in TRADINGAGENTS_SUPPORTED_PROVIDERS:
+        return provider
+    if custom_endpoint:
+        return TRADINGAGENTS_OPENAI_COMPATIBLE_PROVIDER
+    return "deepseek"
+
+
 def apply_llm_config_to_ta_config(config: dict) -> dict:
     """Populate a TradingAgents DEFAULT_CONFIG dict with settings from DB.
 
@@ -54,7 +77,10 @@ def apply_llm_config_to_ta_config(config: dict) -> dict:
     Supports model_mode: economy (all flash), balanced (flash+pro), flagship (all pro).
     """
     cfg = get_llm_config()
-    config["llm_provider"] = cfg.get("llm_provider", "deepseek")
+    endpoint = (cfg.get("custom_endpoint") or "").strip()
+    provider = _tradingagents_provider(cfg.get("llm_provider", "deepseek"), endpoint)
+    config["llm_provider"] = provider
+    config["backend_url"] = endpoint or None
     config["output_language"] = "Chinese"
     config["max_debate_rounds"] = int(cfg.get("debate_rounds", "1"))
     config["max_risk_discuss_rounds"] = int(cfg.get("risk_rounds", "1"))
@@ -89,11 +115,14 @@ def apply_llm_config_to_ta_config(config: dict) -> dict:
     import os
     _api_key = cfg.get("api_key", "")
     if _api_key:
-        _provider = config["llm_provider"].upper()
+        _provider = provider.upper()
         os.environ[f"{_provider}_API_KEY"] = _api_key
-    _endpoint = cfg.get("custom_endpoint", "")
-    if _endpoint:
-        os.environ[f"{config['llm_provider'].upper()}_API_BASE"] = _endpoint
+        if endpoint:
+            os.environ["DEEPSEEK_API_KEY"] = _api_key
+            os.environ["OPENAI_API_KEY"] = _api_key
+    if endpoint:
+        os.environ[f"{provider.upper()}_API_BASE"] = endpoint
+        os.environ["OPENAI_API_BASE"] = endpoint
 
     return config
 

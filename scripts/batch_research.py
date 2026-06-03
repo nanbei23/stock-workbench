@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
+import io
 import json
 import math
 import os
@@ -39,6 +41,20 @@ TERMINAL_STATUS = {"completed", "failed", "timeout", "cancelled"}
 SNAPSHOT_LAYERS = ("market", "social", "news", "fundamentals", "policy", "hot_money", "lockup")
 POSITIVE_SIGNALS = {"STRONG_BUY", "BUY", "OVERWEIGHT", "ACCUMULATE", "ADD"}
 WATCH_SIGNALS = {"HOLD", "WATCH", "NEUTRAL"}
+SINA_FINANCIAL_API = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
+SINA_REPORT_SOURCES = {
+    "资产负债表": ("fzb", "Balance Sheet"),
+    "现金流量表": ("llb", "Cash Flow"),
+    "利润表": ("lrb", "Income Statement"),
+}
+SEMANTIC_TOOL_FAILURE_PATTERNS = (
+    "no balance sheet data found",
+    "no cash flow data found",
+    "no cashflow data found",
+    "no income statement data found",
+    "error retrieving",
+    "no available vendor",
+)
 
 
 @dataclass(frozen=True)
@@ -197,6 +213,149 @@ def _clip_text(value: Any, limit: int = 20000) -> str:
     return text[:limit] + "\n...[truncated]"
 
 
+def _pure_stock_code(code: str) -> str:
+    match = re.search(r"(\d{6})", str(code or ""))
+    return match.group(1) if match else str(code or "").strip()
+
+
+def _sina_paper_code(code: str) -> str:
+    pure = _pure_stock_code(code)
+    if pure.startswith(("4", "8")):
+        return f"bj{pure}"
+    return f"{'sh' if pure.startswith('6') else 'sz'}{pure}"
+
+
+def _report_date_allowed(date_key: str, freq: str, curr_date: str | None) -> bool:
+    key = re.sub(r"\D", "", str(date_key or ""))
+    if curr_date:
+        cutoff = re.sub(r"\D", "", curr_date)
+        if cutoff and key and key > cutoff:
+            return False
+    if str(freq or "").lower() == "annual" and not key.endswith("1231"):
+        return False
+    return True
+
+
+def _csv_text(headers: list[str], rows: list[list[Any]]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def _format_sina_financial_report(
+    code: str,
+    report_type: str,
+    freq: str,
+    payload: dict[str, Any],
+    *,
+    curr_date: str | None = None,
+    source: str = "sina direct HTTP",
+    retrieved_at: str | None = None,
+) -> str:
+    source_key, english_title = SINA_REPORT_SOURCES.get(report_type, ("lrb", report_type))
+    data = (((payload or {}).get("result") or {}).get("data") or {})
+    report_list = data.get("report_list") or {}
+    report_dates = {
+        str(item.get("date_value")): item.get("date_description") or str(item.get("date_value"))
+        for item in data.get("report_date") or []
+        if isinstance(item, dict)
+    }
+    if not isinstance(report_list, dict) or not report_list:
+        return f"No {english_title.lower()} data found for A-stock '{_pure_stock_code(code)}'"
+
+    ordered_dates = [str(item.get("date_value")) for item in data.get("report_date") or [] if isinstance(item, dict)]
+    ordered_dates.extend([key for key in report_list if key not in ordered_dates])
+    rows: list[list[Any]] = []
+    for date_key in ordered_dates:
+        if not _report_date_allowed(date_key, freq, curr_date):
+            continue
+        report = report_list.get(date_key) or {}
+        items = report.get("data") or []
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("item_title") or item.get("item_name") or item.get("item_field") or ""
+            value = item.get("item_value")
+            if title == "" and value in ("", None):
+                continue
+            rows.append([
+                date_key,
+                report_dates.get(str(date_key), str(date_key)),
+                report.get("rType") or "",
+                report.get("rCurrency") or "",
+                title,
+                "" if value is None else value,
+                item.get("item_field") or "",
+                item.get("item_tongbi") if item.get("item_tongbi") is not None else "",
+            ])
+        if len({row[0] for row in rows}) >= 8:
+            break
+
+    if not rows:
+        return f"No {english_title.lower()} data found for A-stock '{_pure_stock_code(code)}'"
+
+    headers = ["report_date", "report_name", "rType", "rCurrency", "item_title", "item_value", "item_field", "item_yoy"]
+    header = f"# {english_title} for {_pure_stock_code(code)} (A-stock, {freq})\n"
+    header += f"# Data source: {source}\n"
+    header += f"# Data retrieved on: {retrieved_at or datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    return header + _csv_text(headers, rows)
+
+
+def _fetch_sina_financial_report(
+    code: str,
+    report_type: str,
+    *,
+    freq: str = "quarterly",
+    curr_date: str | None = None,
+) -> str:
+    source_key, english_title = SINA_REPORT_SOURCES.get(report_type, ("lrb", report_type))
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = client.get(
+                SINA_FINANCIAL_API,
+                params={
+                    "paperCode": _sina_paper_code(code),
+                    "source": source_key,
+                    "type": "0",
+                    "page": "1",
+                    "num": "20",
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        return _format_sina_financial_report(code, report_type, freq, payload, curr_date=curr_date)
+    except Exception as exc:
+        return f"Error retrieving {english_title.lower()} for {_pure_stock_code(code)}: {exc}"
+
+
+def _looks_like_semantic_tool_failure(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("ok") is False:
+            return True
+        return any(_looks_like_semantic_tool_failure(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_looks_like_semantic_tool_failure(item) for item in value)
+    text = str(value or "").strip().lower()
+    return any(pattern in text for pattern in SEMANTIC_TOOL_FAILURE_PATTERNS)
+
+
+def _semantic_tool_error(key: str, item: Any) -> str | None:
+    if isinstance(item, dict) and item.get("ok") is False:
+        return f"{key}: {item.get('error') or 'unknown error'}"
+    if isinstance(item, dict) and _looks_like_semantic_tool_failure(item.get("payload")):
+        payload = str(item.get("payload") or "").replace("\r", " ").splitlines()
+        message = payload[0] if payload else "semantic data failure"
+        return f"{key}: {message[:220]}"
+    if _looks_like_semantic_tool_failure(item):
+        message = str(item or "").replace("\r", " ").splitlines()[0]
+        return f"{key}: {message[:220]}"
+    return None
+
+
 def _chat_completions_url(base_url: str) -> str:
     base = (base_url or "").rstrip("/")
     if base.endswith("/chat/completions"):
@@ -255,12 +414,13 @@ def _latest_snapshot(db_path: Path, code: str) -> dict[str, Any] | None:
         ).fetchone()
     if not row:
         return None
+    snapshot = json.loads(row["snapshot_json"] or "{}")
     return {
         "id": row["id"],
         "code": row["code"],
         "name": row["name"],
-        "snapshot": json.loads(row["snapshot_json"] or "{}"),
-        "validation": json.loads(row["validation_json"] or "{}"),
+        "snapshot": snapshot,
+        "validation": validate_snapshot(snapshot),
         "summary": json.loads(row["summary_json"] or "{}"),
         "created_at": row["created_at"],
     }
@@ -1008,20 +1168,39 @@ def _save_snapshot_report(
 async def _invoke_tool(tool: Any, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         result = await asyncio.to_thread(tool.invoke, payload)
-        return {"ok": True, "payload": _clip_text(result)}
+        clipped = _clip_text(result)
+        if _looks_like_semantic_tool_failure(clipped):
+            return {"ok": False, "error": clipped.splitlines()[0][:220], "payload": clipped}
+        return {"ok": True, "payload": clipped}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+async def _invoke_sina_financial_report(
+    code: str,
+    report_type: str,
+    *,
+    freq: str = "quarterly",
+    curr_date: str | None = None,
+) -> dict[str, Any]:
+    result = await asyncio.to_thread(
+        _fetch_sina_financial_report,
+        code,
+        report_type,
+        freq=freq,
+        curr_date=curr_date,
+    )
+    clipped = _clip_text(result)
+    if _looks_like_semantic_tool_failure(clipped):
+        return {"ok": False, "error": clipped.splitlines()[0][:220], "payload": clipped}
+    return {"ok": True, "payload": clipped}
 
 
 async def fetch_seven_layer_snapshot(stock: StockCandidate, *, trade_date: str | None = None) -> dict[str, Any]:
     """Fetch the seven data layers used by the AI research pipeline."""
     from data.helpers import tencent_quote_batch
     from tradingagents.agents.utils.core_stock_tools import get_stock_data
-    from tradingagents.agents.utils.fundamental_data_tools import (
-        get_balance_sheet,
-        get_cashflow,
-        get_fundamentals,
-    )
+    from tradingagents.agents.utils.fundamental_data_tools import get_fundamentals
     from tradingagents.agents.utils.news_data_tools import (
         get_global_news,
         get_insider_transactions,
@@ -1047,8 +1226,8 @@ async def fetch_seven_layer_snapshot(stock: StockCandidate, *, trade_date: str |
         _invoke_tool(get_news, {"ticker": code, "start_date": start, "end_date": today}),
         _invoke_tool(get_global_news, {"curr_date": today}),
         _invoke_tool(get_fundamentals, {"ticker": code, "curr_date": today}),
-        _invoke_tool(get_balance_sheet, {"ticker": code}),
-        _invoke_tool(get_cashflow, {"ticker": code}),
+        _invoke_sina_financial_report(code, "资产负债表", curr_date=today),
+        _invoke_sina_financial_report(code, "现金流量表", curr_date=today),
         _invoke_tool(get_insider_transactions, {"ticker": code}),
     )
 
@@ -1078,8 +1257,9 @@ def validate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         errors: list[str] = []
         if isinstance(value, dict):
             for key, item in value.items():
-                if isinstance(item, dict) and item.get("ok") is False:
-                    errors.append(f"{key}: {item.get('error') or 'unknown error'}")
+                error = _semantic_tool_error(key, item)
+                if error:
+                    errors.append(error)
         if errors:
             layer_errors[layer] = errors
     return {
