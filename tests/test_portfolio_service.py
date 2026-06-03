@@ -184,6 +184,62 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("请选择", ctx.exception.detail)
 
+    async def test_add_watchlist_validates_quote_and_uses_vendor_name(self):
+        request = SimpleNamespace(
+            code="600519",
+            name="",
+            group_name="默认",
+            strategy_state="watch",
+            target_buy_price=None,
+            target_sell_price=None,
+            stop_loss_price=None,
+            notes="",
+        )
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={"600519": {"name": "贵州茅台", "price": 1500}})):
+            result = await portfolio_service.add_to_watchlist(request)
+
+        self.assertEqual(result["stock"]["code"], "600519")
+        self.assertEqual(result["stock"]["name"], "贵州茅台")
+
+    async def test_add_watchlist_rejects_unknown_quote_code(self):
+        request = SimpleNamespace(
+            code="603342",
+            name="错误股票",
+            group_name="默认",
+            strategy_state="watch",
+            target_buy_price=None,
+            target_sell_price=None,
+            stop_loss_price=None,
+            notes="",
+        )
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={})):
+            with self.assertRaises(Exception) as ctx:
+                await portfolio_service.add_to_watchlist(request)
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("未找到股票 603342 的实时行情", ctx.exception.detail)
+
+    async def test_add_watchlist_rejects_name_code_mismatch(self):
+        request = SimpleNamespace(
+            code="600519",
+            name="平安银行",
+            group_name="默认",
+            strategy_state="watch",
+            target_buy_price=None,
+            target_sell_price=None,
+            stop_loss_price=None,
+            notes="",
+        )
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={"600519": {"name": "贵州茅台", "price": 1500}})):
+            with self.assertRaises(Exception) as ctx:
+                await portfolio_service.add_to_watchlist(request)
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("股票名称与代码不匹配", ctx.exception.detail)
+
     async def test_portfolio_overview_defaults_cash_to_zero(self):
         result = await portfolio_service.get_portfolio_overview("default")
 
@@ -301,7 +357,13 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         无代码这一行
         """
 
-        result = await portfolio_service.import_watchlist_markdown(content)
+        quotes = {
+            "600519": {"name": "贵州茅台"},
+            "000001": {"name": "平安银行"},
+            "688981": {"name": "中芯国际"},
+        }
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value=quotes)):
+            result = await portfolio_service.import_watchlist_markdown(content)
 
         self.assertEqual(result["imported"], 3)
         self.assertEqual(result["duplicates"], 1)
@@ -322,7 +384,14 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         | 80 | 睿创微纳 | 688002 |
         """
 
-        result = await portfolio_service.import_watchlist_markdown(content)
+        quotes = {
+            "000021": {"name": "深科技"},
+            "000063": {"name": "中兴通讯"},
+            "159915": {"name": "创业板ETF"},
+            "688002": {"name": "睿创微纳"},
+        }
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value=quotes)):
+            result = await portfolio_service.import_watchlist_markdown(content)
 
         self.assertEqual(result["imported"], 4)
         self.assertEqual(result["invalid"], 0)
@@ -339,6 +408,27 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
                 ("688002", "睿创微纳"),
             ],
         )
+
+    async def test_import_watchlist_markdown_rejects_unknown_and_mismatched_stocks(self):
+        content = """
+        错误股票 603342
+        贵州茅台 600519
+        平安银行 000002
+        """
+        quotes = {"600519": {"name": "贵州茅台"}, "000002": {"name": "万科A"}}
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value=quotes)):
+            result = await portfolio_service.import_watchlist_markdown(content)
+
+        self.assertEqual(result["imported"], 1)
+        self.assertEqual(result["invalid"], 2)
+        self.assertTrue(any("未找到实时行情" in line for line in result["invalid_lines"]))
+        self.assertTrue(any("名称不匹配" in line for line in result["invalid_lines"]))
+
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute("SELECT code, name FROM watchlist ORDER BY sort_order").fetchall()
+
+        self.assertEqual(rows, [("600519", "贵州茅台")])
 
 
 class PortfolioApiTests(unittest.TestCase):
@@ -371,6 +461,19 @@ class PortfolioApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["imported"], 1)
         import_watchlist.assert_awaited_once_with("贵州茅台 600519", "默认")
+
+    def test_watchlist_add_route_preserves_validation_error_status(self):
+        with patch(
+            "services.portfolio_service.add_to_watchlist",
+            new=AsyncMock(side_effect=portfolio_service.HTTPException(status_code=400, detail="股票名称与代码不匹配")),
+        ):
+            resp = self.client.post(
+                "/api/watchlist",
+                json={"code": "600519", "name": "平安银行"},
+            )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["detail"], "股票名称与代码不匹配")
 
     def test_watchlist_update_route_accepts_group_name(self):
         with patch(

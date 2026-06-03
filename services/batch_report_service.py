@@ -2587,7 +2587,7 @@ async def _run_data_prefetch_item(item: dict[str, Any], payload: dict[str, Any])
     snapshot = await batch_research.fetch_seven_layer_snapshot(stock, trade_date=payload.get("trade_date"))
     saved = batch_research.save_data_snapshot(DB_PATH, stock, snapshot, run_id=payload.get("job_id") or "batch-ui")
     status = "completed" if saved.get("ok") else "failed"
-    error = "" if saved.get("ok") else json.dumps(saved.get("validation"), ensure_ascii=False)
+    error = "" if saved.get("ok") else batch_research.snapshot_validation_error_summary(saved.get("validation") or {})
     _update_item_id(item["id"], status=status, snapshot_id=saved.get("id"), completed_at=_now_expr(), error=error)
 
 
@@ -2617,7 +2617,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
     analysis_mode = payload.get("analysis_mode") or "snapshot-tradingagents"
     report_depth = payload.get("analysis_depth") or "standard"
     report_model_mode = payload.get("model_mode") or "balanced"
-    timeout_seconds = int(payload.get("timeout_seconds") or 1800)
+    timeout_seconds = int(payload.get("timeout_seconds") or 3600)
     started = datetime.now()
     if analysis_mode == "snapshot-tradingagents":
         result = await _run_snapshot_tradingagents_graph_with_steps(
@@ -2846,7 +2846,7 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
             report_ids=payload.get("report_ids") or [],
             top_n=int(payload.get("plan_top_n") or 10),
             config=config,
-            timeout_seconds=int(payload.get("timeout_seconds") or 1800),
+            timeout_seconds=int(payload.get("timeout_seconds") or 3600),
             context_strategy=payload.get("context_strategy") or "auto",
             model_strategy=payload.get("model_strategy") or "single",
             role_models=payload.get("role_models") or {},

@@ -67,12 +67,15 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("analysis_depth: batchOptions.depth", js)
         self.assertIn("model_mode: batchOptions.modelMode", js)
         self.assertIn("snapshot_model_tier: batchOptions.modelTier", js)
+        self.assertIn("forceReanalysis", js)
+        self.assertIn("batchOptions.forceReanalysis ? 0 : 30", js)
         self.assertIn("preflightBatchResearch(payload)", js)
         self.assertIn("预计总调用", js)
         self.assertNotIn("group: 'all',\n            top_n: 0", js)
         self.assertNotIn("snapshot_model_tier: 'deep'", js)
         self.assertIn('id="batchDepthSelect"', html)
         self.assertIn('id="batchModelModeSelect"', html)
+        self.assertIn('id="batchForceReanalysis"', html)
         self.assertIn("生成所选报告", html)
 
     def test_batch_worker_supports_model_provider_pool(self):
@@ -81,6 +84,19 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("--model-provider-ids", content)
         self.assertIn("--model-tier", content)
         self.assertIn("model_provider_ids=provider_ids", content)
+
+    def test_analysis_report_timeout_defaults_to_one_hour(self):
+        tasks_source = (ROOT / "tasks.py").read_text(encoding="utf-8")
+        api_source = (ROOT / "api" / "batch_report_api.py").read_text(encoding="utf-8")
+        service_source = (ROOT / "services" / "batch_report_service.py").read_text(encoding="utf-8")
+        script_source = (ROOT / "scripts" / "batch_research.py").read_text(encoding="utf-8")
+
+        self.assertIn("DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 3600", tasks_source)
+        self.assertIn('DEFAULT_ANALYSIS_TIMEOUT_LABEL = "1小时"', tasks_source)
+        self.assertIn("timeout_seconds: int = Field(default=3600", api_source)
+        self.assertIn('payload.get("timeout_seconds") or 3600', service_source)
+        self.assertIn('parser.add_argument("--timeout-seconds", type=int, default=3600)', script_source)
+        self.assertNotIn("分析超时（15分钟）", tasks_source)
 
     def test_worker_pool_has_config_script_and_settings_ui(self):
         script = WORKER_POOL_SCRIPT.read_text(encoding="utf-8")
@@ -175,6 +191,22 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("aiStockSearch", ai_html)
         self.assertIn("filterAIStocks", ai_js)
         self.assertIn(".stock-list-filter", css)
+
+    def test_watchlist_selection_only_shows_in_batch_mode(self):
+        stock_js = (ROOT / "static/js/stock.js").read_text(encoding="utf-8")
+        stock_html = (ROOT / "templates/index.html").read_text(encoding="utf-8")
+        css = STYLE_CSS.read_text(encoding="utf-8")
+
+        self.assertIn('id="watchlistBatchToggle"', stock_html)
+        self.assertIn("toggleWatchlistBatchMode()", stock_html)
+        self.assertIn('id="watchlistBatchActions"', stock_html)
+        self.assertIn('data-action="batch-delete"', stock_html)
+        self.assertIn("let watchlistBatchMode = false", stock_js)
+        self.assertIn("function toggleWatchlistBatchMode", stock_js)
+        self.assertIn("classList.toggle('batch-active', watchlistBatchMode)", stock_js)
+        self.assertIn("bar.style.display = watchlistBatchMode ? '' : 'none'", stock_js)
+        self.assertIn(".stock-select-check {\n  flex: 0 0 32px;\n  display: none;", css)
+        self.assertIn(".stock-list.batch-active .stock-select-check", css)
 
     def test_market_permission_filters_are_exposed_on_ai_reports_and_settings(self):
         ai_js = AI_JS.read_text(encoding="utf-8")

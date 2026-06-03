@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # ── Queue configuration ──────────────────────────────────────
 MAX_CONCURRENT = 2
 MAX_QUEUE = 5
+DEFAULT_ANALYSIS_TIMEOUT_SECONDS = 3600
+DEFAULT_ANALYSIS_TIMEOUT_LABEL = "1小时"
 _semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 _queue = deque()
 _tasks_status = {}  # task_id -> {"status": str, "cancel": asyncio.Event()}
@@ -125,7 +127,7 @@ async def mark_interrupted_tasks():
         logger.warning("mark interrupted analysis tasks failed: %s", e)
 
 
-async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = 900):
+async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = DEFAULT_ANALYSIS_TIMEOUT_SECONDS):
     """Run *coro_fn(task_id, *args)* under the global concurrency semaphore.
 
     Parameters
@@ -194,11 +196,11 @@ async def run_with_limits(task_id: str, coro_fn, *args, timeout: float = 900):
         _tasks_status[task_id]["status"] = "timeout"
         if task_id in _tasks:
             _tasks[task_id].status = "failed"
-            _tasks[task_id].error = "分析超时（15分钟）"
+            _tasks[task_id].error = f"分析超时（{DEFAULT_ANALYSIS_TIMEOUT_LABEL}）"
             _tasks[task_id].completed_at = datetime.now().isoformat()
             await persist_task(_tasks[task_id], "timeout")
         else:
-            await update_persisted_task_status(task_id, "timeout", "分析超时（15分钟）")
+            await update_persisted_task_status(task_id, "timeout", f"分析超时（{DEFAULT_ANALYSIS_TIMEOUT_LABEL}）")
         logger.error("分析超时: %s", task_id)
     except asyncio.CancelledError:
         _tasks_status[task_id]["status"] = "cancelled"

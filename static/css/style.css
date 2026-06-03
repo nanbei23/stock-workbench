@@ -261,12 +261,16 @@ a { color: var(--color-accent); text-decoration: none; }
 
 .stock-select-check {
   flex: 0 0 32px;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   border-right: 1px solid rgba(0,0,0,0.04);
   background: rgba(0,0,0,0.015);
   cursor: pointer;
+}
+
+.stock-list.batch-active .stock-select-check {
+  display: flex;
 }
 
 .stock-select-check input[type="checkbox"] {
@@ -495,6 +499,20 @@ a { color: var(--color-accent); text-decoration: none; }
 
 .watchlist-batch-bar .btn {
   flex: 0 0 auto;
+}
+
+.watchlist-batch-toggle {
+  font-size: 0.75rem !important;
+  padding: 2px 8px !important;
+}
+
+.watchlist-batch-toggle.active {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.watchlist-batch-actions {
+  display: none;
 }
 
 /* --- 确认弹窗 --- */
@@ -3396,7 +3414,7 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 
 .batch-research-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 10px;
   margin: 8px 0 12px;
 }
@@ -3415,6 +3433,28 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator:hover {
 
 .batch-research-control .control-select {
   width: 100%;
+}
+
+.batch-research-checkbox {
+  align-self: end;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card-soft);
+}
+
+.batch-research-checkbox input {
+  width: 16px;
+  height: 16px;
+}
+
+.batch-research-checkbox span {
+  color: var(--text-primary);
+  font-size: 0.82rem;
 }
 
 .update-time {

@@ -42,12 +42,19 @@ SNAPSHOT_LAYERS = ("market", "social", "news", "fundamentals", "policy", "hot_mo
 POSITIVE_SIGNALS = {"STRONG_BUY", "BUY", "OVERWEIGHT", "ACCUMULATE", "ADD"}
 WATCH_SIGNALS = {"HOLD", "WATCH", "NEUTRAL"}
 SINA_FINANCIAL_API = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
+EASTMONEY_DATACENTER_API = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 SINA_REPORT_SOURCES = {
     "资产负债表": ("fzb", "Balance Sheet"),
     "现金流量表": ("llb", "Cash Flow"),
     "利润表": ("lrb", "Income Statement"),
 }
+EASTMONEY_FINANCIAL_REPORTS = {
+    "资产负债表": ("RPT_DMSK_FN_BALANCE", "Balance Sheet"),
+    "现金流量表": ("RPT_DMSK_FN_CASHFLOW", "Cash Flow"),
+    "利润表": ("RPT_DMSK_FN_INCOME", "Income Statement"),
+}
 SEMANTIC_TOOL_FAILURE_PATTERNS = (
+    "no quote data found",
     "no balance sheet data found",
     "no cash flow data found",
     "no cashflow data found",
@@ -305,6 +312,101 @@ def _format_sina_financial_report(
     return header + _csv_text(headers, rows)
 
 
+def _format_eastmoney_financial_report(
+    code: str,
+    report_type: str,
+    rows_payload: list[dict[str, Any]],
+    *,
+    curr_date: str | None = None,
+    source: str = "eastmoney datacenter fallback",
+    retrieved_at: str | None = None,
+) -> str:
+    _report_name, english_title = EASTMONEY_FINANCIAL_REPORTS.get(report_type, ("", report_type))
+    rows = [row for row in rows_payload or [] if isinstance(row, dict)]
+    if curr_date:
+        cutoff = re.sub(r"\D", "", curr_date)
+        rows = [
+            row for row in rows
+            if not re.sub(r"\D", "", str(row.get("REPORT_DATE") or "")) or re.sub(r"\D", "", str(row.get("REPORT_DATE") or "")) <= cutoff
+        ]
+    rows.sort(key=lambda row: str(row.get("REPORT_DATE") or ""), reverse=True)
+    rows = rows[:8]
+    if not rows:
+        return f"No {english_title.lower()} data found for A-stock '{_pure_stock_code(code)}'"
+
+    metadata_keys = {
+        "SECUCODE",
+        "SECURITY_CODE",
+        "SECURITY_NAME_ABBR",
+        "ORG_CODE",
+        "INDUSTRY_CODE",
+        "INDUSTRY_NAME",
+        "MARKET",
+        "SECURITY_TYPE_CODE",
+        "TRADE_MARKET_CODE",
+        "DATE_TYPE_CODE",
+        "REPORT_TYPE_CODE",
+        "DATA_STATE",
+    }
+    csv_rows: list[list[Any]] = []
+    for row in rows:
+        report_date = row.get("REPORT_DATE") or ""
+        notice_date = row.get("NOTICE_DATE") or ""
+        for key, value in row.items():
+            if key in metadata_keys or key in {"REPORT_DATE", "NOTICE_DATE"}:
+                continue
+            if value in (None, ""):
+                continue
+            csv_rows.append([
+                report_date,
+                notice_date,
+                row.get("SECURITY_NAME_ABBR") or "",
+                key,
+                value,
+            ])
+    if not csv_rows:
+        return f"No {english_title.lower()} data found for A-stock '{_pure_stock_code(code)}'"
+
+    headers = ["report_date", "notice_date", "security_name", "item_field", "item_value"]
+    header = f"# {english_title} for {_pure_stock_code(code)} (A-stock)\n"
+    header += f"# Data source: {source}\n"
+    header += f"# Data retrieved on: {retrieved_at or datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    return header + _csv_text(headers, csv_rows)
+
+
+def _fetch_eastmoney_financial_report(
+    code: str,
+    report_type: str,
+    *,
+    curr_date: str | None = None,
+) -> str:
+    report_name, english_title = EASTMONEY_FINANCIAL_REPORTS.get(report_type, ("", report_type))
+    if not report_name:
+        return f"No {english_title.lower()} data found for A-stock '{_pure_stock_code(code)}'"
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = client.get(
+                EASTMONEY_DATACENTER_API,
+                params={
+                    "reportName": report_name,
+                    "columns": "ALL",
+                    "filter": f'(SECURITY_CODE="{_pure_stock_code(code)}")',
+                    "sortColumns": "REPORT_DATE",
+                    "sortTypes": "-1",
+                    "pageNumber": "1",
+                    "pageSize": "8",
+                    "source": "WEB",
+                    "client": "WEB",
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        rows = (((payload or {}).get("result") or {}).get("data") or []) if payload.get("success") else []
+        return _format_eastmoney_financial_report(code, report_type, rows, curr_date=curr_date)
+    except Exception as exc:
+        return f"Error retrieving {english_title.lower()} for {_pure_stock_code(code)} from Eastmoney: {exc}"
+
+
 def _fetch_sina_financial_report(
     code: str,
     report_type: str,
@@ -327,8 +429,17 @@ def _fetch_sina_financial_report(
             )
             resp.raise_for_status()
             payload = resp.json()
-        return _format_sina_financial_report(code, report_type, freq, payload, curr_date=curr_date)
+        rendered = _format_sina_financial_report(code, report_type, freq, payload, curr_date=curr_date)
+        if _looks_like_semantic_tool_failure(rendered):
+            fallback = _fetch_eastmoney_financial_report(code, report_type, curr_date=curr_date)
+            if not _looks_like_semantic_tool_failure(fallback):
+                return fallback
+            return rendered + "\n# Eastmoney fallback also returned no usable data."
+        return rendered
     except Exception as exc:
+        fallback = _fetch_eastmoney_financial_report(code, report_type, curr_date=curr_date)
+        if not _looks_like_semantic_tool_failure(fallback):
+            return fallback
         return f"Error retrieving {english_title.lower()} for {_pure_stock_code(code)}: {exc}"
 
 
@@ -1215,7 +1326,14 @@ async def fetch_seven_layer_snapshot(stock: StockCandidate, *, trade_date: str |
     async def quote_layer() -> dict[str, Any]:
         try:
             quotes = await tencent_quote_batch([code])
-            return {"ok": True, "payload": quotes.get(code, {})}
+            quote = quotes.get(code) or {}
+            if not quote:
+                return {
+                    "ok": False,
+                    "error": f"No quote data found for A-stock '{_pure_stock_code(code)}'; code may be invalid or unsupported by quote vendor",
+                    "payload": quote,
+                }
+            return {"ok": True, "payload": quote}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -1269,6 +1387,25 @@ def validate_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "layer_errors": layer_errors,
         "checked_layers": list(SNAPSHOT_LAYERS),
     }
+
+
+def snapshot_validation_error_summary(validation: dict[str, Any]) -> str:
+    if not validation or validation.get("ok"):
+        return ""
+    parts: list[str] = []
+    if validation.get("missing_layers"):
+        parts.append("缺失层：" + "、".join(validation.get("missing_layers") or []))
+    if validation.get("empty_layers"):
+        parts.append("空数据层：" + "、".join(validation.get("empty_layers") or []))
+    layer_errors = validation.get("layer_errors") or {}
+    if isinstance(layer_errors, dict):
+        for layer, errors in layer_errors.items():
+            if not errors:
+                continue
+            first = str(errors[0])[:180]
+            extra = f" 等{len(errors)}项" if len(errors) > 1 else ""
+            parts.append(f"{layer}: {first}{extra}")
+    return "；".join(parts) or json.dumps(validation, ensure_ascii=False)
 
 
 def _snapshot_summary(snapshot: dict[str, Any], validation: dict[str, Any]) -> dict[str, Any]:
@@ -2408,7 +2545,7 @@ async def build_multi_role_position_plan(
     report_ids: list[int] | None = None,
     top_n: int = 10,
     config: dict[str, str] | None = None,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 3600,
     context_strategy: str = "auto",
     model_strategy: str = "single",
     role_models: dict[str, Any] | None = None,
@@ -2583,7 +2720,7 @@ async def run_batch_research(
     risk_rounds: int | None = 1,
     trade_date: str | None = None,
     poll_interval: float = 5.0,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 3600,
     snapshot_concurrency: int = 3,
     analysis_mode: str = "snapshot",
     analysis_concurrency: int = 1,
@@ -2759,7 +2896,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trade-date", default=None)
     parser.add_argument("--skip-recent-days", type=int, default=7)
     parser.add_argument("--poll-interval", type=float, default=5.0)
-    parser.add_argument("--timeout-seconds", type=int, default=1800)
+    parser.add_argument("--timeout-seconds", type=int, default=3600)
     parser.add_argument("--snapshot-concurrency", type=int, default=3, help="七层数据快照并发数")
     parser.add_argument(
         "--analysis-mode",

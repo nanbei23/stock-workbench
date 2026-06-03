@@ -28,7 +28,7 @@ class BatchResearchCreatePayload(BaseModel):
     snapshot_model_tier: str = "deep"
     debate_rounds: int = Field(default=1, ge=1, le=5)
     risk_rounds: int = Field(default=1, ge=1, le=5)
-    timeout_seconds: int = Field(default=1800, ge=60, le=28800)
+    timeout_seconds: int = Field(default=3600, ge=60, le=28800)
     role_retry_attempts: int = Field(default=3, ge=1, le=8)
     role_retry_backoff_seconds: float = Field(default=2.0, ge=0, le=120)
     max_consecutive_failures: int = Field(default=5, ge=0, le=50)

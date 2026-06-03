@@ -110,6 +110,44 @@ class AiAnalysisServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertEqual(tasks._tasks, {})
 
+    async def test_run_with_limits_defaults_to_one_hour_timeout(self):
+        captured = {}
+
+        async def fake_wait_for(coro, timeout):
+            captured["timeout"] = timeout
+            return await coro
+
+        async def work(_task_id):
+            return None
+
+        with patch("tasks.asyncio.wait_for", new=fake_wait_for):
+            await tasks.run_with_limits("task-timeout-default", work)
+
+        self.assertEqual(captured["timeout"], 3600)
+        self.assertEqual(tasks._tasks_status["task-timeout-default"]["status"], "completed")
+
+    async def test_run_with_limits_timeout_message_uses_one_hour(self):
+        task = AnalysisTask(
+            task_id="task-timeout-message",
+            code="000001",
+            name="平安银行",
+            status="pending",
+        )
+        tasks._tasks[task.task_id] = task
+
+        async def fake_wait_for(coro, timeout):
+            coro.close()
+            raise asyncio.TimeoutError()
+
+        async def work(_task_id):
+            return None
+
+        with patch("tasks.asyncio.wait_for", new=fake_wait_for):
+            await tasks.run_with_limits(task.task_id, work)
+
+        self.assertEqual(tasks._tasks_status[task.task_id]["status"], "timeout")
+        self.assertEqual(tasks._tasks[task.task_id].error, "分析超时（1小时）")
+
 
 class AiAnalysisApiTests(unittest.TestCase):
     def setUp(self):

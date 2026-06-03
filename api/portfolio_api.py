@@ -107,6 +107,8 @@ async def add_to_watchlist(req: WatchlistAddRequest):
     """添加自选股"""
     try:
         return await portfolio_service.add_to_watchlist(req)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("add_to_watchlist(%s) error: %s", req.code, e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -117,6 +119,8 @@ async def import_watchlist_markdown(req: WatchlistImportMdRequest):
     """从 Markdown 文本批量导入自选股。"""
     try:
         return await portfolio_service.import_watchlist_markdown(req.content, req.group_name)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("import_watchlist_markdown error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

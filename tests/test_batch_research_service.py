@@ -92,6 +92,35 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["000002"], "completed")
         fetch.assert_awaited_once()
 
+    async def test_data_prefetch_job_reports_snapshot_validation_summary(self):
+        invalid_snapshot = {
+            "market": {
+                "quote": {
+                    "ok": False,
+                    "error": "No quote data found for A-stock '603342'; code may be invalid",
+                    "payload": {},
+                }
+            },
+            "social": {"items": ["ok"]},
+            "news": {"items": ["ok"]},
+            "fundamentals": {"items": ["ok"]},
+            "policy": {"items": ["ok"]},
+            "hot_money": {"items": ["ok"]},
+            "lockup": {"items": ["ok"]},
+        }
+        with patch("services.batch_report_service.batch_research.fetch_seven_layer_snapshot", new=AsyncMock(return_value=invalid_snapshot)):
+            created = await batch_report_service.create_research_job(
+                job_type="data_prefetch",
+                codes=["000002"],
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        item = job["items"][0]
+        self.assertEqual(item["status"], "failed")
+        self.assertIn("market: quote: No quote data found", item["error"])
+
     async def test_batch_research_rejects_implicit_all_watchlist_without_selection(self):
         with self.assertRaises(Exception) as ctx:
             await batch_report_service.create_research_job(

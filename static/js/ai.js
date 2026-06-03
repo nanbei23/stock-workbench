@@ -472,12 +472,14 @@ function getActiveDepthConfig() {
 function getBatchResearchOptions() {
     const depth = document.getElementById('batchDepthSelect')?.value || 'standard';
     const modelMode = document.getElementById('batchModelModeSelect')?.value || 'balanced';
+    const forceReanalysis = !!document.getElementById('batchForceReanalysis')?.checked;
     const modelTier = modelMode === 'economy' ? 'quick' : (depth === 'quick' ? 'quick' : 'deep');
     const depthLabel = { quick: '快速', standard: '标准', deep: '深度' };
     const modelModeLabel = { economy: '经济', balanced: '均衡', flagship: '旗舰' };
     return {
         depth,
         modelMode,
+        forceReanalysis,
         modelTier,
         depthLabel: depthLabel[depth] || depth,
         modelModeLabel: modelModeLabel[modelMode] || modelMode
@@ -1437,7 +1439,7 @@ async function createBatchResearchJob(type) {
             job_type: type,
             codes,
             allow_all: false,
-            skip_recent_days: type === 'data_prefetch' ? 0 : 30,
+            skip_recent_days: type === 'data_prefetch' || batchOptions.forceReanalysis ? 0 : 30,
             snapshot_concurrency: 3,
             analysis_mode: type === 'report_generation' ? 'snapshot-tradingagents' : 'snapshot',
             analysis_concurrency: 1,
@@ -1450,7 +1452,7 @@ async function createBatchResearchJob(type) {
         const preflight = await aiTaskClient().preflightBatchResearch(payload);
         const labels = {
             data_prefetch: `为已选 ${codes.length} 只可交易股票创建七层数据预取任务？`,
-            report_generation: `为已选 ${codes.length} 只可交易股票创建${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}快照报告生成任务？最近已有报告会自动跳过。`,
+            report_generation: `为已选 ${codes.length} 只可交易股票创建${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}快照报告生成任务？${batchOptions.forceReanalysis ? '将强制重新分析，最近已有报告也会重跑。' : '最近30天已有报告会自动跳过。'}`,
             position_plan: `基于已选 ${codes.length} 只可交易股票的已有完整报告生成${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}组合级多角色建仓建议？`
         };
         const estimate = [

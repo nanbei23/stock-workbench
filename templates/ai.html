@@ -243,6 +243,10 @@
                         <option value="flagship">旗舰</option>
                     </select>
                 </label>
+                <label class="batch-research-control batch-research-checkbox">
+                    <input type="checkbox" id="batchForceReanalysis">
+                    <span>强制重新分析</span>
+                </label>
             </div>
             <div id="batchResearchPanel" class="report-quality-panel">
                 <div class="empty-row">暂无批量任务</div>
@@ -331,5 +335,5 @@
 
 {% block scripts %}
 <script src="/static/js/ai-task-client.js?v=2.9.2"></script>
-<script src="/static/js/ai.js?v=2.9.2-market-permissions"></script>
+<script src="/static/js/ai.js?v=2.9.6-release"></script>
 {% endblock %}

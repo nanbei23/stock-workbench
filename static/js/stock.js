@@ -12,6 +12,7 @@ let watchlistStocksCache = [];
 let watchlistSignalsCache = {};
 let watchlistFilterText = '';
 let watchlistMarketFilter = 'tradable';
+let watchlistBatchMode = false;
 const watchlistLastReportSignals = new Set();
 const selectedWatchlistCodes = new Set();
 const WATCH_POOL_GROUP = '观察池';
@@ -158,6 +159,7 @@ async function loadWatchlist() {
 
     if (stocks.length === 0) {
       listEl.innerHTML = panelState('暂无自选股', '选');
+      renderWatchlistBatchModeState();
       updateWatchlistBatchBar();
       return;
     }
@@ -212,6 +214,7 @@ function renderWatchlist() {
   const filtered = visibleWatchlistStocks();
   if (!filtered.length) {
     listEl.innerHTML = panelState(query || watchlistLastReportSignals.size || watchlistMarketFilter !== 'all' ? '没有匹配的自选股' : '暂无自选股', '选');
+    renderWatchlistBatchModeState();
     updateWatchlistBatchBar();
     return;
   }
@@ -220,6 +223,7 @@ function renderWatchlist() {
   listEl.innerHTML = renderWatchlistSections(coreStocks, poolStocks, watchlistSignalsCache);
   initDragDrop();
   syncWatchlistSelectionInputs();
+  renderWatchlistBatchModeState();
   updateWatchlistBatchBar();
 }
 
@@ -351,7 +355,28 @@ function syncWatchlistSelectionInputs() {
   });
 }
 
+function renderWatchlistBatchModeState() {
+  const panel = document.querySelector('.stock-list');
+  const toggle = document.getElementById('watchlistBatchToggle');
+  const actions = document.getElementById('watchlistBatchActions');
+  panel?.classList.toggle('batch-active', watchlistBatchMode);
+  toggle?.classList.toggle('active', watchlistBatchMode);
+  if (toggle) toggle.textContent = watchlistBatchMode ? '退出批量' : '批量';
+  if (actions) actions.style.display = watchlistBatchMode ? '' : 'none';
+}
+
+function toggleWatchlistBatchMode(force) {
+  watchlistBatchMode = typeof force === 'boolean' ? force : !watchlistBatchMode;
+  if (!watchlistBatchMode) {
+    selectedWatchlistCodes.clear();
+    syncWatchlistSelectionInputs();
+  }
+  renderWatchlistBatchModeState();
+  updateWatchlistBatchBar();
+}
+
 function setWatchlistSelection(code, checked) {
+  if (!watchlistBatchMode) return;
   const clean = String(code || '').trim();
   if (!clean) return;
   if (checked) selectedWatchlistCodes.add(clean);
@@ -369,7 +394,9 @@ function updateWatchlistBatchBar() {
   if (!bar || !countEl) return;
   const count = selectedWatchlistCodes.size;
   countEl.textContent = `已选 ${count} 只`;
-  bar.style.display = count > 0 ? '' : 'none';
+  bar.style.display = watchlistBatchMode ? '' : 'none';
+  const deleteBtn = bar.querySelector('[data-action="batch-delete"]');
+  if (deleteBtn) deleteBtn.disabled = count <= 0;
 }
 
 function clearWatchlistSelection() {
@@ -379,6 +406,7 @@ function clearWatchlistSelection() {
 }
 
 function selectVisibleWatchlistStocks() {
+  if (!watchlistBatchMode) toggleWatchlistBatchMode(true);
   visibleWatchlistStocks().forEach(stock => selectedWatchlistCodes.add(String(stock.code)));
   syncWatchlistSelectionInputs();
   updateWatchlistBatchBar();
@@ -402,6 +430,7 @@ async function batchDeleteWatchlistStocks() {
     }
     clearWatchlistSelection();
     await loadWatchlist();
+    toggleWatchlistBatchMode(false);
     showToast('已批量删除自选股', 'success');
   } catch (e) {
     console.error('batchDeleteWatchlistStocks error:', e);
@@ -795,13 +824,14 @@ async function addStock() {
   }
 
   try {
-    await API.post('/api/watchlist', { code, name, group_name: '默认' });
+    const result = await API.post('/api/watchlist', { code, name, group_name: '默认' });
+    const stock = result?.stock || {};
     input.value = '';
     if (nameInput) nameInput.value = '';
     toggleSearch();
     await loadWatchlist();
     selectStock(code);
-    showToast('自选股已添加', 'success');
+    showToast(`自选股已添加：${stock.name || name || code} ${stock.code || code}`, 'success');
   } catch (e) {
     console.error('addStock error:', e);
     showToast('添加失败: ' + e.message, 'error');

@@ -86,6 +86,33 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("report_date,report_name,rType,rCurrency,item_title,item_value", rendered)
         self.assertIn("20260331,2026一季报,合并期末,CNY,货币资金,123456789.120000", rendered)
 
+    def test_eastmoney_financial_payload_renders_fallback_statement(self):
+        rows = [
+            {
+                "SECUCODE": "600699.SH",
+                "SECURITY_CODE": "600699",
+                "SECURITY_NAME_ABBR": "均胜电子",
+                "REPORT_DATE": "2026-03-31 00:00:00",
+                "NOTICE_DATE": "2026-04-28 00:00:00",
+                "MONETARYFUNDS": 9002435463.1,
+                "TOTAL_ASSETS": 69154537276.32,
+                "TOTAL_LIABILITIES": 45127676766.85,
+            }
+        ]
+
+        rendered = batch_research._format_eastmoney_financial_report(
+            "600699",
+            "资产负债表",
+            rows,
+            curr_date="2026-06-03",
+            retrieved_at="2026-06-03 18:10:00",
+        )
+
+        self.assertIn("# Balance Sheet for 600699", rendered)
+        self.assertIn("# Data source: eastmoney datacenter fallback", rendered)
+        self.assertIn("report_date,notice_date,security_name,item_field,item_value", rendered)
+        self.assertIn("2026-03-31 00:00:00,2026-04-28 00:00:00,均胜电子,MONETARYFUNDS,9002435463.1", rendered)
+
     def test_validate_snapshot_flags_semantic_financial_failures(self):
         snapshot = {
             "market": {"quote": {"ok": True, "payload": {"price": 10}}},
@@ -226,6 +253,30 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(financial.await_args_list[1].args[:2], ("600699", "现金流量表"))
         self.assertEqual(snapshot["fundamentals"]["balance_sheet"]["payload"], "600699 资产负债表 fixed")
         self.assertEqual(snapshot["fundamentals"]["cashflow"]["payload"], "600699 现金流量表 fixed")
+
+    async def test_fetch_seven_layer_snapshot_flags_missing_quote_as_market_error(self):
+        stock = batch_research.StockCandidate("603342", "无效代码", "默认", 1)
+
+        async def fake_invoke_tool(_tool, payload):
+            return {"ok": True, "payload": "tool ok"}
+
+        async def fake_financial(code, report_type, **_kwargs):
+            return {"ok": True, "payload": f"{code} {report_type} fixed"}
+
+        with patch("data.helpers.tencent_quote_batch", new=AsyncMock(return_value={})), patch(
+            "scripts.batch_research._invoke_tool",
+            new=AsyncMock(side_effect=fake_invoke_tool),
+        ), patch(
+            "scripts.batch_research._invoke_sina_financial_report",
+            new=AsyncMock(side_effect=fake_financial),
+        ):
+            snapshot = await batch_research.fetch_seven_layer_snapshot(stock, trade_date="2026-06-03")
+
+        validation = batch_research.validate_snapshot(snapshot)
+
+        self.assertFalse(validation["ok"])
+        self.assertIn("market", validation["layer_errors"])
+        self.assertIn("No quote data found", validation["layer_errors"]["market"][0])
 
     async def test_snapshot_analysis_uses_saved_snapshot_without_tradingagents(self):
         snapshot = {

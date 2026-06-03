@@ -2,6 +2,7 @@
 
 import re
 import uuid
+import unicodedata
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -102,12 +103,46 @@ async def get_watchlist():
 
 
 async def add_to_watchlist(req):
+    clean_code = _clean_watchlist_code(req.code)
+    if not clean_code:
+        raise HTTPException(status_code=400, detail="请输入 6 位股票代码")
+    quote_map = await get_batch_quotes([clean_code])
+    quote = quote_map.get(clean_code) or {}
+    if not quote:
+        raise HTTPException(status_code=400, detail=f"未找到股票 {clean_code} 的实时行情，请检查股票代码是否正确")
+    input_name = _clean_watchlist_name(getattr(req, "name", "") or "")
+    quote_name = _clean_watchlist_name(quote.get("name") or "")
+    if input_name and quote_name and _normalize_stock_name(input_name) != _normalize_stock_name(quote_name):
+        raise HTTPException(status_code=400, detail=f"股票名称与代码不匹配：{clean_code} 对应 {quote_name}，不是 {input_name}")
+
+    req = SimpleNamespace(
+        code=clean_code,
+        name=quote_name or input_name or clean_code,
+        group_name=getattr(req, "group_name", None) or "默认",
+        strategy_state=getattr(req, "strategy_state", None) or "watch",
+        target_buy_price=getattr(req, "target_buy_price", None),
+        target_sell_price=getattr(req, "target_sell_price", None),
+        stop_loss_price=getattr(req, "stop_loss_price", None),
+        notes=getattr(req, "notes", "") or "",
+    )
+
     async def _add(db):
         sort_order = await repo.next_watchlist_sort_order(db)
         return await repo.insert_watchlist_stock(db, req, sort_order)
 
     stock = await _with_db(_add)
     return {"status": "ok", "stock": stock}
+
+
+def _clean_watchlist_code(value) -> str:
+    code = re.sub(r"\D", "", str(value or "").strip())
+    return code if re.fullmatch(r"\d{6}", code) else ""
+
+
+def _normalize_stock_name(value: str) -> str:
+    text = unicodedata.normalize("NFKC", value or "")
+    text = re.sub(r"\s+", "", text)
+    return text.upper()
 
 
 def _is_markdown_table_separator(cells):
@@ -192,7 +227,11 @@ def parse_watchlist_markdown(content: str):
 
 async def import_watchlist_markdown(content: str, group_name: str = "默认"):
     parsed = parse_watchlist_markdown(content)
-    items = parsed["items"]
+    items = [
+        {"code": _clean_watchlist_code(item["code"]), "name": _clean_watchlist_name(item.get("name") or "")}
+        for item in parsed["items"]
+    ]
+    items = [item for item in items if item["code"]]
     if not items:
         return {
             "status": "ok",
@@ -203,18 +242,30 @@ async def import_watchlist_markdown(content: str, group_name: str = "默认"):
             "invalid_lines": parsed["invalid_lines"],
         }
 
+    quotes = await get_batch_quotes([item["code"] for item in items])
+
     async def _import(db):
         existing = await repo.fetch_watchlist_codes(db, [item["code"] for item in items])
         sort_order = await repo.next_watchlist_sort_order(db)
         imported = []
         duplicate_count = parsed["duplicates"]
+        invalid_lines = list(parsed["invalid_lines"])
         for item in items:
             if item["code"] in existing:
                 duplicate_count += 1
                 continue
+            quote = quotes.get(item["code"]) or {}
+            quote_name = _clean_watchlist_name(quote.get("name") or "")
+            input_name = _clean_watchlist_name(item.get("name") or "")
+            if not quote:
+                invalid_lines.append(f"{input_name or item['code']} {item['code']}：未找到实时行情")
+                continue
+            if input_name and quote_name and _normalize_stock_name(input_name) != _normalize_stock_name(quote_name):
+                invalid_lines.append(f"{input_name} {item['code']}：名称不匹配，行情名称为 {quote_name}")
+                continue
             req = SimpleNamespace(
                 code=item["code"],
-                name=item["name"],
+                name=quote_name or input_name or item["code"],
                 group_name=group_name or "默认",
                 strategy_state="watch",
                 target_buy_price=None,
@@ -226,16 +277,16 @@ async def import_watchlist_markdown(content: str, group_name: str = "默认"):
             imported.append(stock)
             existing.add(item["code"])
             sort_order += 1
-        return imported, duplicate_count
+        return imported, duplicate_count, invalid_lines
 
-    imported, duplicate_count = await _with_db(_import)
+    imported, duplicate_count, invalid_lines = await _with_db(_import)
     return {
         "status": "ok",
         "imported": len(imported),
         "duplicates": duplicate_count,
-        "invalid": len(parsed["invalid_lines"]),
+        "invalid": len(invalid_lines),
         "items": imported,
-        "invalid_lines": parsed["invalid_lines"],
+        "invalid_lines": invalid_lines,
     }
 
 

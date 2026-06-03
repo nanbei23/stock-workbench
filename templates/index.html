@@ -91,6 +91,7 @@
   <div class="stock-list-header">
     <h2>自选股</h2>
     <div class="stock-list-actions">
+      <button id="watchlistBatchToggle" class="btn btn-sm btn-ghost watchlist-batch-toggle" onclick="toggleWatchlistBatchMode()">批量</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleSearch()">+ 添加</button>
     </div>
   </div>
@@ -130,7 +131,7 @@
       <button type="button" class="signal-filter-chip" data-signal="STRONG_SELL" onclick="toggleWatchlistLastSignalFilter('STRONG_SELL')">强烈卖出</button>
       <button type="button" class="signal-filter-chip" data-signal="NO_REPORT" onclick="toggleWatchlistLastSignalFilter('NO_REPORT')">无报告</button>
     </div>
-    <div class="ai-batch-select-row">
+    <div id="watchlistBatchActions" class="ai-batch-select-row watchlist-batch-actions">
       <button class="btn btn-sm" onclick="selectVisibleWatchlistStocks()">全选当前</button>
       <button class="btn btn-sm" onclick="clearWatchlistSelection()">清空勾选</button>
     </div>
@@ -155,8 +156,8 @@
 
   <div id="watchlistBatchBar" class="ai-batch-bar watchlist-batch-bar" style="display:none">
     <span id="watchlistBatchCount">已选 0 只</span>
-    <button class="btn btn-sm btn-danger" onclick="batchDeleteWatchlistStocks()">批量删除</button>
-    <button class="btn btn-sm" onclick="clearWatchlistSelection()">取消</button>
+    <button class="btn btn-sm btn-danger" data-action="batch-delete" onclick="batchDeleteWatchlistStocks()">批量删除</button>
+    <button class="btn btn-sm" onclick="toggleWatchlistBatchMode(false)">取消</button>
   </div>
 </div>
 
@@ -469,7 +470,7 @@
 {% block scripts %}
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/static/js/chart.js"></script>
-<script src="/static/js/stock.js?v=2.9.4-watchlist-batch"></script>
+<script src="/static/js/stock.js?v=2.9.6-watchlist-batch"></script>
 <script src="/static/js/strategy.js"></script>
 <script>
 function switchDetail(name) {

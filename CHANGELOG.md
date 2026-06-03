@@ -4,6 +4,34 @@
 
 No unreleased changes.
 
+## 2.9.6 - 2026-06-03
+
+### Added
+
+- Added a "强制重新分析" option to AI batch report generation so selected stocks can rerun even when recent reports already exist.
+- Added Eastmoney financial-statement fallback for seven-layer balance-sheet, cash-flow, and income-statement fetching when Sina returns no usable financial payload.
+- Added backend validation for watchlist creation and Markdown import so stock codes must resolve to live quote data before being written.
+
+### Changed
+
+- Changed watchlist creation to use the quote vendor's official stock name when the user leaves the name blank.
+- Changed Markdown watchlist import to reject unknown codes and name/code mismatches as invalid rows instead of writing them to the database.
+- Changed batch snapshot failure messages to show concise layer-level validation summaries instead of raw validation JSON.
+- Updated release metadata, package metadata, frontend cache versions, and README version to `2.9.6`.
+
+### Fixed
+
+- Fixed single-stock and batch report analysis default timeout from 15/30 minutes to 1 hour for long-running TradingAgents reports.
+- Fixed cases where a syntactically valid but nonexistent stock code could enter the watchlist and later fail during seven-layer analysis.
+- Fixed name/code mismatch cases such as entering a valid code with another stock's name.
+- Fixed invalid-code seven-layer failures so missing quote data is reported at the market layer instead of being misdiagnosed only as missing financial statements.
+- Fixed the watchlist left panel so selection checkboxes and batch actions only appear after entering batch mode, preserving vertical-screen information density.
+
+### Deployment
+
+- No database migration is required from `2.9.5`.
+- Existing bad watchlist rows are not deleted automatically; remove incorrect codes such as `603342` from the watchlist on the deployment database.
+
 ## 2.9.5 - 2026-06-03
 
 ### Added

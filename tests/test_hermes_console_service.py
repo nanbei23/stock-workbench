@@ -2,7 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -25,8 +25,17 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             db.executescript(database.SCHEMA)
             db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
             db.commit()
+        self.quote_patcher = patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={
+                "000001": {"name": "平安银行", "price": 10.5},
+                "600519": {"name": "贵州茅台", "price": 1500.0},
+            }),
+        )
+        self.quote_patcher.start()
 
     def tearDown(self):
+        self.quote_patcher.stop()
         database.DB_PATH = self.original_db_path
         settings_repository.DB_PATH = self.original_settings_path
         hermes_console_service._DRAFTS.clear()
