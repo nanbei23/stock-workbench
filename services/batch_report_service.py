@@ -3260,7 +3260,10 @@ async def run_research_job(
 
             await asyncio.gather(*(run_one(item) for item in runnable_items))
         elif job_type == "report_generation":
-            recent_codes = batch_research.recent_report_codes(DB_PATH, int(payload.get("skip_recent_days") or 30))
+            skip_recent_days = payload.get("skip_recent_days")
+            if skip_recent_days is None:
+                skip_recent_days = 30
+            recent_codes = batch_research.recent_report_codes(DB_PATH, int(skip_recent_days))
             config = _primary_model_config(payload, model_tier=payload.get("_worker_model_tier") or payload.get("snapshot_model_tier") or "deep")
             _lock_job_snapshots(job_id, items)
             job, items, payload = _load_job_for_run(job_id)

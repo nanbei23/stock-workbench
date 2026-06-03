@@ -4,6 +4,25 @@
 
 No unreleased changes.
 
+## 2.9.7 - 2026-06-03
+
+### Added
+
+- Added `scripts/diagnose_kline_blank.py`, a read-only deployment diagnostic for K-line blank-chart issues that compares direct backend data with the running `/api/kline/{code}` API and writes JSON/Markdown evidence.
+
+### Changed
+
+- Updated release metadata, package metadata, frontend cache versions, and README version to `2.9.7`.
+
+### Fixed
+
+- Fixed the AI analysis right-side auxiliary panel so cards keep content height instead of being compressed and visually stacked on narrow/portrait layouts.
+- Fixed forced batch reanalysis so `skip_recent_days=0` is preserved by the backend and recent reports are not skipped accidentally.
+
+### Deployment
+
+- No database migration is required from `2.9.6`.
+
 ## 2.9.6 - 2026-06-03
 
 ### Added

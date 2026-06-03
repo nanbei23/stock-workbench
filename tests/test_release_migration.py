@@ -208,6 +208,12 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn(".stock-select-check {\n  flex: 0 0 32px;\n  display: none;", css)
         self.assertIn(".stock-list.batch-active .stock-select-check", css)
 
+    def test_ai_right_sections_use_content_height_not_equal_flex_stack(self):
+        css = STYLE_CSS.read_text(encoding="utf-8")
+
+        self.assertIn(".ai-right-section {\n  flex: 0 0 auto;\n  min-height: auto;", css)
+        self.assertNotIn(".ai-right-section {\n  flex: 1;\n  min-height: 0;", css)
+
     def test_market_permission_filters_are_exposed_on_ai_reports_and_settings(self):
         ai_js = AI_JS.read_text(encoding="utf-8")
         ai_html = AI_TEMPLATE.read_text(encoding="utf-8")

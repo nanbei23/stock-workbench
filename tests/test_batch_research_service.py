@@ -202,6 +202,40 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(statuses["600519"], "skipped")
         call_llm.assert_awaited_once()
 
+    async def test_report_generation_skip_recent_zero_forces_reanalysis(self):
+        self._insert_snapshot("000001", "平安银行")
+        self._insert_snapshot("600519", "贵州茅台")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                "INSERT INTO analysis_reports (code, task_id, signal, confidence, risk_score, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                ("600519", "old-report", "BUY", 0.7, 30),
+            )
+            db.commit()
+
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.8,
+            "risk_score": 28,
+            "final_decision": "评级：BUY",
+            "trader_plan": "分批建仓",
+        }
+        with patch("services.batch_report_service.batch_research._call_snapshot_llm", new=AsyncMock(return_value=llm_result)) as call_llm:
+            created = await batch_report_service.create_research_job(
+                job_type="report_generation",
+                codes=["000001", "600519"],
+                skip_recent_days=0,
+                analysis_mode="snapshot",
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        statuses = {item["code"]: item["status"] for item in job["items"]}
+        self.assertEqual(job["completed_count"], 2)
+        self.assertEqual(job["skipped_count"], 0)
+        self.assertEqual(statuses["600519"], "completed")
+        self.assertEqual(call_llm.await_count, 2)
+
     async def test_report_generation_default_uses_snapshot_tradingagents(self):
         self._insert_snapshot("000001", "平安银行")
         role_outputs = [f"角色输出{i}" for i in range(15)] + [
