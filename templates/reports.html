@@ -158,6 +158,9 @@
             </table>
         </div>
         <div class="report-table-wrap report-tab-panel" id="tab-jobs">
+            <div class="library-action-row batch-job-toolbar">
+                <button class="btn btn-sm" type="button" onclick="refreshBatchJobs()">刷新任务</button>
+            </div>
             <div class="snapshot-quality-summary worker-runtime-summary" id="workerRuntimeSummary">
                 <div><span>Worker 在线</span><strong>--</strong></div>
                 <div><span>陈旧 Worker</span><strong>--</strong></div>
@@ -281,5 +284,5 @@
 
 {% block scripts %}
 <script src="/static/js/ai-task-client.js?v=2.9.2"></script>
-<script src="/static/js/reports.js?v=2.9.5-release"></script>
+<script src="/static/js/reports.js?v=2.9.16-report-export"></script>
 {% endblock %}

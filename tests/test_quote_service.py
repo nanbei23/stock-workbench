@@ -55,6 +55,39 @@ class QuoteServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.status_code, 404)
 
+    async def test_get_kline_data_falls_back_and_reports_quality(self):
+        fallback_rows = [
+            {"date": f"2026-06-{day:02d}", "open": 10, "high": 11, "low": 9.8, "close": 10.5, "volume": 100 + day, "amount": 1000 + day}
+            for day in range(1, 26)
+        ]
+        with patch("services.quote_service.get_kline", return_value=[]), patch(
+            "services.quote_service.get_tencent_history_kline",
+            return_value=fallback_rows,
+        ), patch(
+            "services.quote_service.get_kline_with_ma",
+            new=AsyncMock(return_value={"kline": []}),
+        ):
+            result = await quote_service.get_kline_data("000001", "day", 120)
+
+        self.assertEqual(result["source"], "tencent_history")
+        self.assertEqual(result["fallback_source"], "tencent_history")
+        self.assertEqual(result["count"], 25)
+        self.assertEqual(result["quality"]["score"], 100)
+        self.assertEqual(result["quality"]["issues"], [])
+        self.assertIn("mootdx", result["quality"]["source_attempts"][0]["source"])
+        self.assertEqual(result["quality"]["source_attempts"][1]["source"], "tencent_history")
+
+    async def test_get_kline_data_reports_invalid_primary_rows(self):
+        rows = [
+            {"date": "2026-06-01", "open": 10, "high": 9, "low": 9.8, "close": 10.5, "volume": 100, "amount": 1000},
+        ]
+        with patch("services.quote_service.get_kline", return_value=rows):
+            result = await quote_service.get_kline_data("000001", "day", 120)
+
+        self.assertEqual(result["source"], "mootdx")
+        self.assertLess(result["quality"]["score"], 100)
+        self.assertTrue(any("invalid_ohlc" in issue for issue in result["quality"]["issues"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,8 @@ INTRADAY_PERIODS = {"m1", "m5", "15", "30", "60"}
 
 # 腾讯分时API
 TENCENT_MINUTE_URL = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
+TENCENT_FQKLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+BAIDU_STOCK_URL = "https://finance.pae.baidu.com/vapi/v1/getquotation"
 
 _mootdx_client = None
 _mootdx_tried = False
@@ -155,6 +157,45 @@ def _aggregate_minutes(records: list[dict], interval: int) -> list[dict]:
         })
         i += interval
     return result
+
+
+def get_tencent_history_kline(code: str, period: str = "day", count: int = 120) -> list[dict]:
+    """腾讯历史 K 线 fallback，支持 day/week/month。"""
+    code = _pure_code(code)
+    period_key = {"day": "day", "d": "day", "week": "week", "w": "week", "month": "month", "mon": "month"}.get(period, "day")
+    full_code = _tencent_prefix(code)
+    try:
+        resp = requests.get(
+            TENCENT_FQKLINE_URL,
+            params={"param": f"{full_code},{period_key},,,{count},qfq"},
+            headers={"User-Agent": UA},
+            timeout=10,
+            proxies={"http": "", "https": ""},
+        )
+        data = resp.json()
+        stock_data = data.get("data", {}).get(full_code, {})
+        rows = stock_data.get(f"qfq{period_key}") or stock_data.get(period_key) or []
+        records = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 6:
+                continue
+            try:
+                date, open_price, close, high, low, volume = row[:6]
+                records.append({
+                    "date": str(date),
+                    "open": float(open_price),
+                    "high": float(high),
+                    "low": float(low),
+                    "close": float(close),
+                    "volume": float(volume),
+                    "amount": 0,
+                })
+            except (TypeError, ValueError):
+                continue
+        return records[-count:] if count and records else records
+    except Exception as e:
+        logger.warning("get_tencent_history_kline(%s, %s) error: %s", code, period, e)
+        return []
 
 
 def get_kline(code: str, period: str = "day", count: int = 120) -> list[dict]:

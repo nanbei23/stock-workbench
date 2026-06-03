@@ -47,10 +47,15 @@
 
   function parseJsonish(value) {
     if (!value || typeof value !== 'string') return value;
-    const raw = value.trim();
+    let raw = value.trim();
     if (!raw) return '';
+    raw = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
     try {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'string' && parsed.trim() !== raw && /^[\[{]/.test(parsed.trim())) {
+        return parseJsonish(parsed);
+      }
+      return parsed;
     } catch (_err) {
       try {
         return JSON.parse(raw.replace(/\\n/g, '\n'));
@@ -62,6 +67,7 @@
 
   function humanizeKey(key) {
     const label = {
+      signal: '信号',
       trader_plan: '交易计划',
       bull_case: '多头观点',
       bear_case: '空头观点',
@@ -106,6 +112,39 @@
     const raw = String(parsed).replace(/\\n/g, '\n');
     if (window.marked?.parse && /[\n#>*`-]|\*\*/.test(raw)) return window.marked.parse(raw);
     return `<span>${escapeHtml(raw)}</span>`;
+  }
+
+  function renderFinalDecision(report) {
+    const source = report.final_decision || report.result?.final_decision || report.result?.reasoning || report.result || '';
+    const parsed = typeof source === 'string' ? parseJsonish(source) : source;
+    const result = report.result && typeof report.result === 'object' ? report.result : {};
+    const signal = parsed?.signal || report.signal || result.signal || '';
+    const confidence = parsed?.confidence ?? report.confidence ?? result.confidence;
+    const riskScore = parsed?.risk_score ?? report.risk_score ?? result.risk_score;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const finalText = parsed.final_decision || parsed.reasoning || parsed.summary || parsed.reason || '';
+      const planText = parsed.trader_plan || parsed.trade_plan || parsed.plan || '';
+      const rest = { ...parsed };
+      ['signal', 'confidence', 'risk_score', 'final_decision', 'reasoning', 'summary', 'reason', 'trader_plan', 'trade_plan', 'plan'].forEach(key => delete rest[key]);
+      return `
+        <div class="decision-summary-grid">
+          <div><span>信号</span><strong>${escapeHtml(SIG_LABEL[signal] || signal || '--')}</strong></div>
+          <div><span>置信度</span><strong>${escapeHtml(formatPct(confidence))}</strong></div>
+          <div><span>风险评分</span><strong>${escapeHtml(formatScore(riskScore))}</strong></div>
+        </div>
+        ${finalText ? `<h3>裁决结论</h3><div>${markdown(finalText)}</div>` : ''}
+        ${planText ? `<h3>交易计划</h3><div>${markdown(planText)}</div>` : ''}
+        ${Object.keys(rest).length ? `<h3>结构化字段</h3>${structuredValue(rest)}` : ''}
+      `;
+    }
+    return `
+      <div class="decision-summary-grid">
+        <div><span>信号</span><strong>${escapeHtml(SIG_LABEL[signal] || signal || '--')}</strong></div>
+        <div><span>置信度</span><strong>${escapeHtml(formatPct(confidence))}</strong></div>
+        <div><span>风险评分</span><strong>${escapeHtml(formatScore(riskScore))}</strong></div>
+      </div>
+      ${markdown(source || '暂无最终决策')}
+    `;
   }
 
   function setText(id, value) {
@@ -223,7 +262,7 @@
       const bystanderBtn = document.getElementById('reportBystanderBtn');
       if (bystanderBtn) bystanderBtn.onclick = () => runReportAction(id, `/api/ai/reports/${Number(id)}/bystander-verify`, '旁观者核对');
       renderMeta(report);
-      setHtml('reportDecisionBody', markdown(report.final_decision || report.result?.reasoning || report.result || '暂无最终决策'));
+      setHtml('reportDecisionBody', renderFinalDecision(report));
       setHtml('reportTradePlanBody', markdown(report.trader_plan || '暂无交易计划'));
       setHtml('reportInvestmentDebateBody', markdown(report.investment_debate || '暂无多空辩论'));
       setHtml('reportRiskBody', markdown(report.risk_debate || '暂无风险复核'));

@@ -1,0 +1,385 @@
+/*
+ * 蓝紫流光主题
+ * 参考：深色移动金融/能源 App 的玻璃卡片、蓝紫渐变、高光按钮。
+ */
+
+body[data-theme="aurora-flow"] {
+  --bg: #070A18;
+  --bg-card: rgba(13, 18, 42, .86);
+  --bg-hover: rgba(42, 67, 145, .28);
+  --bg-sidebar: rgba(5, 8, 22, .94);
+  --surface: rgba(15, 21, 48, .78);
+  --surface-strong: rgba(20, 29, 68, .9);
+  --surface-soft: rgba(27, 40, 92, .54);
+  --text-primary: #F7FAFF;
+  --text-secondary: #B8C6E8;
+  --text-muted: #7382AD;
+  --color-up: #FF5F7A;
+  --color-down: #34D399;
+  --color-accent: #3C7DFF;
+  --color-accent-2: #19D5FF;
+  --color-warn: #FFB44C;
+  --color-primary: #3C7DFF;
+  --gradient-warm: linear-gradient(135deg, rgba(79, 70, 229, .18), rgba(236, 72, 153, .12));
+  --gradient-cool: linear-gradient(135deg, rgba(25, 213, 255, .2), rgba(76, 29, 149, .22));
+  --shadow-card: 0 22px 60px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .08);
+  --shadow-hover: 0 28px 76px rgba(29, 78, 216, .24), inset 0 1px 0 rgba(255, 255, 255, .12);
+  --border-light: rgba(153, 190, 255, .16);
+  --chart-bg: #0A1024;
+  --chart-grid: rgba(148, 163, 184, .12);
+  --chart-text: #94A3C7;
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Menlo", monospace;
+  background:
+    linear-gradient(140deg, #070A18 0%, #0B1539 46%, #110A22 100%),
+    #070A18;
+  color: var(--text-primary);
+}
+
+body[data-theme="aurora-flow"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(120deg, rgba(29, 78, 216, .18), transparent 34%),
+    linear-gradient(300deg, rgba(168, 85, 247, .14), transparent 38%),
+    linear-gradient(180deg, rgba(14, 165, 233, .09), rgba(6, 8, 20, 0) 48%);
+}
+
+body[data-theme="aurora-flow"] .banner {
+  background: rgba(5, 8, 22, .84);
+  border-bottom: 1px solid rgba(153, 190, 255, .14);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .34);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+}
+
+body[data-theme="aurora-flow"] .main-content {
+  background: transparent;
+}
+
+body[data-theme="aurora-flow"] .logo,
+body[data-theme="aurora-flow"] .sc-name,
+body[data-theme="aurora-flow"] .card-title,
+body[data-theme="aurora-flow"] .section-header h3 {
+  color: var(--text-primary);
+}
+
+body[data-theme="aurora-flow"] .logo-mark,
+body[data-theme="aurora-flow"] .ui-glyph,
+body[data-theme="aurora-flow"] .tab-icon {
+  color: #DDEBFF;
+  background: linear-gradient(145deg, rgba(25, 213, 255, .24), rgba(79, 70, 229, .3));
+  border-color: rgba(125, 211, 252, .24);
+  box-shadow: 0 10px 28px rgba(37, 99, 235, .22), inset 0 1px 0 rgba(255, 255, 255, .18);
+}
+
+body[data-theme="aurora-flow"] .tab-btn,
+body[data-theme="aurora-flow"] .mobile-tab-item,
+body[data-theme="aurora-flow"] .theme-switcher,
+body[data-theme="aurora-flow"] #accountSwitcher,
+body[data-theme="aurora-flow"] .notify-badge {
+  color: var(--text-secondary);
+  background: rgba(15, 23, 52, .68) !important;
+  border-color: rgba(153, 190, 255, .14) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+
+body[data-theme="aurora-flow"] .tab-btn:hover,
+body[data-theme="aurora-flow"] .theme-switcher:hover,
+body[data-theme="aurora-flow"] .mobile-tab-item:hover {
+  color: #FFFFFF;
+  background: rgba(37, 99, 235, .24) !important;
+  border-color: rgba(96, 165, 250, .34) !important;
+}
+
+body[data-theme="aurora-flow"] .tab-btn.active,
+body[data-theme="aurora-flow"] .mobile-tab-item.active,
+body[data-theme="aurora-flow"] .detail-tab.active,
+body[data-theme="aurora-flow"] .chart-tab.active,
+body[data-theme="aurora-flow"] .news-tab.active,
+body[data-theme="aurora-flow"] .risk-tab.active {
+  color: #FFFFFF;
+  background: linear-gradient(135deg, #1D6BFF 0%, #6938EF 55%, #19D5FF 100%);
+  border-color: rgba(125, 211, 252, .45);
+  box-shadow: 0 14px 34px rgba(37, 99, 235, .32), inset 0 1px 0 rgba(255, 255, 255, .22);
+}
+
+body[data-theme="aurora-flow"] .stock-list,
+body[data-theme="aurora-flow"] .card,
+body[data-theme="aurora-flow"] .panel,
+body[data-theme="aurora-flow"] .portfolio-card,
+body[data-theme="aurora-flow"] .settings-card,
+body[data-theme="aurora-flow"] .ops-panel,
+body[data-theme="aurora-flow"] .ops-kpi,
+body[data-theme="aurora-flow"] .ops-score-main,
+body[data-theme="aurora-flow"] .hotspot-panel,
+body[data-theme="aurora-flow"] .lifecycle-panel,
+body[data-theme="aurora-flow"] .regime-card,
+body[data-theme="aurora-flow"] .pulse-card,
+body[data-theme="aurora-flow"] .ai-section,
+body[data-theme="aurora-flow"] .ai-left,
+body[data-theme="aurora-flow"] .ai-right,
+body[data-theme="aurora-flow"] .queue-panel,
+body[data-theme="aurora-flow"] .reports-shell,
+body[data-theme="aurora-flow"] .reports-sidebar,
+body[data-theme="aurora-flow"] .reports-main,
+body[data-theme="aurora-flow"] .hermes-shell,
+body[data-theme="aurora-flow"] .global-hermes-panel,
+body[data-theme="aurora-flow"] .modal-box {
+  background:
+    linear-gradient(150deg, rgba(255, 255, 255, .08), rgba(255, 255, 255, .025)),
+    var(--surface);
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+body[data-theme="aurora-flow"] .stock-card,
+body[data-theme="aurora-flow"] .watch-pool-card,
+body[data-theme="aurora-flow"] .report-item,
+body[data-theme="aurora-flow"] .news-item,
+body[data-theme="aurora-flow"] .research-item,
+body[data-theme="aurora-flow"] .announce-item,
+body[data-theme="aurora-flow"] .order-card,
+body[data-theme="aurora-flow"] .layer-card,
+body[data-theme="aurora-flow"] .phase-item,
+body[data-theme="aurora-flow"] .hotspot-item,
+body[data-theme="aurora-flow"] .stock-chip,
+body[data-theme="aurora-flow"] .lifecycle-item,
+body[data-theme="aurora-flow"] .progress-row,
+body[data-theme="aurora-flow"] .worker-row,
+body[data-theme="aurora-flow"] .batch-task-row,
+body[data-theme="aurora-flow"] .structured-report,
+body[data-theme="aurora-flow"] .global-hermes-message {
+  background:
+    linear-gradient(145deg, rgba(59, 130, 246, .11), rgba(76, 29, 149, .1)),
+    rgba(9, 14, 33, .78);
+  border-color: rgba(153, 190, 255, .14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+
+body[data-theme="aurora-flow"] .stock-card:hover,
+body[data-theme="aurora-flow"] .stock-card.active,
+body[data-theme="aurora-flow"] .report-item:hover,
+body[data-theme="aurora-flow"] .hotspot-item:hover,
+body[data-theme="aurora-flow"] .hotspot-item.active {
+  border-color: rgba(25, 213, 255, .42);
+  box-shadow: var(--shadow-hover);
+}
+
+body[data-theme="aurora-flow"] .stock-card.active {
+  background:
+    linear-gradient(135deg, rgba(29, 107, 255, .18), rgba(105, 56, 239, .14)),
+    rgba(9, 14, 33, .86);
+}
+
+body[data-theme="aurora-flow"] .sc-code,
+body[data-theme="aurora-flow"] .report-code,
+body[data-theme="aurora-flow"] .update-time,
+body[data-theme="aurora-flow"] .info-value {
+  color: #8FCBFF;
+}
+
+body[data-theme="aurora-flow"] .sc-data-lbl,
+body[data-theme="aurora-flow"] .info-label,
+body[data-theme="aurora-flow"] .report-time,
+body[data-theme="aurora-flow"] .report-item-meta,
+body[data-theme="aurora-flow"] .empty-state,
+body[data-theme="aurora-flow"] .form-help {
+  color: var(--text-muted);
+}
+
+body[data-theme="aurora-flow"] input,
+body[data-theme="aurora-flow"] select,
+body[data-theme="aurora-flow"] textarea,
+body[data-theme="aurora-flow"] .form-control,
+body[data-theme="aurora-flow"] .form-select,
+body[data-theme="aurora-flow"] .form-input-sm,
+body[data-theme="aurora-flow"] .form-group input,
+body[data-theme="aurora-flow"] .form-group select {
+  background: rgba(4, 8, 22, .72);
+  border-color: rgba(153, 190, 255, .15);
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+
+body[data-theme="aurora-flow"] input::placeholder,
+body[data-theme="aurora-flow"] textarea::placeholder {
+  color: rgba(184, 198, 232, .52);
+}
+
+body[data-theme="aurora-flow"] input:focus,
+body[data-theme="aurora-flow"] select:focus,
+body[data-theme="aurora-flow"] textarea:focus,
+body[data-theme="aurora-flow"] .form-control:focus,
+body[data-theme="aurora-flow"] .form-select:focus,
+body[data-theme="aurora-flow"] .form-input-sm:focus {
+  border-color: rgba(25, 213, 255, .58);
+  box-shadow: 0 0 0 3px rgba(25, 213, 255, .12), inset 0 1px 0 rgba(255, 255, 255, .08);
+  outline: none;
+}
+
+body[data-theme="aurora-flow"] .btn-primary,
+body[data-theme="aurora-flow"] button.btn-primary,
+body[data-theme="aurora-flow"] .btn-save,
+body[data-theme="aurora-flow"] .btn-refresh-now {
+  color: #FFFFFF;
+  background: linear-gradient(135deg, #1D6BFF 0%, #6938EF 56%, #19D5FF 100%);
+  border-color: rgba(125, 211, 252, .42);
+  box-shadow: 0 14px 34px rgba(37, 99, 235, .34), inset 0 1px 0 rgba(255, 255, 255, .2);
+}
+
+body[data-theme="aurora-flow"] .btn-primary:hover,
+body[data-theme="aurora-flow"] button.btn-primary:hover,
+body[data-theme="aurora-flow"] .btn-save:hover,
+body[data-theme="aurora-flow"] .btn-refresh-now:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+body[data-theme="aurora-flow"] .btn-ghost,
+body[data-theme="aurora-flow"] .btn-secondary,
+body[data-theme="aurora-flow"] .btn-cancel,
+body[data-theme="aurora-flow"] button.btn-ghost {
+  color: var(--text-secondary);
+  background: rgba(15, 23, 52, .72);
+  border-color: rgba(153, 190, 255, .15);
+}
+
+body[data-theme="aurora-flow"] .btn-ghost:hover,
+body[data-theme="aurora-flow"] .btn-secondary:hover,
+body[data-theme="aurora-flow"] .btn-cancel:hover {
+  color: #FFFFFF;
+  border-color: rgba(96, 165, 250, .36);
+  background: rgba(37, 99, 235, .22);
+}
+
+body[data-theme="aurora-flow"] .data-table th,
+body[data-theme="aurora-flow"] .suggestions-table th,
+body[data-theme="aurora-flow"] .worker-table th {
+  color: #8EA4D4;
+  background: rgba(8, 13, 31, .52);
+  border-bottom-color: rgba(153, 190, 255, .13);
+}
+
+body[data-theme="aurora-flow"] .data-table td,
+body[data-theme="aurora-flow"] .suggestions-table td,
+body[data-theme="aurora-flow"] .worker-table td {
+  border-bottom-color: rgba(153, 190, 255, .09);
+}
+
+body[data-theme="aurora-flow"] .data-table tr:hover td,
+body[data-theme="aurora-flow"] .suggestions-table tr:hover td {
+  background: rgba(37, 99, 235, .12);
+}
+
+body[data-theme="aurora-flow"] .detail-tabs,
+body[data-theme="aurora-flow"] .mobile-tab-bar,
+body[data-theme="aurora-flow"] .report-index-bar,
+body[data-theme="aurora-flow"] .index-bar,
+body[data-theme="aurora-flow"] .indices-bar {
+  background: rgba(5, 8, 22, .72);
+  border-color: rgba(153, 190, 255, .12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+body[data-theme="aurora-flow"] .detail-tab,
+body[data-theme="aurora-flow"] .chart-tab,
+body[data-theme="aurora-flow"] .news-tab,
+body[data-theme="aurora-flow"] .risk-tab,
+body[data-theme="aurora-flow"] .filter-chip,
+body[data-theme="aurora-flow"] .market-filter-chip,
+body[data-theme="aurora-flow"] .last-signal-filter-chip {
+  color: var(--text-secondary);
+  background: rgba(15, 23, 52, .62);
+  border-color: rgba(153, 190, 255, .13);
+}
+
+body[data-theme="aurora-flow"] .badge-up,
+body[data-theme="aurora-flow"] .signal-buy,
+body[data-theme="aurora-flow"] .report-signal.signal-buy,
+body[data-theme="aurora-flow"] .sent-badge.positive {
+  background: rgba(255, 95, 122, .16);
+  color: #FF8EA2;
+  border-color: rgba(255, 95, 122, .24);
+}
+
+body[data-theme="aurora-flow"] .badge-down,
+body[data-theme="aurora-flow"] .signal-sell,
+body[data-theme="aurora-flow"] .report-signal.signal-sell,
+body[data-theme="aurora-flow"] .sent-badge.negative {
+  background: rgba(52, 211, 153, .14);
+  color: #67E8B9;
+  border-color: rgba(52, 211, 153, .22);
+}
+
+body[data-theme="aurora-flow"] .badge-warn,
+body[data-theme="aurora-flow"] .signal-hold,
+body[data-theme="aurora-flow"] .report-signal.signal-hold {
+  background: rgba(255, 180, 76, .15);
+  color: #FFD28A;
+  border-color: rgba(255, 180, 76, .22);
+}
+
+body[data-theme="aurora-flow"] .progress-bar,
+body[data-theme="aurora-flow"] .progress-bar-container {
+  background: rgba(5, 8, 22, .72);
+  border-color: rgba(153, 190, 255, .12);
+}
+
+body[data-theme="aurora-flow"] .progress-fill,
+body[data-theme="aurora-flow"] .stage-dot.completed,
+body[data-theme="aurora-flow"] .stage-dot.running {
+  background: linear-gradient(90deg, #1D6BFF, #19D5FF);
+  box-shadow: 0 0 22px rgba(25, 213, 255, .34);
+}
+
+body[data-theme="aurora-flow"] .alert-info {
+  background: rgba(37, 99, 235, .16);
+  border-color: rgba(96, 165, 250, .28);
+  color: #BFDBFE;
+}
+
+body[data-theme="aurora-flow"] .alert-warn {
+  background: rgba(255, 180, 76, .14);
+  border-color: rgba(255, 180, 76, .24);
+  color: #FFD28A;
+}
+
+body[data-theme="aurora-flow"] .alert-error,
+body[data-theme="aurora-flow"] .btn-danger {
+  background: rgba(255, 95, 122, .15);
+  border-color: rgba(255, 95, 122, .28);
+  color: #FF9CAF;
+}
+
+body[data-theme="aurora-flow"] .report-content,
+body[data-theme="aurora-flow"] .risk-content,
+body[data-theme="aurora-flow"] .advice-reasoning {
+  color: var(--text-secondary);
+}
+
+body[data-theme="aurora-flow"] .report-content code,
+body[data-theme="aurora-flow"] .structured-report {
+  background: rgba(4, 8, 22, .72);
+  border-color: rgba(153, 190, 255, .12);
+  color: #DDEBFF;
+}
+
+body[data-theme="aurora-flow"] ::-webkit-scrollbar-track {
+  background: rgba(5, 8, 22, .64);
+}
+
+body[data-theme="aurora-flow"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(29, 107, 255, .78), rgba(105, 56, 239, .78));
+  border: 2px solid rgba(5, 8, 22, .82);
+}
+
+body[data-theme="aurora-flow"] ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(25, 213, 255, .9), rgba(105, 56, 239, .9));
+}

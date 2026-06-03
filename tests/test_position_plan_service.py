@@ -134,6 +134,34 @@ class PositionPlanServiceTests(unittest.TestCase):
 
         self.assertIn("最终建仓", str(ctx.exception))
 
+    def test_abandon_draft_position_plan_marks_it_not_actionable(self):
+        plan = position_plan_service.persist_position_plan(
+            {"recommendations": [], "summary": "候选计划"},
+            db_path=self.db_path,
+            payload={"stage": "screening", "title": "待确认候选计划"},
+        )
+
+        abandoned = position_plan_service.abandon_position_plan(plan["plan_id"], db_path=self.db_path)
+        detail = position_plan_service.get_position_plan(plan["plan_id"], db_path=self.db_path)
+
+        self.assertEqual(abandoned["status"], "abandoned")
+        self.assertEqual(abandoned["adoption_status"], "abandoned")
+        self.assertEqual(detail["status"], "abandoned")
+        self.assertEqual(detail["adoption_status"], "abandoned")
+
+    def test_adopted_position_plan_cannot_be_abandoned(self):
+        plan = position_plan_service.persist_position_plan(
+            {"recommendations": [], "summary": "最终计划"},
+            db_path=self.db_path,
+            payload={"stage": "final", "title": "最终计划"},
+        )
+        position_plan_service.adopt_position_plan(plan["plan_id"], db_path=self.db_path)
+
+        with self.assertRaises(Exception) as ctx:
+            position_plan_service.abandon_position_plan(plan["plan_id"], db_path=self.db_path)
+
+        self.assertIn("已采纳", str(ctx.exception))
+
     def test_list_data_snapshots_returns_validation_summary_without_full_payload(self):
         snapshot = {"market": {"quote": {"price": 10}}, "social": {}, "news": {}, "fundamentals": {}, "policy": {}, "hot_money": {}, "lockup": {}}
         validation = {"ok": True, "checked_layers": ["market", "social"]}

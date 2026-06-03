@@ -45,6 +45,11 @@ async def adopt_position_plan(plan_id: str):
     return position_plan_service.adopt_position_plan(plan_id)
 
 
+@router.post("/position-plans/{plan_id}/abandon")
+async def abandon_position_plan(plan_id: str):
+    return position_plan_service.abandon_position_plan(plan_id)
+
+
 @router.get("/reports/snapshots")
 async def list_data_snapshots(
     limit: int = Query(default=100, ge=1, le=500),

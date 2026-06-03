@@ -1,0 +1,325 @@
+/*
+ * 风能仪表主题
+ * 参考：风机监控视频风格，灰阶工业背景、深色玻璃面板、橙色能量环和少量青色状态提示。
+ */
+
+body[data-theme="wind-dashboard"] {
+  --bg: #0E0F0F;
+  --bg-card: rgba(31, 32, 33, .88);
+  --bg-hover: rgba(255, 138, 24, .12);
+  --bg-sidebar: rgba(15, 16, 16, .96);
+  --bg-input: rgba(239, 241, 240, .08);
+  --surface: rgba(36, 37, 38, .82);
+  --surface-strong: rgba(18, 19, 20, .92);
+  --surface-soft: rgba(247, 248, 246, .09);
+  --text-primary: #F4F3EE;
+  --text-secondary: #C9C7BF;
+  --text-muted: #8D8C86;
+  --color-up: #FF5D4D;
+  --color-down: #25D0A4;
+  --color-accent: #FF8A18;
+  --color-accent-2: #20D6CE;
+  --color-warn: #FFB44A;
+  --color-primary: #FF8A18;
+  --gradient-warm: linear-gradient(135deg, rgba(255, 138, 24, .2), rgba(244, 243, 238, .08));
+  --gradient-cool: linear-gradient(135deg, rgba(32, 214, 206, .15), rgba(255, 255, 255, .06));
+  --shadow-card: 0 24px 54px rgba(0, 0, 0, .36), inset 0 1px 0 rgba(255, 255, 255, .1);
+  --shadow-hover: 0 28px 70px rgba(255, 138, 24, .16), inset 0 1px 0 rgba(255, 255, 255, .14);
+  --border-light: rgba(244, 243, 238, .12);
+  --chart-bg: #111313;
+  --chart-grid: rgba(244, 243, 238, .11);
+  --chart-text: #A9A7A0;
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Menlo", monospace;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .06) 0 1px, transparent 1px 54px),
+    linear-gradient(45deg, rgba(255, 255, 255, .035) 0 1px, transparent 1px 72px),
+    linear-gradient(120deg, #191A1A 0%, #101111 46%, #20201F 100%),
+    #0E0F0F;
+  color: var(--text-primary);
+}
+
+body[data-theme="wind-dashboard"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(108deg, transparent 0 16%, rgba(244, 243, 238, .045) 16.2% 17.4%, transparent 17.6% 100%),
+    linear-gradient(72deg, transparent 0 58%, rgba(0, 0, 0, .32) 58.2% 61%, transparent 61.2% 100%),
+    conic-gradient(from 208deg at 16% 30%, transparent 0deg, rgba(255, 138, 24, .22) 15deg, transparent 28deg 360deg);
+  opacity: .92;
+}
+
+body[data-theme="wind-dashboard"] .banner {
+  background: rgba(16, 17, 17, .86);
+  border-bottom: 1px solid rgba(244, 243, 238, .13);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .34);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+
+body[data-theme="wind-dashboard"] .main-content {
+  background: transparent;
+}
+
+body[data-theme="wind-dashboard"] .logo,
+body[data-theme="wind-dashboard"] .sc-name,
+body[data-theme="wind-dashboard"] .card-title,
+body[data-theme="wind-dashboard"] .section-header h3 {
+  color: var(--text-primary);
+}
+
+body[data-theme="wind-dashboard"] .logo-mark,
+body[data-theme="wind-dashboard"] .ui-glyph,
+body[data-theme="wind-dashboard"] .tab-icon {
+  color: #171717;
+  background: linear-gradient(145deg, #F7F5EF, #B7B5AE);
+  border-color: rgba(255, 255, 255, .35);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .72);
+}
+
+body[data-theme="wind-dashboard"] .tab-btn,
+body[data-theme="wind-dashboard"] .mobile-tab-item,
+body[data-theme="wind-dashboard"] .theme-switcher,
+body[data-theme="wind-dashboard"] #accountSwitcher,
+body[data-theme="wind-dashboard"] .notify-badge {
+  color: var(--text-secondary);
+  background: rgba(38, 39, 40, .72) !important;
+  border-color: rgba(244, 243, 238, .12) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .09);
+}
+
+body[data-theme="wind-dashboard"] .tab-btn:hover,
+body[data-theme="wind-dashboard"] .theme-switcher:hover,
+body[data-theme="wind-dashboard"] .mobile-tab-item:hover {
+  color: #FFFFFF;
+  background: rgba(255, 138, 24, .16) !important;
+  border-color: rgba(255, 138, 24, .32) !important;
+}
+
+body[data-theme="wind-dashboard"] .tab-btn.active,
+body[data-theme="wind-dashboard"] .mobile-tab-item.active,
+body[data-theme="wind-dashboard"] .detail-tab.active,
+body[data-theme="wind-dashboard"] .chart-tab.active,
+body[data-theme="wind-dashboard"] .news-tab.active,
+body[data-theme="wind-dashboard"] .risk-tab.active,
+body[data-theme="wind-dashboard"] .library-tabs button.active {
+  color: #151515;
+  background: linear-gradient(135deg, #FFF6E8 0%, #FFB75C 38%, #FF8A18 100%);
+  border-color: rgba(255, 176, 84, .58);
+  box-shadow: 0 14px 34px rgba(255, 138, 24, .24), inset 0 1px 0 rgba(255, 255, 255, .54);
+}
+
+body[data-theme="wind-dashboard"] .stock-list,
+body[data-theme="wind-dashboard"] .card,
+body[data-theme="wind-dashboard"] .panel,
+body[data-theme="wind-dashboard"] .portfolio-card,
+body[data-theme="wind-dashboard"] .settings-card,
+body[data-theme="wind-dashboard"] .ops-panel,
+body[data-theme="wind-dashboard"] .ops-kpi,
+body[data-theme="wind-dashboard"] .ops-score-main,
+body[data-theme="wind-dashboard"] .hotspot-panel,
+body[data-theme="wind-dashboard"] .lifecycle-panel,
+body[data-theme="wind-dashboard"] .regime-card,
+body[data-theme="wind-dashboard"] .pulse-card,
+body[data-theme="wind-dashboard"] .ai-section,
+body[data-theme="wind-dashboard"] .ai-left,
+body[data-theme="wind-dashboard"] .ai-right,
+body[data-theme="wind-dashboard"] .queue-panel,
+body[data-theme="wind-dashboard"] .reports-shell,
+body[data-theme="wind-dashboard"] .reports-sidebar,
+body[data-theme="wind-dashboard"] .reports-main,
+body[data-theme="wind-dashboard"] .hermes-shell,
+body[data-theme="wind-dashboard"] .global-hermes-panel,
+body[data-theme="wind-dashboard"] .modal-box,
+body[data-theme="wind-dashboard"] .report-preview-card,
+body[data-theme="wind-dashboard"] .preview-block {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, .035)),
+    var(--surface);
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(18px) saturate(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(1.05);
+}
+
+body[data-theme="wind-dashboard"] .stock-card,
+body[data-theme="wind-dashboard"] .watch-pool-card,
+body[data-theme="wind-dashboard"] .report-item,
+body[data-theme="wind-dashboard"] .news-item,
+body[data-theme="wind-dashboard"] .research-item,
+body[data-theme="wind-dashboard"] .announce-item,
+body[data-theme="wind-dashboard"] .order-card,
+body[data-theme="wind-dashboard"] .layer-card,
+body[data-theme="wind-dashboard"] .phase-item,
+body[data-theme="wind-dashboard"] .hotspot-item,
+body[data-theme="wind-dashboard"] .stock-chip,
+body[data-theme="wind-dashboard"] .lifecycle-item,
+body[data-theme="wind-dashboard"] .progress-row,
+body[data-theme="wind-dashboard"] .worker-row,
+body[data-theme="wind-dashboard"] .batch-task-row,
+body[data-theme="wind-dashboard"] .structured-report,
+body[data-theme="wind-dashboard"] .global-hermes-message,
+body[data-theme="wind-dashboard"] .report-library-table tbody tr,
+body[data-theme="wind-dashboard"] .worker-stale-fold {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025)),
+    rgba(24, 25, 26, .78);
+  border-color: rgba(244, 243, 238, .11);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+
+body[data-theme="wind-dashboard"] .stock-card:hover,
+body[data-theme="wind-dashboard"] .stock-card.active,
+body[data-theme="wind-dashboard"] .report-item:hover,
+body[data-theme="wind-dashboard"] .hotspot-item:hover,
+body[data-theme="wind-dashboard"] .hotspot-item.active,
+body[data-theme="wind-dashboard"] .report-library-table tbody tr:hover {
+  border-color: rgba(255, 138, 24, .45);
+  box-shadow: var(--shadow-hover);
+}
+
+body[data-theme="wind-dashboard"] .stock-card.active {
+  background:
+    linear-gradient(135deg, rgba(255, 138, 24, .16), rgba(255, 255, 255, .055)),
+    rgba(25, 25, 25, .9);
+}
+
+body[data-theme="wind-dashboard"] .sc-code,
+body[data-theme="wind-dashboard"] .report-code,
+body[data-theme="wind-dashboard"] .update-time,
+body[data-theme="wind-dashboard"] .info-value,
+body[data-theme="wind-dashboard"] .report-library-table strong {
+  color: #FFB75C;
+}
+
+body[data-theme="wind-dashboard"] .sc-data-lbl,
+body[data-theme="wind-dashboard"] .info-label,
+body[data-theme="wind-dashboard"] .report-time,
+body[data-theme="wind-dashboard"] .report-item-meta,
+body[data-theme="wind-dashboard"] .empty-state,
+body[data-theme="wind-dashboard"] .form-help,
+body[data-theme="wind-dashboard"] .report-library-table span {
+  color: var(--text-muted);
+}
+
+body[data-theme="wind-dashboard"] input,
+body[data-theme="wind-dashboard"] select,
+body[data-theme="wind-dashboard"] textarea,
+body[data-theme="wind-dashboard"] .form-control,
+body[data-theme="wind-dashboard"] .form-select,
+body[data-theme="wind-dashboard"] .form-input-sm,
+body[data-theme="wind-dashboard"] .form-group input,
+body[data-theme="wind-dashboard"] .form-group select {
+  background: rgba(12, 13, 13, .72);
+  border-color: rgba(244, 243, 238, .14);
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+
+body[data-theme="wind-dashboard"] input::placeholder,
+body[data-theme="wind-dashboard"] textarea::placeholder {
+  color: rgba(201, 199, 191, .52);
+}
+
+body[data-theme="wind-dashboard"] input:focus,
+body[data-theme="wind-dashboard"] select:focus,
+body[data-theme="wind-dashboard"] textarea:focus,
+body[data-theme="wind-dashboard"] .form-control:focus,
+body[data-theme="wind-dashboard"] .form-select:focus,
+body[data-theme="wind-dashboard"] .form-input-sm:focus {
+  border-color: rgba(255, 138, 24, .62);
+  box-shadow: 0 0 0 3px rgba(255, 138, 24, .13), inset 0 1px 0 rgba(255, 255, 255, .08);
+  outline: none;
+}
+
+body[data-theme="wind-dashboard"] .btn-primary,
+body[data-theme="wind-dashboard"] button.btn-primary,
+body[data-theme="wind-dashboard"] .btn-save,
+body[data-theme="wind-dashboard"] .btn-refresh-now {
+  color: #151515;
+  background: linear-gradient(135deg, #FFF2DC 0%, #FFB44A 42%, #FF8A18 100%);
+  border-color: rgba(255, 176, 84, .55);
+  box-shadow: 0 14px 32px rgba(255, 138, 24, .26), inset 0 1px 0 rgba(255, 255, 255, .48);
+}
+
+body[data-theme="wind-dashboard"] .btn-primary:hover,
+body[data-theme="wind-dashboard"] button.btn-primary:hover,
+body[data-theme="wind-dashboard"] .btn-save:hover,
+body[data-theme="wind-dashboard"] .btn-refresh-now:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+
+body[data-theme="wind-dashboard"] .btn-ghost,
+body[data-theme="wind-dashboard"] .btn-secondary,
+body[data-theme="wind-dashboard"] .btn-cancel,
+body[data-theme="wind-dashboard"] button.btn-ghost {
+  color: var(--text-secondary);
+  background: rgba(38, 39, 40, .76);
+  border-color: rgba(244, 243, 238, .13);
+}
+
+body[data-theme="wind-dashboard"] .btn-ghost:hover,
+body[data-theme="wind-dashboard"] .btn-secondary:hover,
+body[data-theme="wind-dashboard"] .btn-cancel:hover {
+  color: #FFFFFF;
+  border-color: rgba(32, 214, 206, .34);
+  background: rgba(32, 214, 206, .12);
+}
+
+body[data-theme="wind-dashboard"] .report-signal,
+body[data-theme="wind-dashboard"] .signal-buy,
+body[data-theme="wind-dashboard"] .signal-hold,
+body[data-theme="wind-dashboard"] .signal-sell,
+body[data-theme="wind-dashboard"] .heat-pill,
+body[data-theme="wind-dashboard"] .ops-badge,
+body[data-theme="wind-dashboard"] .anomaly-level-badge {
+  border-color: rgba(255, 138, 24, .18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+
+body[data-theme="wind-dashboard"] .signal-buy,
+body[data-theme="wind-dashboard"] .tag-buy {
+  color: #FFD39A;
+  background: rgba(255, 138, 24, .16);
+}
+
+body[data-theme="wind-dashboard"] .signal-hold,
+body[data-theme="wind-dashboard"] .tag-hold {
+  color: #F4F3EE;
+  background: rgba(244, 243, 238, .1);
+}
+
+body[data-theme="wind-dashboard"] .signal-sell,
+body[data-theme="wind-dashboard"] .tag-sell {
+  color: #9EF2E8;
+  background: rgba(32, 214, 206, .13);
+}
+
+body[data-theme="wind-dashboard"] .chart-card,
+body[data-theme="wind-dashboard"] #klineChart,
+body[data-theme="wind-dashboard"] .tv-lightweight-charts {
+  background: var(--chart-bg) !important;
+}
+
+body[data-theme="wind-dashboard"] .preview-block pre,
+body[data-theme="wind-dashboard"] pre,
+body[data-theme="wind-dashboard"] code {
+  color: #F6E7D0;
+  background: rgba(10, 11, 11, .64);
+  border-color: rgba(244, 243, 238, .11);
+}
+
+body[data-theme="wind-dashboard"] .mobile-tab-bar {
+  background: rgba(15, 16, 16, .92);
+  border-top-color: rgba(244, 243, 238, .12);
+  box-shadow: 0 -16px 40px rgba(0, 0, 0, .36);
+}
+
+body[data-theme="wind-dashboard"] ::selection {
+  color: #151515;
+  background: rgba(255, 138, 24, .72);
+}

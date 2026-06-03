@@ -92,6 +92,7 @@
     <h2>自选股</h2>
     <div class="stock-list-actions">
       <button id="watchlistBatchToggle" class="btn btn-sm btn-ghost watchlist-batch-toggle" onclick="toggleWatchlistBatchMode()">批量</button>
+      <button class="btn btn-sm btn-ghost" onclick="exportWatchlistMarkdown()">导出MD</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleSearch()">+ 添加</button>
     </div>
   </div>
@@ -288,6 +289,7 @@
             <option value="120">120 秒</option>
           </select>
           <button class="btn-refresh-now" id="btnRefreshNow" onclick="manualRefresh()">立即刷新行情</button>
+          <button class="btn btn-sm" id="btnKlineDiagnose" onclick="exportKlineDiagnostics()">诊断</button>
         </div>
       </div>
       <div id="klineDataDate" style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:2px;min-height:1em;"></div>
@@ -469,8 +471,8 @@
 
 {% block scripts %}
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/static/js/chart.js"></script>
-<script src="/static/js/stock.js?v=2.9.7-release"></script>
+<script src="/static/js/chart.js?v=2.9.14-kline-resilience"></script>
+<script src="/static/js/stock.js?v=2.9.15-report-fixes"></script>
 <script src="/static/js/strategy.js"></script>
 <script>
 function switchDetail(name) {

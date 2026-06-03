@@ -73,16 +73,26 @@
         return (num <= 1 ? num * 100 : num).toFixed(1);
     }
 
+    function parseAppTime(value) {
+        if (!value) return '--';
+        const raw = String(value).trim();
+        const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+        const normalized = !hasTimezone && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(raw)
+            ? raw.replace(' ', 'T') + 'Z'
+            : raw;
+        return new Date(normalized);
+    }
+
     function formatTime(value) {
         if (!value) return '--';
-        const d = new Date(value);
+        const d = parseAppTime(value);
         if (Number.isNaN(d.getTime())) return String(value);
         return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
     function formatDate(value) {
         if (!value) return '未知日期';
-        const d = new Date(value);
+        const d = parseAppTime(value);
         if (Number.isNaN(d.getTime())) return String(value).slice(0, 10) || '未知日期';
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
@@ -116,11 +126,34 @@
         }[value] || value || '--';
     }
 
+    function positionActionLabel(value) {
+        const key = String(value || '').trim().toLowerCase();
+        return {
+            strong_buy: '强烈买入',
+            buy: '买入',
+            add: '增持',
+            overweight: '增持',
+            hold: '持有',
+            watch: '观察',
+            wait: '等待',
+            avoid: '回避',
+            reduce: '减持',
+            underweight: '减持',
+            trim: '减持',
+            sell: '卖出',
+            strong_sell: '强烈卖出',
+            clear: '清仓',
+            no_buy: '禁止买入',
+            no_action: '不操作'
+        }[key] || value || '--';
+    }
+
     function adoptionLabel(value) {
         return {
             draft: '待确认',
             adopted: '已采纳',
-            superseded: '已被替代'
+            superseded: '已被替代',
+            abandoned: '已放弃'
         }[value] || value || '待确认';
     }
 
@@ -128,7 +161,8 @@
         return {
             draft: 'signal-hold',
             adopted: 'signal-buy',
-            superseded: 'signal-sell'
+            superseded: 'signal-sell',
+            abandoned: 'signal-sell'
         }[value] || 'signal-hold';
     }
 
@@ -231,6 +265,31 @@
         return `${num >= 0 ? '+' : ''}${num.toFixed(3)}%`;
     }
 
+    function previewBackAction(jobId, title = '') {
+        if (!jobId) return '';
+        const encodedJobId = encodeURIComponent(jobId);
+        return `<div class="preview-nav">
+            <button class="btn btn-sm" onclick="previewBatchJob('${escapeAttr(encodedJobId)}')">返回任务详情</button>
+            ${title ? `<span>${escapeHtml(title)}</span>` : ''}
+        </div>`;
+    }
+
+    function skipReasonForItem(item, job) {
+        const explicit = String(item.error || '').trim();
+        if (explicit) return explicit;
+        if (item.status !== 'skipped') return '';
+        if (job?.job_type === 'data_prefetch') {
+            return item.snapshot_id ? `已有完整七层快照 #${item.snapshot_id}` : '已有完整七层快照';
+        }
+        if (job?.job_type === 'report_generation') {
+            const payload = parseJsonish(job.payload_json) || {};
+            const days = Number(payload.skip_recent_days ?? 30);
+            const suffix = item.report_id ? `，复用报告 #${item.report_id}` : '';
+            return days > 0 ? `已有 ${days} 天内报告${suffix}` : `按任务规则跳过${suffix}`;
+        }
+        return item.report_id ? `已有可复用结果 #${item.report_id}` : '按任务规则跳过';
+    }
+
     function switchReportTab(tab) {
         document.querySelectorAll('#reportLibraryTabs button').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
         document.querySelectorAll('.report-tab-panel').forEach(panel => panel.classList.toggle('active', panel.id === `tab-${tab}`));
@@ -266,25 +325,36 @@
                 <div><span>陈旧处理</span><strong>${Number(data.summary?.stale || 0) ? '<button class="btn btn-sm" onclick="reclaimStaleWorkers()">回收陈旧</button>' : '无需处理'}</strong></div>
             `;
             if (panel) {
+                const staleWorkerStates = new Set(['stale', 'offline', 'disabled', 'not_started']);
+                const activeWorkers = workers.filter(worker => !staleWorkerStates.has(worker.state));
+                const staleWorkers = workers.filter(worker => staleWorkerStates.has(worker.state));
+                const renderWorkerRows = rows => rows.map(worker => {
+                    const pool = (worker.model_pool || []).map(item => `${item.ready ? '' : '!'}${escapeHtml(item.name || item.provider_id)} / ${escapeHtml(item.model || '--')}`).join('<br>') || '--';
+                    const counts = worker.counts || {};
+                    const currentMain = worker.current_code || worker.current_stage || worker.job_type || '--';
+                    const currentSub = [worker.current_stage && worker.current_code ? worker.current_stage : '', worker.current_model || '', worker.fallback_model ? `-> ${worker.fallback_model}` : ''].filter(Boolean).join(' ');
+                    const action = worker.state === 'stale' ? `<button class="btn btn-sm" onclick="reclaimStaleWorkers('${escapeAttr(worker.worker_id)}')">回收</button>` : '--';
+                    const stateClass = statusClass(worker.state === 'running' ? 'running' : worker.state === 'stale' || worker.state === 'offline' || worker.state === 'disabled' ? 'failed' : 'completed');
+                    return `<tr>
+                        <td><strong>${escapeHtml(worker.name || worker.worker_id)}</strong><span>${escapeHtml(worker.worker_id)}</span></td>
+                        <td><span class="report-signal ${escapeHtml(stateClass)}">${escapeHtml(workerStateLabel(worker.state))}</span></td>
+                        <td>${pool}</td>
+                        <td>${escapeHtml(currentMain)}<span>${escapeHtml(currentSub)}</span></td>
+                        <td>完成 ${Number(counts.completed || 0)} / 失败 ${Number(counts.failed || 0)}<span>等待 ${Number(counts.pending || 0)} / 待数据 ${Number(counts.waiting || 0)}</span></td>
+                        <td>${escapeHtml(formatTime(worker.heartbeat_at))}</td>
+                        <td>${action}</td>
+                    </tr>`;
+                }).join('');
                 panel.innerHTML = `<table class="report-library-table worker-status-table">
                     <thead><tr><th>Worker</th><th>状态</th><th>模型池</th><th>当前</th><th>进度</th><th>心跳</th><th>操作</th></tr></thead>
-                    <tbody>${workers.map(worker => {
-                        const pool = (worker.model_pool || []).map(item => `${item.ready ? '' : '!'}${escapeHtml(item.name || item.provider_id)} / ${escapeHtml(item.model || '--')}`).join('<br>') || '--';
-                        const counts = worker.counts || {};
-                        const currentMain = worker.current_code || worker.current_stage || worker.job_type || '--';
-                        const currentSub = [worker.current_stage && worker.current_code ? worker.current_stage : '', worker.current_model || '', worker.fallback_model ? `-> ${worker.fallback_model}` : ''].filter(Boolean).join(' ');
-                        const action = worker.state === 'stale' ? `<button class="btn btn-sm" onclick="reclaimStaleWorkers('${escapeAttr(worker.worker_id)}')">回收</button>` : '--';
-                        return `<tr>
-                            <td><strong>${escapeHtml(worker.name || worker.worker_id)}</strong><span>${escapeHtml(worker.worker_id)}</span></td>
-                            <td><span class="report-signal ${escapeHtml(statusClass(worker.state === 'running' ? 'running' : worker.state === 'stale' || worker.state === 'offline' ? 'failed' : 'completed'))}">${escapeHtml(workerStateLabel(worker.state))}</span></td>
-                            <td>${pool}</td>
-                            <td>${escapeHtml(currentMain)}<span>${escapeHtml(currentSub)}</span></td>
-                            <td>完成 ${Number(counts.completed || 0)} / 失败 ${Number(counts.failed || 0)}<span>等待 ${Number(counts.pending || 0)} / 待数据 ${Number(counts.waiting || 0)}</span></td>
-                            <td>${escapeHtml(formatTime(worker.heartbeat_at))}</td>
-                            <td>${action}</td>
-                        </tr>`;
-                    }).join('') || '<tr><td colspan="7" class="library-empty-state">暂无 Worker 配置或运行记录</td></tr>'}</tbody>
-                </table>`;
+                    <tbody>${renderWorkerRows(activeWorkers) || '<tr><td colspan="7" class="library-empty-state">暂无运行中的 Worker</td></tr>'}</tbody>
+                </table>
+                <details class="worker-stale-fold" ${staleWorkers.length ? '' : 'open'}>
+                    <summary>陈旧/离线 Worker ${Number(staleWorkers.length)} 个</summary>
+                    <table class="report-library-table worker-status-table">
+                        <tbody>${renderWorkerRows(staleWorkers) || '<tr><td colspan="7" class="library-empty-state">暂无陈旧或离线 Worker</td></tr>'}</tbody>
+                    </table>
+                </details>`;
             }
         } catch (err) {
             box.innerHTML = `
@@ -387,11 +457,13 @@
         const selectedCount = document.getElementById('selectedReportCount');
         if (selectedCount) selectedCount.textContent = String(selected.size);
         const selectAll = document.getElementById('reportSelectAll');
-        if (!selectAll) return;
         const visibleIds = filtered.map(report => Number(report.id));
         const visibleSelected = visibleIds.filter(id => selected.has(id)).length;
-        selectAll.checked = Boolean(visibleIds.length && visibleSelected === visibleIds.length);
-        selectAll.indeterminate = Boolean(visibleSelected && visibleSelected < visibleIds.length);
+        if (selectAll) {
+            selectAll.checked = Boolean(visibleIds.length && visibleSelected === visibleIds.length);
+            selectAll.indeterminate = Boolean(visibleSelected && visibleSelected < visibleIds.length);
+        }
+        syncReportGroupSelectionInputs();
     }
 
     function renderReportRows() {
@@ -446,14 +518,52 @@
             const selectedCount = group.reports.filter(report => selected.has(Number(report.id))).length;
             const latest = group.reports[0]?.created_at;
             const rows = collapsed ? '' : group.reports.map(renderReportRow).join('');
+            const allSelected = Boolean(group.reports.length && selectedCount === group.reports.length);
+            const partial = Boolean(selectedCount && selectedCount < group.reports.length);
             return `<tr class="report-group-header" onclick="toggleReportGroup('${escapeAttr(groupToken)}')">
                 <td colspan="9">
+                    <input class="report-group-select" type="checkbox"
+                        data-group-token="${escapeAttr(groupToken)}"
+                        ${allSelected ? 'checked' : ''}
+                        ${partial ? 'data-indeterminate="true"' : ''}
+                        onclick="event.stopPropagation()"
+                        onchange="toggleReportGroupSelection('${escapeAttr(groupToken)}', this.checked)">
                     <button type="button" class="report-group-toggle" aria-label="展开或折叠">${collapsed ? '+' : '-'}</button>
                     <strong>${escapeHtml(group.label)}</strong>
                     <span>${group.reports.length} 份报告 · 已选 ${selectedCount} · 最近 ${escapeHtml(formatTime(latest))}</span>
                 </td>
             </tr>${rows}`;
         }).join('');
+    }
+
+    function reportsForGroupToken(groupToken) {
+        const token = String(groupToken || '');
+        const sep = token.indexOf(':');
+        if (sep <= 0) return [];
+        const groupBy = token.slice(0, sep);
+        const key = token.slice(sep + 1);
+        return filtered.filter(report => {
+            const reportKey = groupBy === 'date' ? formatDate(report.created_at) : reportBatchKey(report);
+            return reportKey === key;
+        });
+    }
+
+    function syncReportGroupSelectionInputs() {
+        document.querySelectorAll('.report-group-select').forEach(input => {
+            const groupReports = reportsForGroupToken(input.dataset.groupToken || '');
+            const selectedCount = groupReports.filter(report => selected.has(Number(report.id))).length;
+            input.checked = Boolean(groupReports.length && selectedCount === groupReports.length);
+            input.indeterminate = Boolean(selectedCount && selectedCount < groupReports.length);
+        });
+    }
+
+    function toggleReportGroupSelection(groupToken, checked) {
+        reportsForGroupToken(groupToken).forEach(report => {
+            const id = Number(report.id);
+            if (checked) selected.add(id);
+            else selected.delete(id);
+        });
+        renderReportRows();
     }
 
     function toggleReportGroup(groupToken) {
@@ -786,7 +896,8 @@
                 const modelConfig = plan.model_config_json || {};
                 const marketCaptured = plan.market_context_captured_at || plan.decision_market_snapshot_json?.captured_at || '';
                 const encodedPlanId = encodeURIComponent(plan.plan_id);
-                const canAdopt = plan.stage === 'final' && plan.adoption_status !== 'adopted';
+                const canAdopt = plan.stage === 'final' && !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
+                const canAbandon = !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
                 return `<tr class="${selectedPositionPlanId === plan.plan_id ? 'selected' : ''}" data-plan-id="${escapeAttr(plan.plan_id)}" onclick="previewPositionPlan('${encodedPlanId}')">
                     <td><strong>${escapeHtml(plan.title || plan.plan_id)}</strong><span>${escapeHtml(plan.plan_id)}</span></td>
                     <td>${escapeHtml(stageLabel(plan.stage))}</td>
@@ -802,6 +913,7 @@
                             <a class="btn btn-sm" href="/position-plans/${encodedPlanId}">详情页</a>
                             <a class="btn btn-sm" href="/api/position-plans/${encodedPlanId}/markdown" target="_blank">Markdown</a>
                             ${canAdopt ? `<button class="btn btn-sm" onclick="adoptPositionPlan('${encodedPlanId}')">采纳</button>` : ''}
+                            ${canAbandon ? `<button class="btn btn-sm" onclick="abandonPositionPlan('${encodedPlanId}')">放弃</button>` : ''}
                             <button class="btn btn-sm" onclick="archivePositionPlan('${encodedPlanId}')">归档</button>
                         </div>
                     </td>
@@ -831,6 +943,8 @@
             const plan = await requestJson(`/api/position-plans/${encodeURIComponent(planId)}`);
             if (meta) meta.textContent = `${stageLabel(plan.stage)} ${plan.plan_id}`;
             const items = plan.items || [];
+            const canAdopt = plan.stage === 'final' && !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
+            const canAbandon = !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
             const marketSnapshot = plan.decision_market_snapshot_json || {};
             const marketRows = (marketSnapshot.summary || []).slice(0, 20).map(item => {
                 const day = item.day || {};
@@ -845,7 +959,7 @@
             }).join('');
             const itemRows = items.map(item => `<tr>
                 <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
-                <td>${escapeHtml(item.action)}</td>
+                <td>${escapeHtml(positionActionLabel(item.action))}</td>
                 <td>${Number(item.suggested_amount || 0).toFixed(3)}</td>
                 <td>${Number(item.position_pct || 0).toFixed(3)}%</td>
             </tr>`).join('');
@@ -878,7 +992,8 @@
                 <div class="preview-actions">
                     <a class="btn btn-sm btn-primary" href="/position-plans/${encodeURIComponent(planId)}">打开完整详情页</a>
                     <a class="btn btn-sm" href="/api/position-plans/${encodeURIComponent(planId)}/markdown" target="_blank">Markdown</a>
-                    ${plan.stage === 'final' && plan.adoption_status !== 'adopted' ? `<button class="btn btn-sm btn-primary" onclick="adoptPositionPlan('${encodeURIComponent(planId)}')">采纳为最终建仓计划</button>` : ''}
+                    ${canAdopt ? `<button class="btn btn-sm btn-primary" onclick="adoptPositionPlan('${encodeURIComponent(planId)}')">采纳为最终建仓计划</button>` : ''}
+                    ${canAbandon ? `<button class="btn btn-sm" onclick="abandonPositionPlan('${encodeURIComponent(planId)}')">放弃</button>` : ''}
                     <button class="btn btn-sm" onclick="archivePositionPlan('${encodeURIComponent(planId)}')">归档</button>
                 </div>
             `;
@@ -900,6 +1015,15 @@
         const planId = decodeURIComponent(encodedPlanId);
         if (!confirm('确认采纳这份最终建仓计划作为 AI 绩效基准？这不会自动写交易或下单。')) return;
         await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/adopt`, { method: 'POST' });
+        plansLoaded = false;
+        await loadPositionPlans();
+        await previewPositionPlan(encodeURIComponent(planId));
+    }
+
+    async function abandonPositionPlan(encodedPlanId) {
+        const planId = decodeURIComponent(encodedPlanId);
+        if (!confirm('确认放弃这份待确认建仓计划？放弃后不会作为 AI 绩效基准。')) return;
+        await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/abandon`, { method: 'POST' });
         plansLoaded = false;
         await loadPositionPlans();
         await previewPositionPlan(encodeURIComponent(planId));
@@ -950,6 +1074,15 @@
         }
     }
 
+    async function refreshBatchJobs() {
+        jobsLoaded = false;
+        await loadBatchJobs();
+        const activeJobId = document.getElementById('reportPreviewMeta')?.textContent || '';
+        if (activeJobId && /^[a-z]{2}-\d{14}-/.test(activeJobId.trim())) {
+            await previewBatchJob(encodeURIComponent(activeJobId.trim()));
+        }
+    }
+
     async function previewBatchJob(encodedJobId) {
         const jobId = decodeURIComponent(encodedJobId);
         const meta = document.getElementById('reportPreviewMeta');
@@ -969,13 +1102,14 @@
                 const stepTotal = Number(item.step_total || 0);
                 const stepDone = Number(item.step_completed || 0);
                 const stepText = stepTotal ? `${stepDone}/${stepTotal}` : '--';
-                const current = item.step_error || item.current_step || item.error || '--';
+                const skipReason = skipReasonForItem(item, job);
+                const current = item.step_error || skipReason || item.current_step || item.error || '--';
                 return `<tr>
                     <td><strong>${escapeHtml(item.name || item.code)}</strong><span>${escapeHtml(item.code)}</span></td>
                     <td><span class="report-signal ${escapeHtml(statusClass(item.status))}">${escapeHtml(statusLabel(item.status))}</span></td>
                     <td>${escapeHtml(stepText)}<span>${escapeHtml(item.current_step || '--')}</span></td>
                     <td>${escapeHtml(current)}</td>
-                    <td><button class="btn btn-sm" onclick="previewBatchItemSteps(${Number(item.id)})">角色</button></td>
+                    <td><button class="btn btn-sm" onclick="previewBatchItemSteps(${Number(item.id)}, '${escapeAttr(job.job_id)}')">角色</button></td>
                 </tr>`;
             }).join('');
             if (body) body.innerHTML = `
@@ -1042,7 +1176,7 @@
         }
     }
 
-    async function previewBatchItemSteps(itemId) {
+    async function previewBatchItemSteps(itemId, jobId = '') {
         const body = document.getElementById('reportPreview');
         if (body) body.innerHTML = '<div class="library-empty-state">加载角色步骤...</div>';
         try {
@@ -1054,6 +1188,7 @@
                 <td>${escapeHtml(step.error || '--')}</td>
             </tr>`).join('');
             if (body) body.innerHTML = `
+                ${previewBackAction(jobId, '角色执行流水')}
                 <div class="preview-signal">
                     <span>角色步骤 ${Number(data.count || 0)}</span>
                 </div>
@@ -1118,6 +1253,7 @@
                 <td>${formatChange(item.change_pct)}</td>
             </tr>`).join('');
             if (body) body.innerHTML = `
+                ${previewBackAction(jobId, '批量分析')}
                 <div class="preview-signal">
                     <span>批量分析</span>
                     <span>${escapeHtml(formatTime(data.generated_at))}</span>
@@ -1190,6 +1326,7 @@
                 <td><button class="btn btn-sm" onclick="retryBatchJob('${escapeAttr(jobId)}','${escapeAttr(group.error_type)}')">只重试此类</button></td>
             </tr>`).join('');
             if (body) body.innerHTML = `
+                ${previewBackAction(jobId, '失败分组')}
                 <div class="preview-signal"><span>失败分组 ${Number((data.groups || []).length)}</span></div>
                 <div class="preview-block batch-step-preview">
                     <table class="report-library-table">
@@ -1226,6 +1363,7 @@
                 <td>${(Number(item.duration_ms || 0) / 1000).toFixed(1)}s</td>
             </tr>`).join('');
             if (body) body.innerHTML = `
+                ${previewBackAction(jobId, '耗时统计')}
                 <div class="preview-signal">
                     <span>最慢股票 ${Number((data.slowest_items || []).length)}</span>
                     <span>Fallback ${Number((data.fallback_events || []).length)}</span>
@@ -1254,6 +1392,7 @@
                 <td>${escapeHtml(log.message || '--')}</td>
             </tr>`).join('');
             if (body) body.innerHTML = `
+                ${previewBackAction(jobId, '运行日志')}
                 <div class="preview-signal"><span>运行日志 ${Number(data.count || 0)}</span></div>
                 <div class="preview-block batch-step-preview">
                     <table class="report-library-table">
@@ -1278,6 +1417,7 @@
                 <td>${escapeHtml(formatTime(item.created_at))}</td>
             </tr>`).join('');
             if (body) body.innerHTML = `
+                ${previewBackAction(jobId, '批次产物')}
                 <div class="preview-signal"><span>批次产物 ${Number(data.count || 0)}</span></div>
                 <div class="preview-block batch-step-preview">
                     <table class="report-library-table">
@@ -1298,17 +1438,76 @@
         await loadBatchJobs();
     }
 
-    function exportReportLibrary(type) {
-        const items = filtered.filter(report => selected.size === 0 || selected.has(Number(report.id)));
-        if (!items.length) return alert('没有可导出的报告');
+    async function fetchReportsForExport(items) {
+        const details = [];
+        for (const report of items) {
+            try {
+                details.push(await requestJson(`/api/ai/reports/${encodeURIComponent(report.id)}`));
+            } catch (_err) {
+                details.push(report);
+            }
+        }
+        return details;
+    }
+
+    function markdownText(value) {
+        const parsed = typeof value === 'string' ? parseJsonish(value) : value;
+        if (parsed == null || parsed === '') return '暂无';
+        if (typeof parsed === 'object') return `\n\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+        return String(parsed).replace(/\\n/g, '\n').trim() || '暂无';
+    }
+
+    function formatReportMarkdown(report) {
+        const title = `${report.name || report.code || '未命名'} ${report.code || ''}`.trim();
+        const layers = [
+            ['市场 / 技术分析', report.market_report],
+            ['事件 / 情绪分析', report.sentiment_report],
+            ['新闻舆情', report.news_report],
+            ['基本面分析', report.fundamentals_report],
+            ['政策分析', report.policy_report],
+            ['资金分析', report.hot_money_report],
+            ['解禁监控', report.lockup_report],
+        ];
+        return [
+            `## ${title}`,
+            '',
+            `- 报告ID：${report.id || '--'}`,
+            `- 信号：${SIG_LABEL[report.signal] || report.signal || 'HOLD'}`,
+            `- 置信度：${formatPct(report.confidence)}`,
+            `- 风险评分：${formatScore(report.risk_score)}`,
+            `- 模式：${report.depth || 'standard'} / ${report.model_mode || 'balanced'}`,
+            `- 生成时间：${formatTime(report.created_at)}`,
+            '',
+            '### 最终决策',
+            markdownText(report.final_decision || report.result?.reasoning || report.result || ''),
+            '',
+            '### 交易计划',
+            markdownText(report.trader_plan),
+            '',
+            '### 多空辩论',
+            markdownText(report.investment_debate),
+            '',
+            '### 风险复核',
+            markdownText(report.risk_debate),
+            '',
+            '### 七层分析',
+            ...layers.flatMap(([label, content]) => [`#### ${label}`, markdownText(content), '']),
+        ].join('\n');
+    }
+
+    async function exportReportLibrary(type) {
+        const items = filtered.filter(report => selected.has(Number(report.id)));
+        if (!items.length) return alert('请选择要导出的报告');
+        const fullItems = await fetchReportsForExport(items);
         const content = type === 'json'
-            ? JSON.stringify(items, null, 2)
-            : ['# AI报告库导出', '', ...items.map(report => `- ${report.name || report.code} ${report.code}: ${SIG_LABEL[report.signal] || report.signal || 'HOLD'}，置信度 ${formatPct(report.confidence)}，风险 ${formatScore(report.risk_score)}`)].join('\n');
-        const blob = new Blob([content], { type: type === 'json' ? 'application/json' : 'text/markdown' });
+            ? JSON.stringify(fullItems, null, 2)
+            : ['# AI报告库导出', '', `- 导出报告数：${fullItems.length}`, `- 导出时间：${formatTime(new Date().toISOString())}`, '', ...fullItems.map(formatReportMarkdown)].join('\n');
+        const blob = new Blob([content], { type: type === 'json' ? 'application/json' : 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `ai-reports.${type === 'json' ? 'json' : 'md'}`;
+        const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        a.download = `ai-reports-selected-${stamp}.${type === 'json' ? 'json' : 'md'}`;
         a.click();
         URL.revokeObjectURL(url);
     }
@@ -1318,12 +1517,14 @@
     window.toggleSignalFilter = toggleSignalFilter;
     window.setReportMarketFilter = setReportMarketFilter;
     window.toggleReportGroup = toggleReportGroup;
+    window.toggleReportGroupSelection = toggleReportGroupSelection;
     window.switchReportTab = switchReportTab;
     window.previewReport = previewReport;
     window.previewSnapshot = previewSnapshot;
     window.previewPositionPlan = previewPositionPlan;
     window.archivePositionPlan = archivePositionPlan;
     window.adoptPositionPlan = adoptPositionPlan;
+    window.abandonPositionPlan = abandonPositionPlan;
     window.toggleReportSelection = toggleReportSelection;
     window.toggleAllReports = toggleAllReports;
     window.createPlanFromReportLibrary = createPlanFromReportLibrary;
@@ -1332,6 +1533,7 @@
     window.togglePlanRoleModelFields = togglePlanRoleModelFields;
     window.exportReportLibrary = exportReportLibrary;
     window.resumeBatchJob = resumeBatchJob;
+    window.refreshBatchJobs = refreshBatchJobs;
     window.reclaimStaleWorkers = reclaimStaleWorkers;
     window.pauseBatchJob = pauseBatchJob;
     window.manualCompleteBatchJob = manualCompleteBatchJob;

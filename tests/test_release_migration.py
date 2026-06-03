@@ -17,6 +17,10 @@ WORKER_POOL_SCRIPT = ROOT / "scripts" / "run_batch_worker_pool.py"
 SETTINGS_JS = ROOT / "static" / "js" / "settings.js"
 SETTINGS_TEMPLATE = ROOT / "templates" / "settings.html"
 STYLE_CSS = ROOT / "static" / "css" / "style.css"
+CHART_JS = ROOT / "static" / "js" / "chart.js"
+INDEX_TEMPLATE = ROOT / "templates" / "index.html"
+AURORA_FLOW_CSS = ROOT / "static" / "css" / "aurora-flow.css"
+WIND_DASHBOARD_CSS = ROOT / "static" / "css" / "wind-dashboard.css"
 
 
 def load_migration_module():
@@ -130,6 +134,47 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("/analysis", js)
         self.assertIn("信号分布", js)
 
+    def test_reports_page_separates_stale_workers_and_position_plan_decisions(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        api_source = (ROOT / "api" / "position_plan_api.py").read_text(encoding="utf-8")
+        service_source = (ROOT / "services" / "position_plan_service.py").read_text(encoding="utf-8")
+
+        self.assertIn("const staleWorkerStates = new Set(['stale', 'offline', 'disabled', 'not_started'])", js)
+        self.assertIn("const activeWorkers = workers.filter(worker => !staleWorkerStates.has(worker.state))", js)
+        self.assertIn("const staleWorkers = workers.filter(worker => staleWorkerStates.has(worker.state))", js)
+        self.assertIn("worker-stale-fold", js)
+        self.assertIn("陈旧/离线 Worker", js)
+        self.assertIn("放弃", js)
+        self.assertIn("abandonPositionPlan", js)
+        self.assertIn("/position-plans/{plan_id}/abandon", api_source)
+        self.assertIn("def abandon_position_plan", service_source)
+
+    def test_reports_preview_subviews_have_back_navigation(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        css = STYLE_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("function previewBackAction", js)
+        self.assertIn("返回任务详情", js)
+        self.assertIn("previewBatchItemSteps(${Number(item.id)}, '${escapeAttr(job.job_id)}')", js)
+        self.assertIn("previewBackAction(jobId, '角色执行流水')", js)
+        self.assertIn("previewBackAction(jobId, '批量分析')", js)
+        self.assertIn("previewBackAction(jobId, '失败分组')", js)
+        self.assertIn("previewBackAction(jobId, '耗时统计')", js)
+        self.assertIn("previewBackAction(jobId, '运行日志')", js)
+        self.assertIn("previewBackAction(jobId, '批次产物')", js)
+        self.assertIn(".preview-nav", css)
+
+    def test_position_plan_preview_localizes_recommendation_actions(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+
+        self.assertIn("function positionActionLabel", js)
+        self.assertIn("watch: '观察'", js)
+        self.assertIn("avoid: '回避'", js)
+        self.assertIn("buy: '买入'", js)
+        self.assertIn("sell: '卖出'", js)
+        self.assertIn("positionActionLabel(item.action)", js)
+        self.assertNotIn("<td>${escapeHtml(item.action)}</td>", js)
+
     def test_reports_page_supports_grouped_collapsible_report_list(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
         html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
@@ -142,6 +187,17 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("groupBy === 'date' ? !expandedReportGroups.has(groupToken)", js)
         self.assertIn("toggleReportGroup", js)
         self.assertIn("report-group-header", js)
+
+    def test_reports_page_treats_sqlite_datetime_as_utc_for_local_display(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+
+        self.assertIn("function parseAppTime", js)
+        self.assertIn("raw.replace(' ', 'T') + 'Z'", js)
+        self.assertIn("const d = parseAppTime(value);", js)
+        self.assertIn("function formatTime(value)", js)
+        self.assertIn("function formatDate(value)", js)
+        self.assertIn("reports.js?v=2.9.16-report-export", html)
 
     def test_reports_page_links_to_full_report_detail(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -161,6 +217,53 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertNotIn("formatMarkdown(typeof report.risk_debate === 'string' ? report.risk_debate : JSON.stringify", js)
         self.assertIn(".structured-report", css)
         self.assertIn(".structured-key", css)
+
+    def test_reports_batch_jobs_have_manual_refresh_and_skip_reason(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+        service_source = (ROOT / "services" / "batch_report_service.py").read_text(encoding="utf-8")
+
+        self.assertIn("refreshBatchJobs", js)
+        self.assertIn("window.refreshBatchJobs", js)
+        self.assertIn("刷新任务", html)
+        self.assertIn("skipReasonForItem", js)
+        self.assertIn("已有近期报告", service_source)
+        self.assertIn("已有完整七层快照", service_source)
+
+    def test_watchlist_exports_filtered_markdown(self):
+        js = (ROOT / "static" / "js" / "stock.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("exportWatchlistMarkdown", js)
+        self.assertIn("visibleWatchlistStocks()", js)
+        self.assertIn("自选股导出", js)
+        self.assertIn("window.exportWatchlistMarkdown", js)
+        self.assertIn("导出MD", html)
+
+    def test_report_detail_final_decision_has_dedicated_structured_renderer(self):
+        js = (ROOT / "static" / "js" / "report-detail.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "report_detail.html").read_text(encoding="utf-8")
+
+        self.assertIn("function renderFinalDecision", js)
+        self.assertIn("decision-summary-grid", js)
+        self.assertIn("trader_plan: '交易计划'", js)
+        self.assertIn("setHtml('reportDecisionBody', renderFinalDecision", js)
+        self.assertIn("report-detail.js?v=2.9.15-report-fixes", html)
+
+    def test_report_groups_support_batch_select_and_full_markdown_export(self):
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+
+        self.assertIn("function toggleReportGroupSelection", js)
+        self.assertIn("report-group-select", js)
+        self.assertIn("data-group-token", js)
+        self.assertIn("window.toggleReportGroupSelection", js)
+        self.assertIn("async function exportReportLibrary", js)
+        self.assertIn("fetchReportsForExport", js)
+        self.assertIn("/api/ai/reports/${encodeURIComponent(report.id)}", js)
+        self.assertIn("formatReportMarkdown", js)
+        self.assertIn("请选择要导出的报告", js)
+        self.assertIn("reports.js?v=2.9.16-report-export", html)
 
     def test_ai_page_supports_last_report_signal_filter_and_batch_select(self):
         js = AI_JS.read_text(encoding="utf-8")
@@ -213,6 +316,101 @@ class ReleaseMigrationTests(unittest.TestCase):
 
         self.assertIn(".ai-right-section {\n  flex: 0 0 auto;\n  min-height: auto;", css)
         self.assertNotIn(".ai-right-section {\n  flex: 1;\n  min-height: 0;", css)
+
+    def test_kline_chart_render_cleans_old_instance_and_normalizes_data(self):
+        js = CHART_JS.read_text(encoding="utf-8")
+        html = INDEX_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("function cleanupKlineContainer", js)
+        self.assertIn("container.__lwc_resize_observer.disconnect()", js)
+        self.assertIn("container.__lwc_chart.remove()", js)
+        self.assertIn("function normalizeKlineData", js)
+        self.assertIn("const byTime = new Map()", js)
+        self.assertIn("duplicateCount", js)
+        self.assertIn("function chartContainerSize", js)
+        self.assertIn("Math.max(240", js)
+        self.assertIn("Math.max(320", js)
+        self.assertIn("window._lastKlineDebug", js)
+        self.assertIn("renderCount: safeData.length", js)
+        self.assertIn("container.__lwc_resize_observer = ro", js)
+        self.assertIn("static/js/chart.js?v=2.9.14-kline-resilience", html)
+
+    def test_kline_chart_resilience_guards_are_present(self):
+        chart_js = CHART_JS.read_text(encoding="utf-8")
+        stock_js = (ROOT / "static/js/stock.js").read_text(encoding="utf-8")
+        html = INDEX_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("function appendKlineDebug", chart_js)
+        self.assertIn("window._klineDebugHistory", chart_js)
+        self.assertIn("function delayKlineRender", chart_js)
+        self.assertIn("K线图等待容器尺寸稳定", chart_js)
+        self.assertIn("function checkKlineHealth", chart_js)
+        self.assertIn("function scheduleKlineHealthCheck", chart_js)
+        self.assertIn("_recoveryStep", chart_js)
+        self.assertIn("renderKlineMessage(container, 'K线图渲染失败'", chart_js)
+        self.assertIn("container.__kline_retry_render", chart_js)
+        self.assertIn("let klineRequestSeq = 0", stock_js)
+        self.assertIn("const requestSeq = ++klineRequestSeq", stock_js)
+        self.assertIn("const isStale = () => requestSeq !== klineRequestSeq", stock_js)
+        self.assertIn("if (isStale()) return", stock_js)
+        self.assertIn("图表组件加载失败，请刷新页面", stock_js)
+        self.assertIn("source: data?.source", stock_js)
+        self.assertIn("fallbackSource: data?.fallback_source", stock_js)
+        self.assertIn("static/js/stock.js?v=2.9.15-report-fixes", html)
+
+    def test_kline_resilience_state_machine_fallback_and_diagnostics_are_present(self):
+        chart_js = CHART_JS.read_text(encoding="utf-8")
+        stock_js = (ROOT / "static/js/stock.js").read_text(encoding="utf-8")
+        html = INDEX_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("const KLINE_STATES", stock_js)
+        self.assertIn("function setKlineState", stock_js)
+        self.assertIn("function collectKlineDiagnostics", stock_js)
+        self.assertIn("function exportKlineDiagnostics", stock_js)
+        self.assertIn("window.exportKlineDiagnostics = exportKlineDiagnostics", stock_js)
+        self.assertIn("id=\"btnKlineDiagnose\"", html)
+        self.assertIn("onclick=\"exportKlineDiagnostics()\"", html)
+        self.assertIn("quality: data?.quality", stock_js)
+        self.assertIn("function klineRecoveryOptions", chart_js)
+        self.assertIn("_recoveryStep", chart_js)
+        self.assertIn("chartType: 'line'", chart_js)
+        self.assertIn("renderKlineMessage(container, 'K线图渲染异常'", chart_js)
+        self.assertIn("container.__kline_render_meta", chart_js)
+        self.assertIn("setDataSuccess", chart_js)
+        self.assertIn("static/js/chart.js?v=2.9.14-kline-resilience", html)
+
+    def test_aurora_flow_theme_is_available_and_drives_chart_colors(self):
+        base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        css = AURORA_FLOW_CSS.read_text(encoding="utf-8")
+        chart_js = CHART_JS.read_text(encoding="utf-8")
+
+        self.assertIn("aurora-flow.css?v=2.9.8", base)
+        self.assertIn("id: 'aurora-flow'", base)
+        self.assertIn("name: '蓝紫流光'", base)
+        self.assertIn("icon: '流'", base)
+        self.assertIn('body[data-theme="aurora-flow"]', css)
+        self.assertIn("--chart-bg", css)
+        self.assertIn("--chart-grid", css)
+        self.assertIn("--chart-text", css)
+        self.assertIn("linear-gradient(135deg, #1D6BFF 0%, #6938EF 56%, #19D5FF 100%)", css)
+        self.assertIn("function chartThemeColors", chart_js)
+        self.assertIn("cssVar('--chart-bg'", chart_js)
+        self.assertIn("themeColors.background", chart_js)
+
+    def test_wind_dashboard_theme_is_available_and_drives_chart_colors(self):
+        base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
+        css = WIND_DASHBOARD_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("wind-dashboard.css?v=2.9.12", base)
+        self.assertIn("id: 'wind-dashboard'", base)
+        self.assertIn("name: '风能仪表'", base)
+        self.assertIn("icon: '风'", base)
+        self.assertIn('body[data-theme="wind-dashboard"]', css)
+        self.assertIn("--chart-bg", css)
+        self.assertIn("--chart-grid", css)
+        self.assertIn("--chart-text", css)
+        self.assertIn("#FF8A18", css)
+        self.assertIn("风机监控视频风格", css)
 
     def test_market_permission_filters_are_exposed_on_ai_reports_and_settings(self):
         ai_js = AI_JS.read_text(encoding="utf-8")

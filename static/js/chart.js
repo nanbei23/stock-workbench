@@ -19,6 +19,35 @@ const COLORS = {
   lineMain: '#5B9BD5',
 };
 
+function cssVar(name, fallback) {
+  if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') return fallback;
+  const root = document.body || document.documentElement;
+  const value = getComputedStyle(root).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function chartThemeColors() {
+  return {
+    background: cssVar('--chart-bg', COLORS.background),
+    grid: cssVar('--chart-grid', COLORS.grid),
+    text: cssVar('--chart-text', COLORS.text),
+  };
+}
+
+function appendKlineDebug(debug) {
+  if (typeof window === 'undefined') return;
+  window._lastKlineDebug = debug;
+  const history = Array.isArray(window._klineDebugHistory) ? window._klineDebugHistory : [];
+  history.push(debug);
+  window._klineDebugHistory = history.slice(-30);
+}
+
+function updateKlineDebug(patch) {
+  if (typeof window === 'undefined') return;
+  const next = { ...(window._lastKlineDebug || {}), ...patch, updatedAt: new Date().toISOString() };
+  appendKlineDebug(next);
+}
+
 function isIntradayPeriod(period) {
   return ['m1', 'm5', '15', '30', '60'].includes(period);
 }
@@ -32,6 +61,196 @@ function parseTime(dateStr, isIntraday) {
     return isNaN(ms) ? s : Math.floor(ms / 1000);
   }
   return s.split(' ')[0];
+}
+
+function finiteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cleanupKlineContainer(container) {
+  if (container.__lwc_resize_observer) {
+    try { container.__lwc_resize_observer.disconnect(); } catch (_) {}
+    container.__lwc_resize_observer = null;
+  }
+  if (container.__lwc_chart) {
+    try { container.__lwc_chart.remove(); } catch (_) {}
+    container.__lwc_chart = null;
+  }
+}
+
+function normalizeKlineData(klineData, period) {
+  const isIntraday = isIntradayPeriod(period);
+  const rows = Array.isArray(klineData) ? klineData : [];
+  const byTime = new Map();
+  const dropped = [];
+
+  rows.forEach((row, index) => {
+    const time = parseTime(row?.date, isIntraday);
+    const open = finiteNumber(row?.open);
+    const high = finiteNumber(row?.high);
+    const low = finiteNumber(row?.low);
+    const close = finiteNumber(row?.close);
+    const volume = finiteNumber(row?.volume);
+    const amount = finiteNumber(row?.amount) ?? 0;
+    if (!time || open == null || high == null || low == null || close == null || volume == null) {
+      dropped.push({ index, date: row?.date || '', reason: 'invalid_field' });
+      return;
+    }
+    if (Math.min(open, high, low, close) <= 0 || high < Math.max(open, close, low) || low > Math.min(open, close, high)) {
+      dropped.push({ index, date: row?.date || '', reason: 'invalid_ohlc' });
+      return;
+    }
+    byTime.set(time, {
+      date: row.date,
+      time,
+      open,
+      high,
+      low,
+      close,
+      volume,
+      amount,
+    });
+  });
+
+  const normalized = Array.from(byTime.values()).sort((a, b) => {
+    if (typeof a.time === 'number' && typeof b.time === 'number') return a.time - b.time;
+    return String(a.time).localeCompare(String(b.time));
+  });
+  return {
+    rows: normalized,
+    dropped,
+    duplicateCount: rows.length - dropped.length - normalized.length,
+  };
+}
+
+function chartContainerSize(container) {
+  const rect = container.getBoundingClientRect();
+  return {
+    width: Math.max(240, Math.floor(rect.width || container.clientWidth || 240)),
+    height: Math.max(320, Math.floor(rect.height || container.clientHeight || 500)),
+  };
+}
+
+function rawChartContainerSize(container) {
+  const rect = container.getBoundingClientRect();
+  return {
+    width: Math.floor(rect.width || container.clientWidth || 0),
+    height: Math.floor(rect.height || container.clientHeight || 0),
+  };
+}
+
+function hasUsableKlineSize(container) {
+  const size = rawChartContainerSize(container);
+  return size.width >= 120 && size.height >= 160;
+}
+
+function renderKlineMessage(container, message, detail = '') {
+  container.innerHTML = `
+    <div class="empty-state" style="padding:24px;">
+      <p>${escapeKlineHtml(message)}</p>
+      ${detail ? `<p style="font-size:0.78rem;color:var(--text-muted);margin-top:6px;">${escapeKlineHtml(detail)}</p>` : ''}
+      <button type="button" class="btn btn-sm btn-primary" style="margin-top:12px;" onclick="this.closest('.empty-state')?.parentElement?.__kline_retry_render?.()">重新渲染</button>
+    </div>
+  `;
+}
+
+function escapeKlineHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function delayKlineRender(container, containerId, klineData, options) {
+  cleanupKlineContainer(container);
+  renderKlineMessage(container, 'K线图等待容器尺寸稳定', '页面布局尚未完成，检测到可用空间后会自动重绘。');
+  const retryOptions = { ...options, _delayedRender: true };
+  let retried = false;
+  const retry = () => {
+    if (retried || !hasUsableKlineSize(container)) return;
+    retried = true;
+    cleanupKlineContainer(container);
+    renderKline(containerId, klineData, retryOptions);
+  };
+  container.__kline_retry_render = () => renderKline(containerId, klineData, retryOptions);
+  const ro = new ResizeObserver(retry);
+  container.__lwc_resize_observer = ro;
+  ro.observe(container);
+  window.setTimeout(retry, 180);
+  updateKlineDebug({
+    containerId,
+    period: options.period || 'day',
+    chartType: options.chartType || 'candlestick',
+    status: 'delayed_for_size',
+    containerSize: rawChartContainerSize(container),
+  });
+  return null;
+}
+
+function checkKlineHealth(container, chart) {
+  const size = rawChartContainerSize(container);
+  let screenshotOk = true;
+  let visibleRangeOk = true;
+  try {
+    if (chart?.takeScreenshot) screenshotOk = Boolean(chart.takeScreenshot());
+  } catch (_) {
+    screenshotOk = false;
+  }
+  try {
+    const visibleRange = chart?.timeScale?.().getVisibleRange?.();
+    visibleRangeOk = Boolean(visibleRange && visibleRange.from != null && visibleRange.to != null);
+  } catch (_) {
+    visibleRangeOk = false;
+  }
+  const canvasCount = container.querySelectorAll('canvas').length;
+  const meta = container.__kline_render_meta || {};
+  return {
+    healthy: canvasCount > 0 && size.width >= 120 && size.height >= 160 && screenshotOk && visibleRangeOk && meta.setDataSuccess !== false,
+    canvasCount,
+    containerSize: size,
+    screenshotOk,
+    visibleRangeOk,
+    setDataSuccess: meta.setDataSuccess !== false,
+    renderMeta: meta,
+  };
+}
+
+function klineRecoveryOptions(options) {
+  const step = Number(options._recoveryStep || 0);
+  if (step <= 0) return { ...options, _recoveryStep: 1 };
+  if (step === 1 && options.chartType !== 'line') {
+    return { ...options, _recoveryStep: 2, chartType: 'line', _fallbackLineRender: true };
+  }
+  return null;
+}
+
+function emitKlineHealth(container, detail) {
+  try {
+    container.dispatchEvent(new CustomEvent('kline-health', { bubbles: true, detail }));
+  } catch (_) {}
+}
+
+function scheduleKlineHealthCheck(container, containerId, klineData, options, chart) {
+  window.setTimeout(() => {
+    const health = checkKlineHealth(container, chart);
+    updateKlineDebug({ ...health, status: health.healthy ? 'healthy' : 'unhealthy' });
+    if (health.healthy) {
+      emitKlineHealth(container, { status: 'healthy', health });
+      return;
+    }
+    const recoveryOptions = klineRecoveryOptions(options);
+    if (!recoveryOptions) {
+      renderKlineMessage(container, 'K线图渲染异常', '多次自动重绘仍未恢复，可点击重新渲染或导出诊断信息。');
+      emitKlineHealth(container, { status: 'failed', health });
+      return;
+    }
+    emitKlineHealth(container, { status: recoveryOptions._fallbackLineRender ? 'fallback_line' : 'recovering', health, recoveryStep: recoveryOptions._recoveryStep });
+    cleanupKlineContainer(container);
+    renderKline(containerId, klineData, recoveryOptions);
+  }, 180);
 }
 
 function intradayTickFormatter(timestamp) {
@@ -131,26 +350,83 @@ function createColorSegments(chart, klineData, timeValues, refPrice) {
 function renderKline(containerId, klineData, options = {}) {
   const container = document.getElementById(containerId);
   if (!container) return null;
+  container.__kline_retry_render = () => renderKline(containerId, klineData, { ...options, _manualRetry: true });
+  try {
+    return renderKlineCore(containerId, klineData, options);
+  } catch (error) {
+    console.error('renderKline error:', error);
+    cleanupKlineContainer(container);
+    updateKlineDebug({
+      containerId,
+      period: options.period || 'day',
+      chartType: options.chartType || 'candlestick',
+      status: 'render_error',
+      error: error?.message || String(error),
+      containerSize: rawChartContainerSize(container),
+      inputCount: Array.isArray(klineData) ? klineData.length : 0,
+    });
+    renderKlineMessage(container, 'K线图渲染失败', error?.message || '图表组件异常');
+    return null;
+  }
+}
+
+function renderKlineCore(containerId, klineData, options = {}) {
+  const container = document.getElementById(containerId);
+  if (!container) return null;
+  if (!options._delayedRender && !hasUsableKlineSize(container)) {
+    return delayKlineRender(container, containerId, klineData, options);
+  }
+  cleanupKlineContainer(container);
   container.innerHTML = '';
+  container.__kline_render_meta = {
+    setDataSuccess: false,
+    createdAt: new Date().toISOString(),
+    recoveryStep: Number(options._recoveryStep || 0),
+    fallbackLineRender: Boolean(options._fallbackLineRender),
+  };
 
   const period = options.period || 'day';
   const isIntraday = isIntradayPeriod(period);
   let chartType = options.chartType || 'candlestick';
   if (isIntraday && chartType === 'candlestick') chartType = 'intraday';
 
-  const timeValues = klineData.map(d => parseTime(d.date, isIntraday));
-  const candles = klineData.map((d, i) => ({
+  const normalized = normalizeKlineData(klineData, period);
+  const safeData = normalized.rows;
+  appendKlineDebug({
+    containerId,
+    period,
+    chartType,
+    inputCount: Array.isArray(klineData) ? klineData.length : 0,
+    renderCount: safeData.length,
+    dropped: normalized.dropped,
+    duplicateCount: normalized.duplicateCount,
+    containerSize: rawChartContainerSize(container),
+    source: options.source || '',
+    fallbackSource: options.fallbackSource || '',
+    warning: options.warning || '',
+    status: 'normalizing',
+    renderedAt: new Date().toISOString(),
+  });
+  if (!safeData.length) {
+    renderKlineMessage(container, 'K线数据格式异常，无法渲染', `输入 ${Array.isArray(klineData) ? klineData.length : 0} 行，丢弃 ${normalized.dropped.length} 行。`);
+    updateKlineDebug({ status: 'invalid_data' });
+    return null;
+  }
+
+  const timeValues = safeData.map(d => d.time);
+  const themeColors = chartThemeColors();
+  const candles = safeData.map((d, i) => ({
     time: timeValues[i],
     open: d.open, high: d.high, low: d.low, close: d.close,
   }));
-  const volumes = klineData.map((d, i) => ({
+  const volumes = safeData.map((d, i) => ({
     time: timeValues[i],
     value: d.volume,
     color: d.close >= d.open ? COLORS.volumeUp : COLORS.volumeDown,
   }));
 
   const timeScaleOpts = {
-    borderColor: COLORS.grid,
+    borderColor: themeColors.grid,
     timeVisible: true,
     secondsVisible: false,
     fixLeftEdge: true,
@@ -158,13 +434,14 @@ function renderKline(containerId, klineData, options = {}) {
     tickMarkFormatter: isIntraday ? intradayTickFormatter : undefined,
   };
 
+  const initialSize = chartContainerSize(container);
   const chartOpts = {
-    width: container.clientWidth,
-    height: container.clientHeight || 500,
-    layout: { background: { type: 'solid', color: COLORS.background }, textColor: COLORS.text },
-    grid: { vertLines: { color: COLORS.grid }, horzLines: { color: COLORS.grid } },
+    width: initialSize.width,
+    height: initialSize.height,
+    layout: { background: { type: 'solid', color: themeColors.background }, textColor: themeColors.text },
+    grid: { vertLines: { color: themeColors.grid }, horzLines: { color: themeColors.grid } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: COLORS.grid },
+    rightPriceScale: { borderColor: themeColors.grid },
     timeScale: timeScaleOpts,
   };
   // 分时图: crosshair 显示 HH:MM 格式时间
@@ -194,10 +471,10 @@ function renderKline(containerId, klineData, options = {}) {
 
   if (chartType === 'intraday') {
     // === 分时图：多段折线实现涨跌色 ===
-    const refPrice = options.refPrice || klineData[0]?.close || 0;
+    const refPrice = options.refPrice || safeData[0]?.close || 0;
 
     // 涨跌色分段
-    segmentSeriesList = createColorSegments(chart, klineData, timeValues, refPrice);
+    segmentSeriesList = createColorSegments(chart, safeData, timeValues, refPrice);
     mainSeries = segmentSeriesList[0]; // 第一个 series 用于价格线标注
 
     // 昨收参考线（灰色虚线）
@@ -211,7 +488,7 @@ function renderKline(containerId, klineData, options = {}) {
     });
 
     // 确保Y轴范围包含昨收价（当昨收在数据范围外时）
-    const prices = klineData.map(d => [d.open, d.high, d.low, d.close]).flat();
+    const prices = safeData.map(d => [d.open, d.high, d.low, d.close]).flat();
     const dataMin = Math.min(...prices);
     const dataMax = Math.max(...prices);
     if (refPrice < dataMin || refPrice > dataMax) {
@@ -232,7 +509,7 @@ function renderKline(containerId, klineData, options = {}) {
 
     // 成交量颜色也按涨跌分
     volumes.forEach((v, i) => {
-      v.color = klineData[i].close >= refPrice ? COLORS.volumeUp : COLORS.volumeDown;
+      v.color = safeData[i].close >= refPrice ? COLORS.volumeUp : COLORS.volumeDown;
     });
 
   } else if (chartType === 'line') {
@@ -243,8 +520,9 @@ function renderKline(containerId, klineData, options = {}) {
       crosshairMarkerVisible: true,
       crosshairMarkerRadius: 3,
     });
-    const lineData = klineData.map((d, i) => ({ time: timeValues[i], value: d.close }));
+    const lineData = safeData.map((d, i) => ({ time: timeValues[i], value: d.close }));
     mainSeries.setData(lineData);
+    container.__kline_render_meta.setDataSuccess = true;
   } else {
     // === 蜡烛图 ===
     mainSeries = chart.addCandlestickSeries({
@@ -253,6 +531,7 @@ function renderKline(containerId, klineData, options = {}) {
       wickUpColor: COLORS.up, wickDownColor: COLORS.down,
     });
     mainSeries.setData(candles);
+    container.__kline_render_meta.setDataSuccess = true;
   }
 
   // Volume histogram
@@ -261,11 +540,23 @@ function renderKline(containerId, klineData, options = {}) {
   });
   chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
   volumeSeries.setData(volumes);
+  container.__kline_render_meta = {
+    ...container.__kline_render_meta,
+    setDataSuccess: true,
+    renderCount: safeData.length,
+    chartType,
+    period,
+    firstTime: String(timeValues[0] || ''),
+    lastTime: String(timeValues[timeValues.length - 1] || ''),
+    source: options.source || '',
+    fallbackSource: options.fallbackSource || '',
+    quality: options.quality || null,
+  };
 
   // MACD（分时和五日不画）
   let macdSeries, deaSeries, histSeries;
   if (chartType === 'candlestick') {
-    const macdData = calcMACD(klineData, isIntraday);
+    const macdData = calcMACD(safeData, isIntraday);
     macdSeries = chart.addLineSeries({
       color: COLORS.macdDif, lineWidth: 1, priceScaleId: 'macd',
       lastValueVisible: false, priceLineVisible: false,
@@ -311,22 +602,25 @@ function renderKline(containerId, klineData, options = {}) {
 
   // Responsive
   const ro = new ResizeObserver(() => {
-    chart.applyOptions({ width: container.clientWidth, height: container.clientHeight || 500 });
+    const nextSize = chartContainerSize(container);
+    chart.applyOptions(nextSize);
   });
   ro.observe(container);
 
   container.__lwc_chart = chart;
+  container.__lwc_resize_observer = ro;
   chart.timeScale().fitContent();
 
   // 分时图/五日: 强制时间轴范围 = 09:30~15:00（完整交易时段）
-  if (isIntraday && klineData.length > 0) {
-    const firstDate = klineData[0].date; // "2026-05-22 09:31"
+  if (isIntraday && safeData.length > 0) {
+    const firstDate = safeData[0].date; // "2026-05-22 09:31"
     const dateStr = firstDate.split(' ')[0]; // "2026-05-22"
     const sessionStart = Math.floor(new Date(dateStr + 'T09:30').getTime() / 1000);
     const sessionEnd = Math.floor(new Date(dateStr + 'T15:00').getTime() / 1000);
     chart.timeScale().setVisibleRange({ from: sessionStart, to: sessionEnd });
   }
   const result = { chart, mainSeries, segmentSeriesList, volumeSeries, macdSeries, deaSeries, histSeries, chartType, _refPrice: options.refPrice };
+  scheduleKlineHealthCheck(container, containerId, klineData, options, chart);
   return result;
 }
 
@@ -345,8 +639,12 @@ function captureChart() {
 
 function updateKline(result, newData, period) {
   if (!result || !newData) return;
-  const isIntraday = isIntradayPeriod(period || 'day');
-  const timeValues = newData.map(d => parseTime(d.date, isIntraday));
+  const currentPeriod = period || 'day';
+  const isIntraday = isIntradayPeriod(currentPeriod);
+  const normalized = normalizeKlineData(newData, currentPeriod);
+  const safeData = normalized.rows;
+  if (!safeData.length) return;
+  const timeValues = safeData.map(d => d.time);
 
   if (result.chartType === 'intraday') {
     // 分时图更新：删除旧的分段 series，重新创建
@@ -355,31 +653,31 @@ function updateKline(result, newData, period) {
         try { result.chart.removeSeries(s); } catch(_) {}
       });
     }
-    const refPrice = result._refPrice || newData[0]?.close || 0;
-    result.segmentSeriesList = createColorSegments(result.chart, newData, timeValues, refPrice);
+    const refPrice = result._refPrice || safeData[0]?.close || 0;
+    result.segmentSeriesList = createColorSegments(result.chart, safeData, timeValues, refPrice);
     result.mainSeries = result.segmentSeriesList[0];
-    const volumes = newData.map((d, i) => ({
+    const volumes = safeData.map((d, i) => ({
       time: timeValues[i], value: d.volume,
       color: d.close >= refPrice ? COLORS.volumeUp : COLORS.volumeDown,
     }));
     result.volumeSeries.setData(volumes);
   } else if (result.chartType === 'line') {
-    const lineData = newData.map((d, i) => ({ time: timeValues[i], value: d.close }));
+    const lineData = safeData.map((d, i) => ({ time: timeValues[i], value: d.close }));
     result.mainSeries.setData(lineData);
-    const volumes = newData.map((d, i) => ({
+    const volumes = safeData.map((d, i) => ({
       time: timeValues[i], value: d.volume,
       color: d.close >= d.open ? COLORS.volumeUp : COLORS.volumeDown,
     }));
     result.volumeSeries.setData(volumes);
   } else {
-    const candles = newData.map((d, i) => ({ time: timeValues[i], open: d.open, high: d.high, low: d.low, close: d.close }));
+    const candles = safeData.map((d, i) => ({ time: timeValues[i], open: d.open, high: d.high, low: d.low, close: d.close }));
     result.mainSeries.setData(candles);
-    const volumes = newData.map((d, i) => ({
+    const volumes = safeData.map((d, i) => ({
       time: timeValues[i], value: d.volume,
       color: d.close >= d.open ? COLORS.volumeUp : COLORS.volumeDown,
     }));
     result.volumeSeries.setData(volumes);
-    const macd = calcMACD(newData, isIntraday);
+    const macd = calcMACD(safeData, isIntraday);
     if (result.macdSeries) result.macdSeries.setData(macd.dif);
     if (result.deaSeries) result.deaSeries.setData(macd.dea);
     if (result.histSeries) result.histSeries.setData(macd.histogram);

@@ -1881,6 +1881,35 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job["completed_count"], 1)
         self.assertEqual(job["current_code"], "")
 
+    async def test_get_research_job_auto_completes_when_all_items_are_terminal(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001", "000002"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='running',
+                    current_code='000002',
+                    runtime_json='{"finalize": {"state": "running", "started_at": "2026-06-03T00:00:00"}}'
+                WHERE job_id=?
+                """,
+                (created["job_id"],),
+            )
+            db.execute("UPDATE batch_job_items SET status='completed', report_id=101 WHERE code='000001'")
+            db.execute("UPDATE batch_job_items SET status='completed', report_id=102 WHERE code='000002'")
+            db.commit()
+
+        job = batch_report_service.get_research_job(created["job_id"])
+
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["completed_count"], 2)
+        self.assertEqual(job["running_count"], 0)
+        self.assertEqual(job["current_code"], "")
+        self.assertIsNotNone(job["completed_at"])
+
     async def test_resume_manual_completed_job_requeues_remaining_items(self):
         created = await batch_report_service.create_research_job(
             job_type="report_generation",

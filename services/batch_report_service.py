@@ -1666,7 +1666,44 @@ def _recount_job(job_id: str) -> dict[str, int]:
     return counts
 
 
-def get_research_job(job_id: str) -> dict[str, Any]:
+def _final_status_from_counts(counts: dict[str, int]) -> str:
+    if counts["failed_count"] and not counts["completed_count"] and not counts["skipped_count"]:
+        return "failed"
+    if counts["waiting_count"] and not counts["completed_count"] and not counts["skipped_count"]:
+        return "failed"
+    return "completed"
+
+
+def _auto_complete_if_all_items_finished(job_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT status FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+    if not row or row["status"] not in {"pending", "running"}:
+        return False
+    if _unfinished_item_count(job_id):
+        return False
+    counts = _recount_job(job_id)
+    final_status = _final_status_from_counts(counts)
+    _update_job(
+        job_id,
+        status=final_status,
+        completed_at=_now_expr(),
+        current_code="",
+        running_count=0,
+    )
+    _mark_finalize_completed(job_id, status=final_status)
+    log_job_event(
+        job_id,
+        "info",
+        "job_auto_completed",
+        "检测到全部子项已结束，自动完成批量任务",
+        {"status": final_status, "counts": counts},
+    )
+    return True
+
+
+def get_research_job(job_id: str, *, auto_complete: bool = True) -> dict[str, Any]:
+    if auto_complete:
+        _auto_complete_if_all_items_finished(job_id)
     with _connect() as conn:
         job = _row_to_dict(conn.execute("SELECT * FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone())
         if not job:
@@ -1700,6 +1737,17 @@ def list_research_jobs(limit: int = 50, status: str | None = None, job_type: str
             """,
             params,
         ).fetchall()
+    if any(_auto_complete_if_all_items_finished(row["job_id"]) for row in rows if row["status"] in {"pending", "running"}):
+        with _connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM batch_jobs
+                WHERE {' AND '.join(where)}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
     return {"count": len(rows), "jobs": [dict(row) for row in rows]}
 
 
@@ -2581,7 +2629,8 @@ async def _run_data_prefetch_item(item: dict[str, Any], payload: dict[str, Any])
     stock = batch_research.StockCandidate(item["code"], item.get("name") or item["code"], "默认", 0)
     if not payload.get("refresh_snapshots") and batch_research._has_complete_snapshot(DB_PATH, item["code"]):
         snapshot = batch_research._latest_snapshot(DB_PATH, item["code"])
-        _update_item_id(item["id"], status="skipped", snapshot_id=snapshot["id"] if snapshot else None, completed_at=_now_expr(), error="")
+        reason = f"已有完整七层快照 #{snapshot['id']}" if snapshot else "已有完整七层快照"
+        _update_item_id(item["id"], status="skipped", snapshot_id=snapshot["id"] if snapshot else None, completed_at=_now_expr(), error=reason)
         return
     _update_item_id(item["id"], status="running", started_at=_now_expr(), error="")
     snapshot = await batch_research.fetch_seven_layer_snapshot(stock, trade_date=payload.get("trade_date"))
@@ -2604,7 +2653,10 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
                 """,
                 (code,),
             ).fetchone()
-        _update_item_id(item["id"], status="skipped", report_id=row["id"] if row else None, completed_at=_now_expr(), error="")
+        days = int(payload.get("skip_recent_days") or 30)
+        suffix = f"，复用报告 #{row['id']}" if row else ""
+        reason = f"已有近期报告（{days}天内）{suffix}" if days > 0 else f"按任务规则跳过{suffix}"
+        _update_item_id(item["id"], status="skipped", report_id=row["id"] if row else None, completed_at=_now_expr(), error=reason)
         return
     snapshot = _snapshot_by_id(int(item["locked_snapshot_id"])) if item.get("locked_snapshot_id") else batch_research._latest_snapshot(DB_PATH, code)
     if not snapshot or not (snapshot.get("validation") or {}).get("ok"):
@@ -3156,7 +3208,7 @@ async def get_batch_analysis(job_id: str) -> dict[str, Any]:
 
 
 def _write_post_batch_artifacts(job_id: str, payload: dict[str, Any], counts: dict[str, int]) -> dict[str, Any]:
-    job = get_research_job(job_id)
+    job = get_research_job(job_id, auto_complete=False)
     output_dir = Path(payload.get("output_dir") or Path("data") / "batch_research")
     output_dir.mkdir(parents=True, exist_ok=True)
     failure_items = [item for item in job["items"] if item["status"] in FAILED_STATUSES or item["status"] == "waiting_snapshot"]
@@ -3316,7 +3368,7 @@ async def run_research_job(
                     break
                 await asyncio.gather(*(run_one(item) for item in runnable_items))
         counts = _recount_job(job_id)
-        refreshed = get_research_job(job_id)
+        refreshed = get_research_job(job_id, auto_complete=False)
         if refreshed["status"] == "quota_paused":
             return refreshed
         if refreshed["status"] == GUARD_PAUSED_STATUS:
@@ -3325,14 +3377,14 @@ async def run_research_job(
             return refreshed
         if _is_job_cancelled(job_id):
             _update_job(job_id, status="cancelled", completed_at=_now_expr(), current_code="")
-            return get_research_job(job_id)
+            return get_research_job(job_id, auto_complete=False)
         if _is_job_manual_completed(job_id):
-            return get_research_job(job_id)
+            return get_research_job(job_id, auto_complete=False)
         if job_type == "report_generation" and _unfinished_item_count(job_id):
             _update_job(job_id, status="running", current_code="")
-            return get_research_job(job_id)
+            return get_research_job(job_id, auto_complete=False)
         if job_type == "report_generation" and not _try_claim_finalize(job_id):
-            return get_research_job(job_id)
+            return get_research_job(job_id, auto_complete=False)
         final_status = "failed" if counts["failed_count"] and not counts["completed_count"] and not counts["skipped_count"] else "completed"
         if counts["waiting_count"] and not counts["completed_count"] and not counts["skipped_count"]:
             final_status = "failed"

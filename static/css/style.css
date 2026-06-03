@@ -7287,6 +7287,23 @@ body.dense-watch-mode .portfolio-container {
   vertical-align: top;
 }
 
+.worker-stale-fold {
+  border-top: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-card), var(--bg-hover) 18%);
+}
+
+.worker-stale-fold summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.worker-stale-fold .report-library-table {
+  border-top: 1px solid var(--border-light);
+}
+
 .report-library-table .library-action-row {
   display: flex;
   flex-wrap: wrap;
@@ -7460,6 +7477,34 @@ body.dense-watch-mode .portfolio-container {
   color: var(--text-muted);
 }
 
+.decision-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.decision-summary-grid > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.decision-summary-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.decision-summary-grid strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+}
+
 .batch-analysis-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
@@ -7520,6 +7565,22 @@ body.dense-watch-mode .portfolio-container {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
+}
+
+.preview-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.preview-nav span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .library-empty-state {

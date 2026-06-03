@@ -273,6 +273,32 @@ def adopt_position_plan(plan_id: str, *, db_path: Path | None = None, confirmed_
     return _row_to_plan(saved)
 
 
+def abandon_position_plan(plan_id: str, *, db_path: Path | None = None) -> dict[str, Any]:
+    """Mark a non-adopted plan as abandoned so it is no longer actionable."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "建仓建议不存在")
+        plan = _row_to_plan(row)
+        if plan.get("adoption_status") == "adopted":
+            raise HTTPException(400, "已采纳建仓计划不能放弃")
+        if plan.get("adoption_status") == "abandoned" or plan.get("status") == "abandoned":
+            return plan
+        conn.execute(
+            """
+            UPDATE position_plans
+            SET status = 'abandoned',
+                adoption_status = 'abandoned',
+                updated_at = datetime('now')
+            WHERE plan_id = ?
+            """,
+            (plan_id,),
+        )
+        conn.commit()
+        saved = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+    return _row_to_plan(saved)
+
+
 def list_position_plans(limit: int = 50, status: str | None = None, stage: str | None = None, *, db_path: Path | None = None) -> dict[str, Any]:
     where = ["1=1"]
     params: list[Any] = []

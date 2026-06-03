@@ -6,6 +6,9 @@ let currentKlinePeriod = 'm1';
 let currentKlineCount = 240;
 let currentChartType = 'candlestick';
 let currentPrevClose = null;  // 昨收价，用于分时图涨跌色参考
+let klineRequestSeq = 0;
+let currentKlineState = 'idle';
+let lastKlinePayload = null;
 let dragSrcEl = null;   // 当前拖拽的卡片
 let watchPoolCollapsed = localStorage.getItem('watch_pool_collapsed') !== 'false';
 let watchlistStocksCache = [];
@@ -16,6 +19,17 @@ let watchlistBatchMode = false;
 const watchlistLastReportSignals = new Set();
 const selectedWatchlistCodes = new Set();
 const WATCH_POOL_GROUP = '观察池';
+
+const KLINE_STATES = {
+  IDLE: 'idle',
+  LOADING: 'loading',
+  DATA_READY: 'data_ready',
+  RENDERING: 'rendering',
+  HEALTHY: 'healthy',
+  DEGRADED: 'degraded',
+  FAILED: 'failed',
+  STALE: 'stale',
+};
 
 const STOCK_SIGNAL_LABEL = {
   'STRONG_BUY': '强烈买入', 'BUY': '买入', 'OVERWEIGHT': '增持',
@@ -42,6 +56,91 @@ function panelState(message, iconCode = '') {
 function loadingState(message = '加载中...') {
   return panelState(message);
 }
+
+function setKlineState(state, detail = {}) {
+  currentKlineState = state;
+  const container = document.getElementById('klineChart');
+  if (container) {
+    container.dataset.klineState = state;
+    container.dataset.klineDetail = detail.message || detail.reason || '';
+  }
+  window._lastKlineLoadState = {
+    state,
+    detail,
+    code: currentCode,
+    period: currentKlinePeriod,
+    count: currentKlineCount,
+    chartType: currentChartType,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function collectKlineDiagnostics() {
+  const container = document.getElementById('klineChart');
+  const dateEl = document.getElementById('klineDataDate');
+  const quality = lastKlinePayload?.quality || {};
+  return {
+    code: currentCode,
+    period: currentKlinePeriod,
+    count: currentKlineCount,
+    chartType: currentChartType,
+    state: currentKlineState,
+    dataDate: dateEl?.textContent || '',
+    payload: {
+      source: lastKlinePayload?.source || '',
+      fallback_source: lastKlinePayload?.fallback_source || '',
+      count: lastKlinePayload?.count || 0,
+      quality_score: lastKlinePayload?.quality_score ?? quality.score ?? null,
+      issues: lastKlinePayload?.issues || quality.issues || [],
+      warnings: quality.warnings || [],
+      source_attempts: quality.source_attempts || [],
+    },
+    render: window._lastKlineDebug || {},
+    renderHistory: window._klineDebugHistory || [],
+    container: container ? {
+      state: container.dataset.klineState || '',
+      width: Math.round(container.getBoundingClientRect().width),
+      height: Math.round(container.getBoundingClientRect().height),
+      canvasCount: container.querySelectorAll('canvas').length,
+      meta: container.__kline_render_meta || {},
+    } : {},
+    theme: {
+      name: document.body?.getAttribute('data-theme') || '',
+      chartBg: getComputedStyle(document.body).getPropertyValue('--chart-bg').trim(),
+      chartGrid: getComputedStyle(document.body).getPropertyValue('--chart-grid').trim(),
+      chartText: getComputedStyle(document.body).getPropertyValue('--chart-text').trim(),
+    },
+    exportedAt: new Date().toISOString(),
+  };
+}
+
+function exportKlineDiagnostics() {
+  const diagnostics = collectKlineDiagnostics();
+  const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const code = diagnostics.code || 'unknown';
+  const period = diagnostics.period || 'kline';
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `kline-diagnostics-${code}-${period}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+window.collectKlineDiagnostics = collectKlineDiagnostics;
+window.exportKlineDiagnostics = exportKlineDiagnostics;
+
+document.addEventListener('kline-health', event => {
+  if (event.target?.id !== 'klineChart') return;
+  const status = event.detail?.status || '';
+  if (status === 'healthy') {
+    if (currentKlineState === KLINE_STATES.RENDERING) setKlineState(KLINE_STATES.HEALTHY, event.detail);
+  } else if (status === 'recovering' || status === 'fallback_line') {
+    setKlineState(KLINE_STATES.DEGRADED, event.detail);
+  } else if (status === 'failed') {
+    setKlineState(KLINE_STATES.FAILED, event.detail);
+  }
+});
 
 function stockMoveBadge(changePct) {
   if (changePct == null) return '';
@@ -103,22 +202,38 @@ function initKlineTabs() {
 
 async function reloadKline() {
   if (!currentCode) return;
+  const requestSeq = ++klineRequestSeq;
+  const code = currentCode;
+  const period = currentKlinePeriod;
+  const count = currentKlineCount;
+  const chartType = currentChartType;
+  const prevClose = currentPrevClose;
+  const isStale = () => requestSeq !== klineRequestSeq || code !== currentCode || period !== currentKlinePeriod || count !== currentKlineCount || chartType !== currentChartType;
   const container = document.getElementById('klineChart');
   const dateEl = document.getElementById('klineDataDate');
   if (dateEl) dateEl.textContent = '';
+  if (!container) return;
+  setKlineState(KLINE_STATES.LOADING, { code, period, count, chartType });
   container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>加载中...</p></div>';
   try {
-    const data = await API.get(`/api/kline/${currentCode}?period=${currentKlinePeriod}&count=${currentKlineCount}`);
+    const data = await API.get(`/api/kline/${code}?period=${period}&count=${count}`);
+    if (isStale()) {
+      setKlineState(KLINE_STATES.STALE, { code, period });
+      return;
+    }
+    lastKlinePayload = data;
     const klines = data?.klines || [];
     if (typeof renderKline === 'function' && klines.length > 0) {
+      setKlineState(KLINE_STATES.DATA_READY, { rows: klines.length, quality: data?.quality });
       // 分时图：显示数据日期
-      if (dateEl && isIntradayPeriod(currentKlinePeriod) && klines[0]?.date) {
+      if (dateEl && isIntradayPeriod(period) && klines[0]?.date) {
         const d = klines[0].date.split(' ')[0];
         dateEl.textContent = d;
       }
       let chartOptions = {};
       try {
-        const paramsData = await API.get(`/api/strategy/${currentCode}/params`);
+        const paramsData = await API.get(`/api/strategy/${code}/params`);
+        if (isStale()) return;
         const params = paramsData?.data || {};
         if (params.buy_prices) {
           const buyPrices = typeof params.buy_prices === 'string' ? JSON.parse(params.buy_prices) : params.buy_prices;
@@ -127,18 +242,47 @@ async function reloadKline() {
       } catch (_) {}
       try {
         const wlData = await API.get('/api/watchlist');
-        const stock = (wlData?.stocks || []).find(s => s.code === currentCode);
+        if (isStale()) return;
+        const stock = (wlData?.stocks || []).find(s => s.code === code);
         if (stock) {
           chartOptions.stop_loss_price = stock.stop_loss_price;
           chartOptions.target_sell_price = stock.target_sell_price;
         }
       } catch (_) {}
-      renderKline('klineChart', klines, { ...chartOptions, period: currentKlinePeriod, chartType: currentChartType, refPrice: currentPrevClose });
+      if (isStale()) return;
+      setKlineState(KLINE_STATES.RENDERING, { rows: klines.length });
+      const result = renderKline('klineChart', klines, {
+        ...chartOptions,
+        period,
+        chartType,
+        refPrice: prevClose,
+        source: data?.source || data?.data_source || data?.provider || '',
+        fallbackSource: data?.fallback_source || data?.fallbackSource || '',
+        warning: data?.warning || data?.message || '',
+        quality: data?.quality,
+      });
+      const qualityScore = data?.quality_score ?? data?.quality?.score ?? 100;
+      setKlineState((result && !data?.fallback_source && qualityScore >= 90) ? KLINE_STATES.HEALTHY : KLINE_STATES.DEGRADED, {
+        rows: klines.length,
+        source: data?.source || '',
+        fallbackSource: data?.fallback_source || '',
+        qualityScore,
+      });
+    } else if (typeof renderKline !== 'function') {
+      if (!isStale()) {
+        setKlineState(KLINE_STATES.FAILED, { reason: 'renderer_missing' });
+        container.innerHTML = panelState('图表组件加载失败，请刷新页面');
+      }
     } else {
-      container.innerHTML = panelState('暂无K线数据');
+      if (!isStale()) {
+        setKlineState(KLINE_STATES.FAILED, { reason: 'empty_rows', quality: data?.quality });
+        container.innerHTML = panelState('暂无K线数据');
+      }
     }
   } catch (e) {
+    if (isStale()) return;
     console.error('reloadKline error:', e);
+    setKlineState(KLINE_STATES.FAILED, { reason: 'request_error', message: e?.message || String(e) });
     container.innerHTML = panelState('K线加载失败');
   }
 }
@@ -412,6 +556,78 @@ function selectVisibleWatchlistStocks() {
   updateWatchlistBatchBar();
 }
 
+function watchlistExportFilterSummary() {
+  const marketLabel = {
+    tradable: '可交易',
+    all: '全部',
+    main: '主板',
+    gem: '创业板',
+    star: '科创板',
+    bse: '北交所',
+  }[watchlistMarketFilter] || watchlistMarketFilter || '全部';
+  const signals = watchlistLastReportSignals.size
+    ? Array.from(watchlistLastReportSignals).map(signal => STOCK_SIGNAL_LABEL[signal] || signal).join('、')
+    : '全部';
+  return [
+    `搜索：${watchlistFilterText || '无'}`,
+    `交易市场：${marketLabel}`,
+    `上次报告信号：${signals}`,
+  ];
+}
+
+function formatWatchlistNumber(value, suffix = '') {
+  if (value == null || value === '') return '--';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '--';
+  return `${n.toFixed(3)}${suffix}`;
+}
+
+function watchlistMarkdownRow(stock) {
+  const market = stockMarketInfo(stock.code);
+  const signal = lastReportSignal(stock);
+  return [
+    stock.name || stock.code,
+    stock.code,
+    isWatchPoolStock(stock) ? '观察池' : '自选股',
+    market.label,
+    STOCK_SIGNAL_LABEL[signal] || signal,
+    formatWatchlistNumber(stock.price),
+    formatWatchlistNumber(stock.change_pct, '%'),
+    stock.last_report_created_at || '--',
+  ];
+}
+
+function exportWatchlistMarkdown() {
+  const stocks = visibleWatchlistStocks();
+  if (!stocks.length) {
+    showToast('当前筛选下没有可导出的自选股', 'warning');
+    return;
+  }
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const rows = stocks.map(stock => `| ${watchlistMarkdownRow(stock).map(value => String(value ?? '').replace(/\|/g, '\\|')).join(' | ')} |`);
+  const content = [
+    '# 自选股导出',
+    '',
+    `- 导出时间：${stamp}`,
+    `- 数量：${stocks.length}`,
+    ...watchlistExportFilterSummary().map(item => `- ${item}`),
+    '',
+    '| 名称 | 代码 | 分组 | 市场 | 上次报告信号 | 现价 | 涨跌幅 | 上次报告时间 |',
+    '|---|---|---|---|---|---:|---:|---|',
+    ...rows,
+    '',
+  ].join('\n');
+  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `watchlist-export-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`已导出 ${stocks.length} 只自选股`, 'success');
+}
+
 async function batchDeleteWatchlistStocks() {
   const codes = getSelectedWatchlistCodes();
   if (!codes.length) return;
@@ -437,6 +653,8 @@ async function batchDeleteWatchlistStocks() {
     showToast('批量删除失败: ' + e.message, 'error');
   }
 }
+
+window.exportWatchlistMarkdown = exportWatchlistMarkdown;
 
 function toggleWatchPool(event) {
   event?.stopPropagation();
