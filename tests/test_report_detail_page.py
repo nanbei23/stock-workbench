@@ -15,6 +15,7 @@ class ReportDetailPageTests(unittest.TestCase):
         self.assertIn('data-report-id="123"', resp.text)
         self.assertIn("AI报告详情", resp.text)
         self.assertIn("七层分析明细", resp.text)
+        self.assertIn("投资风格画像", resp.text)
         self.assertIn("/static/js/report-detail.js", resp.text)
 
 

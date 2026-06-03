@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Any
 
-from services import settings_service
+from services import investment_profile_service, settings_service
 
 router = APIRouter(tags=["设置"])
 
@@ -57,6 +57,12 @@ async def get_all_settings():
 async def bulk_update_settings(data: SettingsBulkUpdate):
     """批量更新设置"""
     return settings_service.bulk_update_settings(data.settings)
+
+
+@router.post("/settings/investment-profile/infer")
+async def infer_investment_profile():
+    """根据本地交易历史推断投资风格草稿，不直接写入设置。"""
+    return investment_profile_service.infer_profile_from_trade_history()
 
 
 # ── 重置默认 ──

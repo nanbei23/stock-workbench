@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import models.database as database
 from api.settings_api import router as settings_router
 from repositories import settings_repository
-from services import market_permission_service, settings_service
+from services import investment_profile_service, market_permission_service, settings_service
 
 
 class SettingsServiceTests(unittest.TestCase):
@@ -44,6 +44,75 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(result["trade_market_gem"], "true")
         self.assertEqual(result["trade_market_star"], "true")
         self.assertEqual(result["trade_market_bse"], "true")
+
+    def test_investment_profile_defaults_are_available(self):
+        result = settings_service.get_all_settings()
+
+        self.assertEqual(result["investment_style_preset"], "balanced")
+        self.assertEqual(result["investment_max_single_position_pct"], "15")
+        self.assertEqual(result["investment_min_cash_pct"], "5")
+        self.assertEqual(result["investment_allow_left_side"], "false")
+        self.assertIn("右侧确认", result["investment_entry_preference"])
+
+    def test_investment_profile_context_includes_version_and_execution_contract(self):
+        profile = investment_profile_service.investment_profile_snapshot({
+            "investment_style_preset": "aggressive",
+            "investment_max_single_position_pct": "40",
+            "investment_entry_preference": "右侧突破",
+            "investment_exit_discipline": "破位退出",
+        })
+
+        self.assertEqual(profile["version"], "investment-profile-v2")
+        self.assertIn("风格匹配度", profile["context"])
+        self.assertIn("试仓条件", profile["context"])
+        self.assertIn("加仓条件", profile["context"])
+        self.assertIn("放弃条件", profile["context"])
+        self.assertIn("style_match", profile["output_contract"])
+
+    def test_infer_investment_profile_from_trade_history_prefers_aggressive_when_concentrated(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                """
+                INSERT INTO trades
+                    (code, name, direction, price, shares, amount, trade_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("000001", "平安银行", "buy", 10, 1000, 10000, "2026-01-01 09:30:00"),
+                    ("000001", "平安银行", "sell", 12, 1000, 12000, "2026-01-03 09:30:00"),
+                    ("300502", "新易盛", "buy", 40, 3000, 120000, "2026-01-04 09:30:00"),
+                    ("300502", "新易盛", "sell", 45, 1000, 45000, "2026-01-05 09:30:00"),
+                ],
+            )
+            db.commit()
+
+        inferred = investment_profile_service.infer_profile_from_trade_history(self.db_path)
+
+        self.assertEqual(inferred["suggested_settings"]["investment_style_preset"], "aggressive")
+        self.assertEqual(inferred["metrics"]["trade_count"], 4)
+        self.assertGreaterEqual(float(inferred["suggested_settings"]["investment_max_single_position_pct"]), 30)
+        self.assertIn("交易历史推断", inferred["summary"])
+
+    def test_style_match_assessment_falls_back_to_profile_constraints(self):
+        profile = investment_profile_service.investment_profile_snapshot({
+            "investment_style_preset": "aggressive",
+            "investment_allow_left_side": "false",
+        })
+
+        assessment = investment_profile_service.style_match_assessment(
+            {
+                "signal": "BUY",
+                "confidence": 0.72,
+                "risk_score": 45,
+                "final_decision": "放量突破后买入，跌破支撑止损。",
+                "trader_plan": "试仓后加仓。",
+            },
+            profile,
+        )
+
+        self.assertEqual(assessment["profile_version"], "investment-profile-v2")
+        self.assertGreaterEqual(assessment["match_score"], 70)
+        self.assertIn("进攻型", assessment["style_label"])
 
     def test_market_permission_classifier_and_filter_respect_settings(self):
         settings = {

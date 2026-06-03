@@ -248,7 +248,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("decision-summary-grid", js)
         self.assertIn("trader_plan: '交易计划'", js)
         self.assertIn("setHtml('reportDecisionBody', renderFinalDecision", js)
-        self.assertIn("report-detail.js?v=2.9.15-report-fixes", html)
+        self.assertIn("report-detail.js?v=2.9.16-investment-profile", html)
 
     def test_report_groups_support_batch_select_and_full_markdown_export(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -429,6 +429,30 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("reportMarketFilters", reports_html)
         self.assertIn("setReportMarketFilter", reports_js)
         self.assertIn("filterByTradingMarket", reports_js)
+
+    def test_investment_profile_settings_and_report_detail_are_exposed(self):
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+        settings_js = SETTINGS_JS.read_text(encoding="utf-8")
+        report_detail_html = (ROOT / "templates/report_detail.html").read_text(encoding="utf-8")
+        report_detail_js = (ROOT / "static/js/report-detail.js").read_text(encoding="utf-8")
+
+        self.assertIn("投资风格画像", settings_html)
+        self.assertIn("investment_style_preset", settings_html)
+        self.assertIn("investment_max_single_position_pct", settings_html)
+        self.assertIn("investment_allow_left_side", settings_html)
+        self.assertIn("套用当前风格模板", settings_html)
+        self.assertIn("从交易历史推断", settings_html)
+        self.assertIn("maybeApplyInvestmentStylePreset", settings_html)
+        self.assertIn("inferInvestmentProfileFromTrades", settings_js)
+        self.assertIn("INVESTMENT_STYLE_PRESETS", settings_js)
+        self.assertIn("applyInvestmentStylePreset", settings_js)
+        self.assertIn("markInvestmentProfileEdited", settings_js)
+        self.assertIn("/settings/investment-profile/infer", settings_js)
+        self.assertIn("reportInvestmentProfileBody", report_detail_html)
+        self.assertIn("renderInvestmentProfile", report_detail_js)
+        self.assertIn("风格匹配度", report_detail_js)
+        self.assertIn("style_match", report_detail_js)
+        self.assertIn("raw.investment_profile", report_detail_js)
 
     def test_position_plans_have_decision_market_snapshot_columns(self):
         with tempfile.TemporaryDirectory() as tmp:

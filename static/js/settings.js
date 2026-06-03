@@ -7,6 +7,147 @@ let currentSettings = {};
 let modelProviderCache = [];
 let workerPoolRows = [];
 
+const INVESTMENT_STYLE_PRESETS = {
+    conservative: {
+        investment_max_single_position_pct: '10',
+        investment_min_cash_pct: '20',
+        investment_max_drawdown_pct: '6',
+        investment_entry_preference: '右侧确认优先，要求趋势站稳、成交量温和放大、基本面和资金面同时确认。',
+        investment_exit_discipline: '跌破关键支撑或基本面恶化时减仓，资金持续流出时退出；达到目标位分批止盈。',
+        investment_allow_left_side: false,
+        investment_allow_high_volatility: 'forbid',
+        investment_custom_notes: '优先本金保护，不因短线波动追高。'
+    },
+    balanced: {
+        investment_max_single_position_pct: '15',
+        investment_min_cash_pct: '5',
+        investment_max_drawdown_pct: '12',
+        investment_entry_preference: '右侧确认、趋势突破、资金流入、题材催化，机会成立时分批建仓。',
+        investment_exit_discipline: '逻辑失效、跌破关键位、硬止损、分批止盈。',
+        investment_allow_left_side: false,
+        investment_allow_high_volatility: 'cautious',
+        investment_custom_notes: '平衡胜率和赔率，机会成立时分批建仓。'
+    },
+    aggressive: {
+        investment_max_single_position_pct: '40',
+        investment_min_cash_pct: '3',
+        investment_max_drawdown_pct: '15',
+        investment_entry_preference: '右侧突破优先，要求放量站上关键位、资金连续流入、板块或题材共振；回踩不破关键支撑后转强可加仓。',
+        investment_exit_discipline: '跌破买入触发位或关键支撑先减仓，放量破位清仓；题材逻辑失效、资金连续流出或报告核心假设被证伪时退出；上涨后按压力位和目标位分批止盈。',
+        investment_allow_left_side: false,
+        investment_allow_high_volatility: 'allow',
+        investment_custom_notes: '偏进攻，但不做无确认左侧交易；机会成立时允许集中到核心标的，必须保留明确止损和失效条件。'
+    },
+    speculative: {
+        investment_max_single_position_pct: '50',
+        investment_min_cash_pct: '0',
+        investment_max_drawdown_pct: '20',
+        investment_entry_preference: '强题材启动、放量突破、资金快速流入、板块情绪升温；允许小仓位左侧试错。',
+        investment_exit_discipline: '触发硬止损立即退出，放量破位清仓；情绪退潮、资金转流出或题材证伪时退出。',
+        investment_allow_left_side: true,
+        investment_allow_high_volatility: 'allow',
+        investment_custom_notes: '高波动策略必须小仓位试错、严格止损。'
+    },
+    custom: {}
+};
+
+function investmentField(key) {
+    return document.getElementById('set-' + key);
+}
+
+function markInvestmentProfileEdited(el) {
+    if (el) {
+        el.dataset.userEdited = 'true';
+        el.dataset.profileGenerated = '';
+    }
+}
+
+function shouldApplyInvestmentPresetValue(el, overwriteLoaded) {
+    if (!el) return false;
+    if (el.dataset.userEdited === 'true') return false;
+    if (overwriteLoaded || el.dataset.profileGenerated === 'true') return true;
+    if (el.type === 'checkbox') return false;
+    return !String(el.value || '').trim();
+}
+
+function setInvestmentPresetValue(key, value, overwriteLoaded) {
+    const el = investmentField(key);
+    if (!shouldApplyInvestmentPresetValue(el, overwriteLoaded)) return;
+    if (el.type === 'checkbox') {
+        el.checked = value === true || value === 'true';
+    } else {
+        el.value = value ?? '';
+    }
+    el.dataset.profileGenerated = 'true';
+}
+
+function applyInvestmentPresetValues(overwriteLoaded = false, clearManualEdits = false) {
+    const presetKey = investmentField('investment_style_preset')?.value || 'aggressive';
+    const preset = INVESTMENT_STYLE_PRESETS[presetKey] || {};
+    Object.entries(preset).forEach(([key, value]) => {
+        const el = investmentField(key);
+        if (!el) return;
+        if (clearManualEdits) {
+            el.dataset.userEdited = '';
+        }
+        setInvestmentPresetValue(key, value, overwriteLoaded);
+    });
+}
+
+function applyInvestmentStylePreset(force = false) {
+    applyInvestmentPresetValues(force, force);
+    if (force) {
+        toast('success', '已套用当前风格模板');
+    }
+}
+
+function maybeApplyInvestmentStylePreset(overwriteLoaded = false) {
+    applyInvestmentPresetValues(Boolean(overwriteLoaded), false);
+}
+
+function applyInvestmentProfileSuggestion(settings) {
+    Object.entries(settings || {}).forEach(([key, value]) => {
+        const el = investmentField(key);
+        if (!el) return;
+        el.dataset.userEdited = '';
+        if (el.type === 'checkbox') {
+            el.checked = value === true || value === 'true';
+        } else {
+            el.value = value ?? '';
+        }
+        el.dataset.profileGenerated = 'true';
+    });
+}
+
+async function inferInvestmentProfileFromTrades() {
+    const btn = document.getElementById('inferInvestmentProfileBtn');
+    const result = document.getElementById('investmentProfileInferResult');
+    if (btn) btn.disabled = true;
+    if (result) {
+        result.className = 'test-result';
+        result.textContent = '推断中...';
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/settings/investment-profile/infer`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || data.message || '推断失败');
+        applyInvestmentProfileSuggestion(data.suggested_settings || {});
+        if (result) {
+            result.className = 'test-result ok';
+            result.textContent = `已生成草稿，保存后生效：${data.summary || ''}`;
+        }
+        toast('success', '已根据交易历史生成投资风格草稿，请确认后保存');
+    } catch (e) {
+        if (result) {
+            result.className = 'test-result error';
+            result.textContent = `失败 ${e.message}`;
+        }
+        toast('error', '推断失败: ' + e.message);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 // ── Tab切换 ──
 function switchSettingsTab(btn, section) {
     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
@@ -100,6 +241,7 @@ function applySettings(s) {
             el.value = value;
         }
     }
+    maybeApplyInvestmentStylePreset(false);
 }
 
 // ── 收集设置 ──

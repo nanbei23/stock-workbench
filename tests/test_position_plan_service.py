@@ -15,6 +15,9 @@ class PositionPlanServiceTests(unittest.TestCase):
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(SCHEMA)
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('cash_balance_default', '253375.680')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('investment_style_preset', 'aggressive')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('investment_max_single_position_pct', '40')")
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('investment_allow_left_side', 'false')")
             conn.execute(
                 """
                 INSERT INTO portfolio
@@ -71,6 +74,8 @@ class PositionPlanServiceTests(unittest.TestCase):
         self.assertEqual(saved["context_strategy"], "candidate_screening")
         self.assertEqual(saved["model_strategy"], "dual")
         self.assertEqual(saved["source_report_ids"], [10, 11])
+        self.assertEqual(saved["model_config_json"]["investment_profile"]["preset"], "aggressive")
+        self.assertIn("进攻型", saved["model_config_json"]["investment_profile"]["context"])
         self.assertEqual(saved["cash_snapshot_json"]["total_cash"], 253375.68)
         self.assertEqual(saved["portfolio_snapshot_json"]["position_count"], 1)
 

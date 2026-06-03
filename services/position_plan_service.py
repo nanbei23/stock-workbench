@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from config import DB_PATH
+from services.investment_profile_service import investment_profile_from_db
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -145,6 +146,7 @@ def persist_position_plan(
         "model_profile": payload.get("model_profile") or "",
         "review_model_profile": payload.get("review_model_profile") or "",
         "resolved_models": plan.get("model_config") or {},
+        "investment_profile": plan.get("investment_profile") or investment_profile_from_db(db_path),
     }
     output_markdown = plan.get("output_markdown") or ""
     if not output_markdown and outputs.get("markdown"):

@@ -113,6 +113,30 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("report_date,notice_date,security_name,item_field,item_value", rendered)
         self.assertIn("2026-03-31 00:00:00,2026-04-28 00:00:00,均胜电子,MONETARYFUNDS,9002435463.1", rendered)
 
+    def test_snapshot_prompt_includes_investment_profile_context(self):
+        snapshot_row = {
+            "id": 7,
+            "snapshot": {"market": {"quote": {"price": 10.0}}},
+            "validation": {"ok": True, "missing_layers": [], "empty_layers": [], "layer_errors": {}},
+        }
+        stock = batch_research.RankedCandidate("000001", "平安银行", "默认", 1, 0.0, {"price": 10.0})
+        state = batch_research._initial_snapshot_agent_state(stock, snapshot_row)
+
+        prompt = batch_research._snapshot_tradingagents_state_prompt(
+            stock,
+            snapshot_row,
+            role_key="portfolio_manager",
+            role_name="Portfolio Manager",
+            role_goal="最终裁决",
+            output_key="final_trade_decision",
+            state=state,
+            investment_profile_context="用户投资风格：进攻型。允许右侧突破后提高仓位，单票上限 40%。",
+        )
+
+        self.assertIn("用户投资风格：进攻型", prompt)
+        self.assertIn("单票上限 40%", prompt)
+        self.assertIn("最终裁决必须输出 JSON 对象", prompt)
+
     def test_validate_snapshot_flags_semantic_financial_failures(self):
         snapshot = {
             "market": {"quote": {"ok": True, "payload": {"price": 10}}},

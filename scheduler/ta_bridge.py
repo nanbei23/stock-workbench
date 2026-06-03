@@ -32,6 +32,7 @@ from scheduler.ai_engine import (
 from scheduler.gbrain_client import get_context, write_analysis_report
 from scheduler.data_snapshot import DataSnapshotCallback
 from scheduler.fact_checker import check_all_stages
+from services.investment_profile_service import investment_profile_from_db, style_match_assessment
 from tasks import AnalysisTask, _tasks
 
 
@@ -234,6 +235,7 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
         config["deep_think_temperature"] = 0.1
         config["quick_think_temperature"] = 0.1
         # 在所有分析师prompt前追加数据准确性约束
+        investment_profile = investment_profile_from_db()
         accuracy_prefix = (
             "【强制规则】你必须严格基于提供的实际数据进行分析。"
             "禁止编造任何数字（价格、PE、ROE、涨跌幅、成交量等）。"
@@ -242,6 +244,7 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
             "禁止在推理过程中凭空生成历史价格、对比数据或假设数值。"
             f"【标的信息】本报告分析的股票是 {task.code}（{task.name}），"
             f"报告中必须使用正确的公司名称「{task.name}」，禁止使用其他公司名称。"
+            f"\n\n{investment_profile['context']}"
         )
         current_system = config.get("system_prompt", "")
         config["system_prompt"] = accuracy_prefix + "\n\n" + current_system
@@ -697,6 +700,14 @@ def _save_report_to_db(task: AnalysisTask):
 
         depth = getattr(task, 'depth', 'standard') or 'standard'
 
+        raw_state = dict(task.result or {})
+        try:
+            investment_profile = investment_profile_from_db()
+            raw_state["investment_profile"] = investment_profile
+            raw_state["style_match"] = style_match_assessment(result, investment_profile)
+        except Exception as e:
+            logger.debug("读取投资风格画像失败: %s", e)
+
         db.execute("""
             INSERT INTO analysis_reports
             (task_id, code, signal, confidence, risk_score,
@@ -723,7 +734,7 @@ def _save_report_to_db(task: AnalysisTask):
             stages.get("risk", {}).get("report"),
             stages.get("pm", {}).get("report"),
             stages.get("trader", {}).get("report"),
-            json.dumps(task.result, ensure_ascii=False) if task.result else None,
+            json.dumps(raw_state, ensure_ascii=False) if raw_state else None,
             task.elapsed,
             snapshot_str,
             fact_check_json,

@@ -31,6 +31,7 @@
   <nav class="position-plan-anchor-nav">
     <a href="#reportDecision">最终决策</a>
     <a href="#reportTradePlan">交易计划</a>
+    <a href="#reportInvestmentProfile">投资风格</a>
     <a href="#reportDebate">多空辩论</a>
     <a href="#reportRisk">风险复核</a>
     <a href="#reportLayers">七层分析明细</a>
@@ -51,6 +52,14 @@
       <span>用于人工复核，不会自动下单</span>
     </div>
     <div class="position-plan-prose" id="reportTradePlanBody">正在加载...</div>
+  </section>
+
+  <section class="position-plan-section" id="reportInvestmentProfile">
+    <div class="section-heading">
+      <h2>投资风格画像</h2>
+      <span>报告生成时采用的用户偏好</span>
+    </div>
+    <div class="position-plan-prose" id="reportInvestmentProfileBody">正在加载...</div>
   </section>
 
   <section class="position-plan-section" id="reportDebate">
@@ -107,5 +116,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/report-detail.js?v=2.9.15-report-fixes"></script>
+<script src="/static/js/report-detail.js?v=2.9.16-investment-profile"></script>
 {% endblock %}

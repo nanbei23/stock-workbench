@@ -847,6 +847,111 @@
   <!-- 风控 -->
   <div class="settings-section" id="section-risk">
     <div class="setting-group">
+      <div class="setting-group-title">投资风格画像</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">风格档位</div>
+          <div class="setting-hint">影响单股报告、批量报告和建仓建议的结论倾向</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-investment_style_preset" onchange="maybeApplyInvestmentStylePreset(true)">
+            <option value="conservative">稳健型</option>
+            <option value="balanced">均衡型</option>
+            <option value="aggressive">进攻型</option>
+            <option value="speculative">激进型</option>
+            <option value="custom">自定义</option>
+          </select>
+          <button type="button" class="btn-secondary" onclick="applyInvestmentStylePreset(true)" style="padding: 6px 12px;">套用当前风格模板</button>
+          <button type="button" class="btn-secondary" id="inferInvestmentProfileBtn" onclick="inferInvestmentProfileFromTrades()" style="padding: 6px 12px;">从交易历史推断</button>
+          <span class="test-result" id="investmentProfileInferResult"></span>
+        </div>
+      </div>
+      <input type="hidden" id="set-investment_profile_inferred_summary">
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">投资风格单票上限</div>
+          <div class="setting-hint">建仓建议按此限制单只股票建议仓位，报告也会使用该约束</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_max_single_position_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">投资风格现金保留</div>
+          <div class="setting-hint">进攻型可以更低，但建仓建议会明确现金缓冲</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_min_cash_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">可接受最大回撤</div>
+          <div class="setting-hint">报告会据此判断机会是否适合当前风格</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_max_drawdown_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">买入触发偏好</div>
+          <div class="setting-hint">例如右侧确认、趋势突破、资金流入、题材催化</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-investment_entry_preference" style="width: 420px;" oninput="markInvestmentProfileEdited(this)">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">卖出纪律</div>
+          <div class="setting-hint">例如逻辑失效、跌破关键位、硬止损、分批止盈</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-investment_exit_discipline" style="width: 420px;" oninput="markInvestmentProfileEdited(this)">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">允许左侧交易</div>
+          <div class="setting-hint">关闭时，报告会优先等待右侧确认或触发条件</div>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="set-investment_allow_left_side" onchange="markInvestmentProfileEdited(this)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">高波动题材</div>
+          <div class="setting-hint">控制题材股、强波动标的的参与倾向</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-investment_allow_high_volatility" onchange="markInvestmentProfileEdited(this)">
+            <option value="allow">允许</option>
+            <option value="cautious">谨慎</option>
+            <option value="forbid">禁止</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">自定义说明</div>
+          <div class="setting-hint">补充你自己的交易体系、偏好或禁忌</div>
+        </div>
+        <div class="setting-control">
+          <textarea class="setting-input" id="set-investment_custom_notes" rows="4" style="width: 420px; resize: vertical;" placeholder="例如：偏好右侧突破，首仓不超过三成；题材强度不够时只观察。" oninput="markInvestmentProfileEdited(this)"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="setting-group">
       <div class="setting-group-title">全局风控阈值</div>
       <div class="setting-row">
         <div>
@@ -1036,5 +1141,5 @@
   </div>
 </div>
 
-<script src="/static/js/settings.js?v=2.9.2"></script>
+<script src="/static/js/settings.js?v=2.9.18-investment-profile-v2"></script>
 {% endblock %}

@@ -34,6 +34,7 @@ from data.kline import get_kline  # noqa: E402
 from data.quote import get_batch_quotes  # noqa: E402
 from models.database import SCHEMA  # noqa: E402
 from scheduler.ai_engine import extract_confidence, extract_risk_score, extract_signal, extract_target_price  # noqa: E402
+from services.investment_profile_service import investment_profile_from_db, style_match_assessment  # noqa: E402
 from services import ai_analysis_service, ai_task_service  # noqa: E402
 
 
@@ -542,7 +543,7 @@ def _has_complete_snapshot(db_path: Path, code: str) -> bool:
     return bool(row and (row.get("validation") or {}).get("ok"))
 
 
-def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any]) -> str:
+def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any], investment_profile_context: str = "") -> str:
     snapshot = snapshot_row["snapshot"]
     validation = snapshot_row["validation"]
     payload = {
@@ -580,6 +581,8 @@ def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any]) -> st
 - risk_score 为 0 到 100，数值越高风险越高。
 - 如果快照完整性校验不是 ok，必须降低置信度并在 final_decision 中说明缺失项。
 - 不允许出现“根据最新网络数据”等未提供来源的话。
+
+{investment_profile_context}
 
 七层数据快照：
 {_clip_text(payload, 28000)}
@@ -648,6 +651,7 @@ def _snapshot_debate_prompt(
     role_name: str,
     role_goal: str,
     previous_discussion: list[dict[str, str]],
+    investment_profile_context: str = "",
 ) -> str:
     previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
     final_instruction = ""
@@ -679,6 +683,8 @@ def _snapshot_debate_prompt(
 - 如果快照完整性校验不是 ok，必须降低置信度并说明缺失项。
 - 输出要具体、可审计，区分事实、推断和不确定性。
 {final_instruction}
+
+{investment_profile_context}
 
 已有角色讨论：
 {previous}
@@ -769,6 +775,7 @@ def _snapshot_tradingagents_prompt(
     role_goal: str,
     output_key: str,
     previous_discussion: list[dict[str, str]],
+    investment_profile_context: str = "",
 ) -> str:
     snapshot = snapshot_row["snapshot"]
     validation = snapshot_row["validation"]
@@ -808,6 +815,8 @@ def _snapshot_tradingagents_prompt(
 - 如果快照不完整或数据不足，必须降低置信度并明确说明。
 - 报告需可审计，区分事实、推断和不确定性。
 {final_instruction}
+
+{investment_profile_context}
 
 标的：{stock.name} {stock.code}
 快照ID：{snapshot_row["id"]}
@@ -887,6 +896,7 @@ def _snapshot_tradingagents_state_prompt(
     role_goal: str,
     output_key: str,
     state: dict[str, Any],
+    investment_profile_context: str = "",
 ) -> str:
     snapshot = snapshot_row["snapshot"]
     validation = snapshot_row["validation"]
@@ -900,6 +910,8 @@ def _snapshot_tradingagents_state_prompt(
 - 快照完整性校验：{json.dumps(validation, ensure_ascii=False)}
 - 如果快照不完整或数据不足，必须降低置信度并明确说明。
 - 报告需可审计，区分事实、推断和不确定性。
+
+{investment_profile_context}
 
 标的：{stock.name} {stock.code}
 快照ID：{snapshot_row["id"]}
@@ -1041,6 +1053,7 @@ async def _run_snapshot_tradingagents_graph(
     timeout_seconds: int,
     debate_rounds: int = 1,
     risk_rounds: int = 1,
+    investment_profile_context: str = "",
 ) -> dict[str, Any]:
     state = _initial_snapshot_agent_state(stock, snapshot_row)
     role_discussion: list[dict[str, str]] = []
@@ -1055,6 +1068,7 @@ async def _run_snapshot_tradingagents_graph(
             role_goal=role_goal,
             output_key=output_key,
             state=state,
+            investment_profile_context=investment_profile_context,
         )
         content = await _call_snapshot_tradingagents_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
         role_discussion.append({"role_key": role_key, "role_name": role_name, "output_key": output_key, "content": content})
@@ -1199,6 +1213,7 @@ def _save_snapshot_report(
     report_source: str = "snapshot_report",
     depth: str = "snapshot",
     model_mode: str = "snapshot_report",
+    investment_profile: dict[str, Any] | None = None,
 ) -> int:
     normalized = _normalise_snapshot_result(result)
     raw_state = {
@@ -1214,6 +1229,9 @@ def _save_snapshot_report(
         "snapshot_created_at": snapshot_row["created_at"],
         "model": model,
     }
+    if investment_profile:
+        raw_state["investment_profile"] = investment_profile
+        raw_state["style_match"] = style_match_assessment(normalized, investment_profile)
     if result.get("role_discussion"):
         raw_state["role_discussion"] = result["role_discussion"]
     if result.get("snapshot_tradingagents_state"):
@@ -1566,6 +1584,8 @@ async def submit_snapshot_reports(
     timeout_seconds: int,
 ) -> list[RankedCandidate]:
     config = _snapshot_llm_config(db_path, model_tier=model_tier)
+    investment_profile = investment_profile_from_db(db_path)
+    investment_profile_context = investment_profile["context"]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def worker(item: RankedCandidate) -> None:
@@ -1583,7 +1603,7 @@ async def submit_snapshot_reports(
             started = datetime.now()
             try:
                 result = await _call_snapshot_llm(
-                    _snapshot_prompt(item, snapshot_row),
+                    _snapshot_prompt(item, snapshot_row, investment_profile_context),
                     config,
                     timeout_seconds=timeout_seconds,
                 )
@@ -1595,6 +1615,7 @@ async def submit_snapshot_reports(
                     run_id=run_id,
                     duration_seconds=(datetime.now() - started).total_seconds(),
                     model=config.get("model", ""),
+                    investment_profile=investment_profile,
                 )
                 item.task_id = f"report:{report_id}"
                 item.status = "completed"
@@ -1617,6 +1638,8 @@ async def submit_snapshot_debate_reports(
     timeout_seconds: int,
 ) -> list[RankedCandidate]:
     config = _snapshot_llm_config(db_path, model_tier=model_tier)
+    investment_profile = investment_profile_from_db(db_path)
+    investment_profile_context = investment_profile["context"]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def worker(item: RankedCandidate) -> None:
@@ -1642,6 +1665,7 @@ async def submit_snapshot_debate_reports(
                         role_name=role_name,
                         role_goal=role_goal,
                         previous_discussion=role_discussion,
+                        investment_profile_context=investment_profile_context,
                     )
                     content = await _call_snapshot_debate_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
                     role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
@@ -1656,6 +1680,7 @@ async def submit_snapshot_debate_reports(
                     report_source="snapshot_debate",
                     depth="snapshot_debate",
                     model_mode="snapshot_debate",
+                    investment_profile=investment_profile,
                 )
                 item.task_id = f"report:{report_id}"
                 item.status = "completed"
@@ -1678,6 +1703,8 @@ async def submit_snapshot_tradingagents_reports(
     timeout_seconds: int,
 ) -> list[RankedCandidate]:
     config = _snapshot_llm_config(db_path, model_tier=model_tier)
+    investment_profile = investment_profile_from_db(db_path)
+    investment_profile_context = investment_profile["context"]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def worker(item: RankedCandidate) -> None:
@@ -1699,6 +1726,7 @@ async def submit_snapshot_tradingagents_reports(
                     snapshot_row,
                     config,
                     timeout_seconds=timeout_seconds,
+                    investment_profile_context=investment_profile_context,
                 )
                 report_id = _save_snapshot_report(
                     db_path,
@@ -1711,6 +1739,7 @@ async def submit_snapshot_tradingagents_reports(
                     report_source="snapshot_tradingagents",
                     depth="snapshot_tradingagents",
                     model_mode="snapshot_tradingagents",
+                    investment_profile=investment_profile,
                 )
                 item.task_id = f"report:{report_id}"
                 item.status = "completed"
@@ -1924,6 +1953,8 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
         reports = _latest_reports(conn, [stock.code for stock in stocks])
 
     items = [_report_to_plan_item(stock, reports.get(stock.code)) for stock in stocks]
+    investment_profile = investment_profile_from_db(db_path)
+    max_single_pct = _safe_num(investment_profile.get("max_single_position_pct"), 15.0) or 15.0
     _attach_current_positions(items, portfolio_context)
     available = [item for item in items if item.get("report_id")]
     missing = [item for item in items if item["action"] == "missing_report"]
@@ -1939,7 +1970,7 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
     )
 
     score_sum = sum(max(item["score"], 1.0) for item in buyable) or 1.0
-    max_single_amount = cash * 0.15 if cash > 0 else 0.0
+    max_single_amount = cash * max(0.0, max_single_pct) / 100 if cash > 0 else 0.0
     for item in buyable:
         raw_amount = cash * max(item["score"], 1.0) / score_sum
         item["suggested_amount"] = round(min(raw_amount, max_single_amount), 3)
@@ -1961,10 +1992,11 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
         "missing_reports": len(missing),
         "top_n": top_n,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "investment_profile": investment_profile,
         "recommendations": recommendations,
         "notes": [
             "建仓建议只基于已入库 AI 分析报告生成，不自动写入交易流水或条件单。",
-            "单票建议金额默认不超过可用现金 15%，用于空仓后的分批建仓参考。",
+            f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，用于空仓后的分批建仓参考。",
         ],
     }
 
@@ -2317,6 +2349,7 @@ def _position_discussion_prompt(
     market_context: dict[str, Any] | None,
     portfolio_context: dict[str, Any] | None,
     previous_discussion: list[dict[str, str]],
+    investment_profile_context: str = "",
 ) -> str:
     previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
     final_instruction = ""
@@ -2345,6 +2378,8 @@ def _position_discussion_prompt(
 - 建仓建议必须结合当前仓位和可用资金，输出调仓建议；不能把当前组合当作空仓，也不能默认全仓买入。
 - 如果实时行情/K线与旧报告判断冲突，优先把它作为执行时点校准：可降低仓位、延后建仓或改为观察，但不能改写旧报告事实。
 {final_instruction}
+
+{investment_profile_context}
 
 已有角色讨论：
 {previous}
@@ -2501,6 +2536,8 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         )
         for row in rows
     ]
+    investment_profile = investment_profile_from_db(db_path)
+    max_single_pct = _safe_num(investment_profile.get("max_single_position_pct"), 15.0) or 15.0
     _attach_current_positions(items, portfolio_context)
     buyable = sorted(
         [item for item in items if item.get("action") == "buy"],
@@ -2513,7 +2550,7 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         reverse=True,
     )
     score_sum = sum(max(item["score"], 1.0) for item in buyable) or 1.0
-    max_single_amount = cash * 0.15 if cash > 0 else 0.0
+    max_single_amount = cash * max(0.0, max_single_pct) / 100 if cash > 0 else 0.0
     for item in buyable:
         raw_amount = cash * max(item["score"], 1.0) / score_sum
         item["suggested_amount"] = round(min(raw_amount, max_single_amount), 3)
@@ -2530,10 +2567,11 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         "missing_reports": 0,
         "top_n": top_n,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "investment_profile": investment_profile,
         "recommendations": buyable + watchers,
         "notes": [
             "建仓建议只基于已勾选并入库的 AI 分析报告生成，不自动写入交易流水或条件单。",
-            "单票建议金额默认不超过可用现金 15%，用于空仓后的分批建仓参考。",
+            f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，用于空仓后的分批建仓参考。",
         ],
     }
 
@@ -2557,6 +2595,8 @@ async def build_multi_role_position_plan(
     if not rows:
         raise RuntimeError("缺少可用于多角色建仓建议的完整报告")
     deterministic_plan = _build_position_plan_from_report_rows(db_path, rows, top_n=top_n)
+    investment_profile = investment_profile_from_db(db_path)
+    deterministic_plan["investment_profile"] = investment_profile
     raw_text_chars = sum(len(_report_context_block(row)) for row in rows)
     resolved_context_strategy = _choose_context_strategy(len(rows), raw_text_chars, context_strategy)
     report_context = _position_report_context(rows, deterministic_plan, resolved_context_strategy, top_n=top_n)
@@ -2588,6 +2628,7 @@ async def build_multi_role_position_plan(
             market_context=decision_market_context,
             portfolio_context=deterministic_plan.get("portfolio_context") or {},
             previous_discussion=role_discussion,
+            investment_profile_context=investment_profile["context"],
         )
         content = await _call_position_plan_role_llm(role, prompt, role_config, timeout_seconds=timeout_seconds)
         role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
@@ -2601,6 +2642,7 @@ async def build_multi_role_position_plan(
         "raw_text_chars": raw_text_chars,
         "model_strategy": model_strategy,
         "model_config": role_model_trace,
+        "investment_profile": investment_profile,
         "decision_market_snapshot": decision_market_context or {},
         "available_reports": len(rows),
         "missing_reports": 0,

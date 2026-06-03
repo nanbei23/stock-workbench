@@ -1410,6 +1410,7 @@ async def _run_snapshot_tradingagents_graph_with_steps(
     item_id = int(item["id"])
     job_id = payload.get("job_id") or item["job_id"]
     state = batch_research._initial_snapshot_agent_state(ranked, snapshot)
+    investment_profile_context = batch_research.investment_profile_from_db(DB_PATH)["context"]
     role_discussion: list[dict[str, str]] = []
     completed = _completed_steps(item_id)
     max_attempts = int(payload.get("role_retry_attempts") or 3)
@@ -1471,6 +1472,7 @@ async def _run_snapshot_tradingagents_graph_with_steps(
             role_goal=role_goal,
             output_key=output_key,
             state=state,
+            investment_profile_context=investment_profile_context,
         )
         role_started_at = datetime.now()
         try:
@@ -2670,6 +2672,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
     report_depth = payload.get("analysis_depth") or "standard"
     report_model_mode = payload.get("model_mode") or "balanced"
     timeout_seconds = int(payload.get("timeout_seconds") or 3600)
+    investment_profile = batch_research.investment_profile_from_db(DB_PATH)
     started = datetime.now()
     if analysis_mode == "snapshot-tradingagents":
         result = await _run_snapshot_tradingagents_graph_with_steps(
@@ -2685,6 +2688,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
         model_mode = report_model_mode
     elif analysis_mode == "snapshot-debate":
         role_discussion = []
+        investment_profile_context = investment_profile["context"]
         for role_key, role_name, role_goal in batch_research.SNAPSHOT_DEBATE_ROLES:
             role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal}
             prompt = batch_research._snapshot_debate_prompt(
@@ -2693,6 +2697,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
                 role_name=role_name,
                 role_goal=role_goal,
                 previous_discussion=role_discussion,
+                investment_profile_context=investment_profile_context,
             )
             content = await batch_research._call_snapshot_debate_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
             role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
@@ -2702,7 +2707,11 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
         model_mode = report_model_mode
     else:
         result = await batch_research._call_snapshot_llm(
-            batch_research._snapshot_prompt(ranked, snapshot),
+            batch_research._snapshot_prompt(
+                ranked,
+                snapshot,
+                investment_profile["context"],
+            ),
             config,
             timeout_seconds=timeout_seconds,
         )
@@ -2720,6 +2729,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
         report_source=report_source,
         depth=depth,
         model_mode=model_mode,
+        investment_profile=investment_profile,
     )
     _update_item_id(item["id"], status="completed", report_id=report_id, completed_at=_now_expr(), error="")
     log_job_event(payload.get("job_id") or item["job_id"], "info", "item_completed", f"{code} 报告生成完成", {"report_id": report_id}, item_id=item["id"])

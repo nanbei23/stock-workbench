@@ -185,6 +185,42 @@
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
+  function renderInvestmentProfile(report) {
+    const raw = report.raw_state || report.state || report.result || {};
+    const profile = raw.investment_profile || report.investment_profile || {};
+    const styleMatch = raw.style_match || report.style_match || {};
+    if (!profile || !Object.keys(profile).length) {
+      return '<div class="library-empty-state">旧报告未记录投资风格画像。重新生成报告后会自动保存。</div>';
+    }
+    const rows = [
+      ['画像版本', profile.version || '--'],
+      ['风格档位', `${profile.label || '--'}${profile.preset ? `（${profile.preset}）` : ''}`],
+      ['单票仓位上限', profile.max_single_position_pct ? `${profile.max_single_position_pct}%` : '--'],
+      ['最低现金保留', profile.min_cash_pct ? `${profile.min_cash_pct}%` : '--'],
+      ['可接受最大回撤', profile.max_drawdown_pct ? `${profile.max_drawdown_pct}%` : '--'],
+      ['买入触发偏好', profile.entry_preference || '--'],
+      ['卖出纪律', profile.exit_discipline || '--'],
+      ['允许左侧交易', profile.allow_left_side ? '允许' : '不允许'],
+      ['高波动题材', profile.allow_high_volatility || '--'],
+      ['风格匹配度', styleMatch.match_score != null ? `${styleMatch.match_score}/100` : '--'],
+      ['匹配原因', styleMatch.match_reason || '--'],
+    ];
+    return `
+      <div class="structured-report investment-profile-report">
+        ${rows.map(([key, val]) => `
+          <div class="structured-row">
+            <div class="structured-key">${escapeHtml(key)}</div>
+            <div class="structured-value">${escapeHtml(val)}</div>
+          </div>
+        `).join('')}
+      </div>
+      ${styleMatch && Object.keys(styleMatch).length ? `<h3>风格执行要求</h3>${structuredValue(styleMatch)}` : ''}
+      ${profile.custom_notes ? `<h3>自定义说明</h3><p>${escapeHtml(profile.custom_notes)}</p>` : ''}
+      ${profile.inferred_summary ? `<h3>交易历史推断</h3><p>${escapeHtml(profile.inferred_summary)}</p>` : ''}
+      ${profile.context ? `<h3>完整上下文</h3><pre>${escapeHtml(profile.context)}</pre>` : ''}
+    `;
+  }
+
   function renderMeta(report) {
     const signal = report.signal || report.result?.signal || 'HOLD';
     const targetPrice = report.target_price || report.result?.target_price;
@@ -264,6 +300,7 @@
       renderMeta(report);
       setHtml('reportDecisionBody', renderFinalDecision(report));
       setHtml('reportTradePlanBody', markdown(report.trader_plan || '暂无交易计划'));
+      setHtml('reportInvestmentProfileBody', renderInvestmentProfile(report));
       setHtml('reportInvestmentDebateBody', markdown(report.investment_debate || '暂无多空辩论'));
       setHtml('reportRiskBody', markdown(report.risk_debate || '暂无风险复核'));
       renderLayers(report);
@@ -275,6 +312,7 @@
       setText('reportDetailSubtitle', err.message);
       setHtml('reportDecisionBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportTradePlanBody', `<div class="library-empty-state">${message}</div>`);
+      setHtml('reportInvestmentProfileBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportInvestmentDebateBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportRiskBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportLayerList', `<div class="library-empty-state">${message}</div>`);

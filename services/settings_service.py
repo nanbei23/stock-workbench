@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from config import DB_PATH
 from models.database import MIGRATIONS
 from repositories import settings_repository as repo
+from services.investment_profile_service import DEFAULT_INVESTMENT_SETTINGS
 
 
 DEFAULTS = {
@@ -74,6 +75,7 @@ DEFAULTS = {
         },
         ensure_ascii=False,
     ),
+    **DEFAULT_INVESTMENT_SETTINGS,
 }
 
 
