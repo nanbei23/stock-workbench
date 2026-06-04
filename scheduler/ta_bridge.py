@@ -33,6 +33,7 @@ from scheduler.gbrain_client import get_context, write_analysis_report
 from scheduler.data_snapshot import DataSnapshotCallback
 from scheduler.fact_checker import check_all_stages
 from services.investment_profile_service import investment_profile_from_db, style_match_assessment
+from services import holding_context_service
 from tasks import AnalysisTask, _tasks
 
 
@@ -58,6 +59,86 @@ class TokenTrackerCallback(BaseCallbackHandler):
         }
 
 logger = logging.getLogger(__name__)
+
+
+CANONICAL_SIGNALS = {"STRONG_BUY", "BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL", "STRONG_SELL"}
+SIGNAL_ALIASES = {
+    "ACCUMULATE": "OVERWEIGHT",
+    "ADD": "OVERWEIGHT",
+    "WATCH": "HOLD",
+    "NEUTRAL": "HOLD",
+    "REDUCE": "UNDERWEIGHT",
+    "UNDER_WEIGHT": "UNDERWEIGHT",
+    "STRONG SELL": "STRONG_SELL",
+    "STRONG BUY": "STRONG_BUY",
+}
+
+
+def _canonical_signal(value: Any) -> str:
+    signal = str(value or "").upper().strip()
+    signal = SIGNAL_ALIASES.get(signal, signal)
+    return signal if signal in CANONICAL_SIGNALS else ""
+
+
+def _position_action(account_signal: str, holding_context: dict[str, Any] | None, explicit_action: Any = None) -> str:
+    action = str(explicit_action or "").lower().strip()
+    aliases = {
+        "buy": "buy",
+        "add": "add",
+        "overweight": "add",
+        "hold": "hold",
+        "watch": "watch",
+        "reduce": "reduce",
+        "underweight": "reduce",
+        "sell": "sell",
+        "avoid": "avoid",
+        "take_profit": "take_profit",
+        "take-profit": "take_profit",
+    }
+    if action in aliases:
+        return aliases[action]
+    is_holding = bool((holding_context or {}).get("is_holding"))
+    if account_signal in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
+        return "hold" if is_holding else "buy"
+    if account_signal == "UNDERWEIGHT":
+        return "reduce" if is_holding else "avoid"
+    if account_signal in {"SELL", "STRONG_SELL"}:
+        return "sell" if is_holding else "avoid"
+    return "hold" if is_holding else "watch"
+
+
+def apply_holding_context_to_result(result: dict[str, Any], holding_context: dict[str, Any] | None) -> dict[str, Any]:
+    """Split objective research signal from account-aware action signal."""
+    normalized = dict(result or {})
+    research_signal = _canonical_signal(normalized.get("research_signal")) or _canonical_signal(normalized.get("signal")) or "HOLD"
+    explicit_account_signal = _canonical_signal(normalized.get("account_signal"))
+    action = _position_action(
+        explicit_account_signal or research_signal,
+        holding_context,
+        normalized.get("position_action") or normalized.get("action"),
+    )
+    if explicit_account_signal:
+        account_signal = explicit_account_signal
+    elif action in {"add", "buy"}:
+        account_signal = "OVERWEIGHT" if (holding_context or {}).get("is_holding") else research_signal
+    elif action in {"reduce", "take_profit"}:
+        account_signal = "UNDERWEIGHT"
+    elif action in {"sell", "avoid"}:
+        account_signal = "SELL" if (holding_context or {}).get("is_holding") else "HOLD"
+    elif (holding_context or {}).get("is_holding") and research_signal in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
+        account_signal = "HOLD"
+    else:
+        account_signal = research_signal
+    normalized.update(
+        {
+            "research_signal": research_signal,
+            "account_signal": account_signal,
+            "signal": account_signal,
+            "position_action": action,
+            "holding_context": holding_context or {},
+        }
+    )
+    return normalized
 
 
 def friendly_analysis_error(exc: Exception) -> str:
@@ -151,14 +232,16 @@ def _load_stage_progress(task_id: str) -> dict:
 async def run_with_snapshot(task_id: str, code: str, trade_date: str,
                            resume_from_task_id: str = None):
     """在线程中运行分析（数据快照由 DataSnapshotCallback 在分析过程中自动捕获）。"""
+    holding_context = await holding_context_service.build_holding_context(code)
     await asyncio.to_thread(
         run_trading_agents, task_id, code, trade_date,
-        resume_from_task_id,
+        resume_from_task_id, holding_context,
     )
 
 
 def run_trading_agents(task_id: str, code: str, trade_date: str,
-                       resume_from_task_id: str = None):
+                       resume_from_task_id: str = None,
+                       holding_context: dict[str, Any] | None = None):
     """TradingAgents-astock分析（在线程池中运行）"""
     task = _tasks[task_id]
     task.status = "running"
@@ -245,6 +328,9 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
             f"【标的信息】本报告分析的股票是 {task.code}（{task.name}），"
             f"报告中必须使用正确的公司名称「{task.name}」，禁止使用其他公司名称。"
             f"\n\n{investment_profile['context']}"
+            f"\n\n{(holding_context or {}).get('prompt_context') or ''}"
+            "\n【信号分层要求】研究信号只判断股票本身；账户信号必须结合真实持仓、成本、仓位、浮盈亏和可用资金。"
+            "最终结果如能输出 JSON，必须包含 research_signal、account_signal、position_action、action_reason。"
         )
         current_system = config.get("system_prompt", "")
         config["system_prompt"] = accuracy_prefix + "\n\n" + current_system
@@ -450,6 +536,7 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
             "stages": {sid: s["report"] for sid, s in task.stages.items() if s["report"]},
             "gbrain_context": gbrain_context,
         }
+        task.result = apply_holding_context_to_result(task.result, holding_context)
 
         # ★ 事实账本：用旁观者模型逐阶段核对数据快照 vs 报告
         try:

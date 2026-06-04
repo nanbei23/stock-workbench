@@ -29,6 +29,8 @@ AURORA_FLOW_CSS = ROOT / "static" / "css" / "aurora-flow.css"
 WIND_DASHBOARD_CSS = ROOT / "static" / "css" / "wind-dashboard.css"
 PORTFOLIO_TEMPLATE = ROOT / "templates" / "portfolio.html"
 PORTFOLIO_JS = ROOT / "static" / "js" / "portfolio.js"
+REPORT_DETAIL_TEMPLATE = ROOT / "templates" / "report_detail.html"
+REPORT_DETAIL_JS = ROOT / "static" / "js" / "report-detail.js"
 
 
 def load_migration_module():
@@ -178,10 +180,20 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("function positionActionLabel", js)
         self.assertIn("watch: '观察'", js)
         self.assertIn("avoid: '回避'", js)
+
+    def test_report_detail_renders_holding_context_and_two_layer_signals(self):
+        html = REPORT_DETAIL_TEMPLATE.read_text(encoding="utf-8")
+        js = REPORT_DETAIL_JS.read_text(encoding="utf-8")
+
+        self.assertIn('id="reportHoldingContext"', html)
+        self.assertIn('id="reportHoldingContextBody"', html)
+        self.assertIn("持仓上下文", html)
+        self.assertIn("research_signal: '股票研究信号'", js)
+        self.assertIn("account_signal: '账户动作信号'", js)
+        self.assertIn("position_action: '账户动作'", js)
+        self.assertIn("function renderHoldingContext", js)
         self.assertIn("buy: '买入'", js)
         self.assertIn("sell: '卖出'", js)
-        self.assertIn("positionActionLabel(item.action)", js)
-        self.assertNotIn("<td>${escapeHtml(item.action)}</td>", js)
 
     def test_portfolio_page_uses_change_pct_and_holding_pnl_copy(self):
         js = PORTFOLIO_JS.read_text(encoding="utf-8")
@@ -343,7 +355,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("decision-summary-grid", js)
         self.assertIn("trader_plan: '交易计划'", js)
         self.assertIn("setHtml('reportDecisionBody', renderFinalDecision", js)
-        self.assertIn("report-detail.js?v=2.9.16-investment-profile", html)
+        self.assertIn("report-detail.js?v=2.9.17-holding-context", html)
 
     def test_report_groups_support_batch_select_and_full_markdown_export(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")

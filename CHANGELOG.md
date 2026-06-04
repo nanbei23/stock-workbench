@@ -4,6 +4,26 @@
 
 No unreleased changes.
 
+## 2.9.12 - 2026-06-04
+
+### Added
+
+- Added per-stock holding context for single-stock AI reports, including real shares, cost, current price, market value, holding PnL, position weight, available cash, previous signal, signal tracking, and AI shadow position context.
+- Added two-layer report signals: `research_signal` for objective stock research and `account_signal` for account-aware execution advice.
+- Added a report detail "持仓上下文" section showing the account basis behind the final action signal.
+
+### Changed
+
+- Changed snapshot report, snapshot debate, snapshot TradingAgents, and native TradingAgents report generation prompts to include holding context when available.
+- Changed `analysis_reports.signal` to remain the account-action signal while preserving the original research signal in `raw_state`.
+- Changed shadow portfolio sync to continue using the account-action signal, so a held stock with research `BUY` but account `HOLD` will not create an automatic shadow buy order.
+- Updated release metadata, package metadata, frontend cache versions, and README version to `2.9.12`.
+
+### Deployment
+
+- No database migration is required from `2.9.11`.
+- Existing reports will not have holding context. Regenerate reports for current holdings to populate `research_signal`, `account_signal`, `position_action`, and `holding_context`.
+
 ## 2.9.10 - 2026-06-04
 
 ### Added

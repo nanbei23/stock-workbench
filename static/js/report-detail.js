@@ -68,6 +68,11 @@
   function humanizeKey(key) {
     const label = {
       signal: '信号',
+      research_signal: '股票研究信号',
+      account_signal: '账户动作信号',
+      position_action: '账户动作',
+      action_reason: '动作理由',
+      holding_context: '持仓上下文',
       trader_plan: '交易计划',
       bull_case: '多头观点',
       bear_case: '空头观点',
@@ -114,21 +119,48 @@
     return `<span>${escapeHtml(raw)}</span>`;
   }
 
+  function actionLabel(action) {
+    const labels = {
+      buy: '买入',
+      add: '加仓',
+      hold: '持有',
+      reduce: '减仓',
+      sell: '卖出',
+      watch: '观察',
+      avoid: '回避',
+      take_profit: '止盈',
+    };
+    return labels[String(action || '').toLowerCase()] || action || '--';
+  }
+
+  function reportRaw(report) {
+    for (const raw of [report.raw_state, report.state, report.result]) {
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    }
+    return {};
+  }
+
   function renderFinalDecision(report) {
     const source = report.final_decision || report.result?.final_decision || report.result?.reasoning || report.result || '';
     const parsed = typeof source === 'string' ? parseJsonish(source) : source;
     const result = report.result && typeof report.result === 'object' ? report.result : {};
-    const signal = parsed?.signal || report.signal || result.signal || '';
+    const raw = reportRaw(report);
+    const researchSignal = raw.research_signal || parsed?.research_signal || result.research_signal || '';
+    const accountSignal = raw.account_signal || parsed?.account_signal || parsed?.signal || report.signal || result.signal || '';
+    const signal = accountSignal || researchSignal || '';
+    const action = raw.position_action || parsed?.position_action || result.position_action || '';
     const confidence = parsed?.confidence ?? report.confidence ?? result.confidence;
     const riskScore = parsed?.risk_score ?? report.risk_score ?? result.risk_score;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const finalText = parsed.final_decision || parsed.reasoning || parsed.summary || parsed.reason || '';
       const planText = parsed.trader_plan || parsed.trade_plan || parsed.plan || '';
       const rest = { ...parsed };
-      ['signal', 'confidence', 'risk_score', 'final_decision', 'reasoning', 'summary', 'reason', 'trader_plan', 'trade_plan', 'plan'].forEach(key => delete rest[key]);
+      ['signal', 'research_signal', 'account_signal', 'position_action', 'action_reason', 'confidence', 'risk_score', 'final_decision', 'reasoning', 'summary', 'reason', 'trader_plan', 'trade_plan', 'plan'].forEach(key => delete rest[key]);
       return `
         <div class="decision-summary-grid">
-          <div><span>信号</span><strong>${escapeHtml(SIG_LABEL[signal] || signal || '--')}</strong></div>
+          <div><span>股票研究信号</span><strong>${escapeHtml(SIG_LABEL[researchSignal] || researchSignal || '--')}</strong></div>
+          <div><span>账户动作信号</span><strong>${escapeHtml(SIG_LABEL[signal] || signal || '--')}</strong></div>
+          <div><span>账户动作</span><strong>${escapeHtml(actionLabel(action))}</strong></div>
           <div><span>置信度</span><strong>${escapeHtml(formatPct(confidence))}</strong></div>
           <div><span>风险评分</span><strong>${escapeHtml(formatScore(riskScore))}</strong></div>
         </div>
@@ -139,7 +171,9 @@
     }
     return `
       <div class="decision-summary-grid">
-        <div><span>信号</span><strong>${escapeHtml(SIG_LABEL[signal] || signal || '--')}</strong></div>
+        <div><span>股票研究信号</span><strong>${escapeHtml(SIG_LABEL[researchSignal] || researchSignal || '--')}</strong></div>
+        <div><span>账户动作信号</span><strong>${escapeHtml(SIG_LABEL[signal] || signal || '--')}</strong></div>
+        <div><span>账户动作</span><strong>${escapeHtml(actionLabel(action))}</strong></div>
         <div><span>置信度</span><strong>${escapeHtml(formatPct(confidence))}</strong></div>
         <div><span>风险评分</span><strong>${escapeHtml(formatScore(riskScore))}</strong></div>
       </div>
@@ -186,7 +220,7 @@
   }
 
   function renderInvestmentProfile(report) {
-    const raw = report.raw_state || report.state || report.result || {};
+    const raw = reportRaw(report);
     const profile = raw.investment_profile || report.investment_profile || {};
     const styleMatch = raw.style_match || report.style_match || {};
     if (!profile || !Object.keys(profile).length) {
@@ -222,10 +256,15 @@
   }
 
   function renderMeta(report) {
-    const signal = report.signal || report.result?.signal || 'HOLD';
+    const raw = reportRaw(report);
+    const signal = raw.account_signal || report.signal || report.result?.signal || 'HOLD';
+    const researchSignal = raw.research_signal || report.result?.research_signal || '';
+    const action = raw.position_action || report.result?.position_action || '';
     const targetPrice = report.target_price || report.result?.target_price;
     const rows = [
-      [SIG_LABEL[signal] || signal, '信号'],
+      [SIG_LABEL[researchSignal] || researchSignal || '--', '股票研究信号'],
+      [SIG_LABEL[signal] || signal, '账户动作信号'],
+      [actionLabel(action), '账户动作'],
       [formatPct(report.confidence || report.result?.confidence), '置信度'],
       [formatScore(report.risk_score || report.result?.risk_score), '风险'],
       [formatPrice(targetPrice), '目标价'],
@@ -234,6 +273,40 @@
     ];
     setHtml('reportMetaGrid', rows.map(([strong, label]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(strong)}</strong></div>`).join(''));
     setText('reportDecisionMeta', `报告 #${Number(report.id || reportId())}`);
+  }
+
+  function renderHoldingContext(report) {
+    const raw = reportRaw(report);
+    const ctx = raw.holding_context || report.holding_context || {};
+    const researchSignal = raw.research_signal || report.result?.research_signal || '--';
+    const accountSignal = raw.account_signal || report.signal || report.result?.signal || '--';
+    const rows = [
+      ['是否持仓', ctx.is_holding ? '已持仓' : '未持仓'],
+      ['持仓数量', ctx.shares != null ? Number(ctx.shares).toFixed(3) : '--'],
+      ['成本价', ctx.avg_cost != null ? formatPrice(ctx.avg_cost) : '--'],
+      ['当前价', ctx.current_price != null ? formatPrice(ctx.current_price) : '--'],
+      ['持仓市值', ctx.market_value != null ? `¥${Number(ctx.market_value).toFixed(3)}` : '--'],
+      ['持仓盈亏', ctx.holding_pnl != null ? `¥${Number(ctx.holding_pnl).toFixed(3)}` : '--'],
+      ['持仓盈亏%', ctx.holding_pnl_pct != null ? `${Number(ctx.holding_pnl_pct).toFixed(3)}%` : '--'],
+      ['仓位占比', ctx.position_pct_of_assets != null ? `${Number(ctx.position_pct_of_assets).toFixed(3)}%` : '--'],
+      ['可用资金', ctx.cash != null ? `¥${Number(ctx.cash).toFixed(3)}` : '--'],
+      ['上次账户信号', ctx.last_report?.signal ? (SIG_LABEL[ctx.last_report.signal] || ctx.last_report.signal) : '--'],
+      ['股票研究信号', SIG_LABEL[researchSignal] || researchSignal],
+      ['账户动作信号', SIG_LABEL[accountSignal] || accountSignal],
+      ['账户动作', actionLabel(raw.position_action || report.result?.position_action)],
+      ['动作理由', raw.action_reason || report.result?.action_reason || '--'],
+    ];
+    if (!ctx || !Object.keys(ctx).length) {
+      return '<div class="library-empty-state">旧报告未记录持仓上下文。重新生成报告后会自动保存。</div>';
+    }
+    return `<div class="structured-report holding-context-report">
+      ${rows.map(([key, val]) => `
+        <div class="structured-row">
+          <div class="structured-key">${escapeHtml(key)}</div>
+          <div class="structured-value">${escapeHtml(val)}</div>
+        </div>
+      `).join('')}
+    </div>`;
   }
 
   function renderLayers(report) {
@@ -300,6 +373,7 @@
       renderMeta(report);
       setHtml('reportDecisionBody', renderFinalDecision(report));
       setHtml('reportTradePlanBody', markdown(report.trader_plan || '暂无交易计划'));
+      setHtml('reportHoldingContextBody', renderHoldingContext(report));
       setHtml('reportInvestmentProfileBody', renderInvestmentProfile(report));
       setHtml('reportInvestmentDebateBody', markdown(report.investment_debate || '暂无多空辩论'));
       setHtml('reportRiskBody', markdown(report.risk_debate || '暂无风险复核'));
@@ -312,6 +386,7 @@
       setText('reportDetailSubtitle', err.message);
       setHtml('reportDecisionBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportTradePlanBody', `<div class="library-empty-state">${message}</div>`);
+      setHtml('reportHoldingContextBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportInvestmentProfileBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportInvestmentDebateBody', `<div class="library-empty-state">${message}</div>`);
       setHtml('reportRiskBody', `<div class="library-empty-state">${message}</div>`);

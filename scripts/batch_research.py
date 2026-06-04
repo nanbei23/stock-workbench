@@ -35,13 +35,24 @@ from data.quote import get_batch_quotes  # noqa: E402
 from models.database import SCHEMA  # noqa: E402
 from scheduler.ai_engine import extract_confidence, extract_risk_score, extract_signal, extract_target_price  # noqa: E402
 from services.investment_profile_service import investment_profile_from_db, style_match_assessment  # noqa: E402
-from services import ai_analysis_service, ai_task_service  # noqa: E402
+from services import ai_analysis_service, ai_task_service, holding_context_service  # noqa: E402
 
 
 TERMINAL_STATUS = {"completed", "failed", "timeout", "cancelled"}
 SNAPSHOT_LAYERS = ("market", "social", "news", "fundamentals", "policy", "hot_money", "lockup")
 POSITIVE_SIGNALS = {"STRONG_BUY", "BUY", "OVERWEIGHT", "ACCUMULATE", "ADD"}
 WATCH_SIGNALS = {"HOLD", "WATCH", "NEUTRAL"}
+CANONICAL_SIGNALS = {"STRONG_BUY", "BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL", "STRONG_SELL"}
+SIGNAL_ALIASES = {
+    "ACCUMULATE": "OVERWEIGHT",
+    "ADD": "OVERWEIGHT",
+    "WATCH": "HOLD",
+    "NEUTRAL": "HOLD",
+    "REDUCE": "UNDERWEIGHT",
+    "UNDER_WEIGHT": "UNDERWEIGHT",
+    "STRONG SELL": "STRONG_SELL",
+    "STRONG BUY": "STRONG_BUY",
+}
 SINA_FINANCIAL_API = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
 EASTMONEY_DATACENTER_API = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 SINA_REPORT_SOURCES = {
@@ -100,6 +111,68 @@ def _loads(value: Any, fallback: Any):
         return parsed if parsed is not None else fallback
     except (TypeError, ValueError):
         return fallback
+
+
+def _canonical_signal(value: Any) -> str:
+    signal = str(value or "").upper().strip()
+    signal = SIGNAL_ALIASES.get(signal, signal)
+    return signal if signal in CANONICAL_SIGNALS else ""
+
+
+def _derive_position_action(account_signal: str, holding_context: dict[str, Any] | None, explicit_action: Any = None) -> str:
+    action = str(explicit_action or "").lower().strip()
+    aliases = {
+        "buy": "buy",
+        "add": "add",
+        "overweight": "add",
+        "hold": "hold",
+        "watch": "watch",
+        "reduce": "reduce",
+        "underweight": "reduce",
+        "sell": "sell",
+        "avoid": "avoid",
+        "take_profit": "take_profit",
+        "take-profit": "take_profit",
+    }
+    if action in aliases:
+        return aliases[action]
+    is_holding = bool((holding_context or {}).get("is_holding"))
+    if account_signal in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
+        return "hold" if is_holding else "buy"
+    if account_signal == "UNDERWEIGHT":
+        return "reduce" if is_holding else "avoid"
+    if account_signal in {"SELL", "STRONG_SELL"}:
+        return "sell" if is_holding else "avoid"
+    return "hold" if is_holding else "watch"
+
+
+def _derive_account_signal(
+    *,
+    research_signal: str,
+    account_signal: Any,
+    holding_context: dict[str, Any] | None,
+    position_action: Any = None,
+) -> str:
+    explicit = _canonical_signal(account_signal)
+    if explicit:
+        return explicit
+    is_holding = bool((holding_context or {}).get("is_holding"))
+    action = _derive_position_action("", holding_context, position_action)
+    if action in {"add", "buy"}:
+        return "OVERWEIGHT" if is_holding else (research_signal or "BUY")
+    if action in {"reduce", "take_profit"}:
+        return "UNDERWEIGHT"
+    if action in {"sell", "avoid"}:
+        return "SELL" if is_holding else "HOLD"
+    if is_holding and research_signal in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
+        return "HOLD"
+    return research_signal or "HOLD"
+
+
+def _holding_context_text(holding_context: dict[str, Any] | None) -> str:
+    if not holding_context:
+        return ""
+    return str(holding_context.get("prompt_context") or "").strip()
 
 
 def ensure_schema(db_path: Path) -> None:
@@ -543,7 +616,12 @@ def _has_complete_snapshot(db_path: Path, code: str) -> bool:
     return bool(row and (row.get("validation") or {}).get("ok"))
 
 
-def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any], investment_profile_context: str = "") -> str:
+def _snapshot_prompt(
+    stock: RankedCandidate,
+    snapshot_row: dict[str, Any],
+    investment_profile_context: str = "",
+    holding_context: dict[str, Any] | None = None,
+) -> str:
     snapshot = snapshot_row["snapshot"]
     validation = snapshot_row["validation"]
     payload = {
@@ -560,7 +638,11 @@ def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any], inves
 
 输出必须是 JSON 对象，不要 Markdown，不要解释。字段如下：
 {{
-  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "research_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "account_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "signal": "兼容字段，等于 account_signal",
+  "position_action": "buy|add|hold|reduce|sell|watch|avoid|take_profit",
+  "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
   "market_report": "技术和价格行为分析",
@@ -579,10 +661,14 @@ def _snapshot_prompt(stock: RankedCandidate, snapshot_row: dict[str, Any], inves
 约束：
 - confidence 为 0 到 1。
 - risk_score 为 0 到 100，数值越高风险越高。
+- research_signal 只判断股票本身，account_signal 必须结合账户持仓上下文。
+- 已持仓股票不能因为股票研究偏多就直接输出买入，必须判断加仓、持有、减仓、止盈或止损。
 - 如果快照完整性校验不是 ok，必须降低置信度并在 final_decision 中说明缺失项。
 - 不允许出现“根据最新网络数据”等未提供来源的话。
 
 {investment_profile_context}
+
+{_holding_context_text(holding_context)}
 
 七层数据快照：
 {_clip_text(payload, 28000)}
@@ -652,6 +738,7 @@ def _snapshot_debate_prompt(
     role_goal: str,
     previous_discussion: list[dict[str, str]],
     investment_profile_context: str = "",
+    holding_context: dict[str, Any] | None = None,
 ) -> str:
     previous = "\n\n".join(f"## {item['role_name']}\n{item['content']}" for item in previous_discussion) or "暂无，当前为第一位角色。"
     final_instruction = ""
@@ -660,7 +747,11 @@ def _snapshot_debate_prompt(
 
 最终裁决必须输出 JSON 对象，不要 Markdown。格式：
 {
-  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "research_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "account_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "signal": "兼容字段，等于 account_signal",
+  "position_action": "buy|add|hold|reduce|sell|watch|avoid|take_profit",
+  "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
   "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
@@ -685,6 +776,8 @@ def _snapshot_debate_prompt(
 {final_instruction}
 
 {investment_profile_context}
+
+{_holding_context_text(holding_context)}
 
 已有角色讨论：
 {previous}
@@ -776,6 +869,7 @@ def _snapshot_tradingagents_prompt(
     output_key: str,
     previous_discussion: list[dict[str, str]],
     investment_profile_context: str = "",
+    holding_context: dict[str, Any] | None = None,
 ) -> str:
     snapshot = snapshot_row["snapshot"]
     validation = snapshot_row["validation"]
@@ -797,7 +891,11 @@ def _snapshot_tradingagents_prompt(
 
 最终裁决必须输出 JSON 对象，不要 Markdown。格式：
 {
-  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "research_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "account_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "signal": "兼容字段，等于 account_signal",
+  "position_action": "buy|add|hold|reduce|sell|watch|avoid|take_profit",
+  "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
   "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
@@ -818,6 +916,8 @@ def _snapshot_tradingagents_prompt(
 
 {investment_profile_context}
 
+{_holding_context_text(holding_context)}
+
 标的：{stock.name} {stock.code}
 快照ID：{snapshot_row["id"]}
 行情摘要：{_clip_text(stock.quote, 2000)}
@@ -832,7 +932,11 @@ async def _call_snapshot_tradingagents_role_llm(role: dict[str, str], prompt: st
     return await _call_snapshot_debate_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
 
 
-def _initial_snapshot_agent_state(stock: RankedCandidate, snapshot_row: dict[str, Any]) -> dict[str, Any]:
+def _initial_snapshot_agent_state(
+    stock: RankedCandidate,
+    snapshot_row: dict[str, Any],
+    holding_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "messages": [{"role": "human", "content": f"{stock.name} {stock.code}"}],
         "company_of_interest": f"{stock.name} {stock.code}",
@@ -840,6 +944,7 @@ def _initial_snapshot_agent_state(stock: RankedCandidate, snapshot_row: dict[str
         "past_context": "",
         "snapshot_id": snapshot_row["id"],
         "snapshot_validation": snapshot_row.get("validation") or {},
+        "holding_context": holding_context or {},
         "market_report": "",
         "sentiment_report": "",
         "news_report": "",
@@ -897,6 +1002,7 @@ def _snapshot_tradingagents_state_prompt(
     output_key: str,
     state: dict[str, Any],
     investment_profile_context: str = "",
+    holding_context: dict[str, Any] | None = None,
 ) -> str:
     snapshot = snapshot_row["snapshot"]
     validation = snapshot_row["validation"]
@@ -912,6 +1018,8 @@ def _snapshot_tradingagents_state_prompt(
 - 报告需可审计，区分事实、推断和不确定性。
 
 {investment_profile_context}
+
+{_holding_context_text(holding_context or state.get("holding_context"))}
 
 标的：{stock.name} {stock.code}
 快照ID：{snapshot_row["id"]}
@@ -1013,7 +1121,11 @@ Lessons from prior decisions:
 
 最终裁决必须输出 JSON 对象，不要 Markdown。格式：
 {{
-  "signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "research_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "account_signal": "STRONG_BUY|BUY|OVERWEIGHT|HOLD|UNDERWEIGHT|SELL|STRONG_SELL",
+  "signal": "兼容字段，等于 account_signal",
+  "position_action": "buy|add|hold|reduce|sell|watch|avoid|take_profit",
+  "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
   "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
@@ -1054,8 +1166,9 @@ async def _run_snapshot_tradingagents_graph(
     debate_rounds: int = 1,
     risk_rounds: int = 1,
     investment_profile_context: str = "",
+    holding_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    state = _initial_snapshot_agent_state(stock, snapshot_row)
+    state = _initial_snapshot_agent_state(stock, snapshot_row, holding_context=holding_context)
     role_discussion: list[dict[str, str]] = []
 
     async def call_role(role_key: str, role_name: str, output_key: str, role_goal: str) -> str:
@@ -1069,6 +1182,7 @@ async def _run_snapshot_tradingagents_graph(
             output_key=output_key,
             state=state,
             investment_profile_context=investment_profile_context,
+            holding_context=holding_context,
         )
         content = await _call_snapshot_tradingagents_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
         role_discussion.append({"role_key": role_key, "role_name": role_name, "output_key": output_key, "content": content})
@@ -1163,6 +1277,7 @@ def _snapshot_tradingagents_result(role_discussion: list[dict[str, str]], state:
             "final_trade_decision": state.get("final_trade_decision") or by_key.get("portfolio_manager", ""),
             "snapshot_id": state.get("snapshot_id"),
             "snapshot_validation": state.get("snapshot_validation"),
+            "holding_context": state.get("holding_context") or {},
         },
     }
 
@@ -1174,14 +1289,22 @@ def _text_value(result: dict[str, Any], key: str) -> str:
     return str(value or "")
 
 
-def _normalise_snapshot_result(result: dict[str, Any]) -> dict[str, Any]:
+def _normalise_snapshot_result(result: dict[str, Any], holding_context: dict[str, Any] | None = None) -> dict[str, Any]:
     final_decision = _text_value(result, "final_decision")
     trader_plan = _text_value(result, "trader_plan")
     parse_text = "\n".join([final_decision, trader_plan, json.dumps(result, ensure_ascii=False, default=_json_default)])
-    signal = str(result.get("signal") or "").upper().strip()
-    valid_signals = POSITIVE_SIGNALS | WATCH_SIGNALS | {"SELL", "STRONG_SELL", "UNDERWEIGHT"}
-    if signal not in valid_signals:
-        signal = extract_signal(parse_text)
+    research_signal = _canonical_signal(result.get("research_signal"))
+    if not research_signal:
+        research_signal = _canonical_signal(result.get("signal"))
+    if not research_signal:
+        research_signal = _canonical_signal(extract_signal(parse_text))
+    account_signal = _derive_account_signal(
+        research_signal=research_signal or "HOLD",
+        account_signal=result.get("account_signal") or result.get("signal"),
+        holding_context=holding_context,
+        position_action=result.get("position_action") or result.get("action"),
+    )
+    position_action = _derive_position_action(account_signal, holding_context, result.get("position_action") or result.get("action"))
     confidence = _float_or_none(result.get("confidence"))
     if confidence is None:
         confidence = extract_confidence(parse_text)
@@ -1194,7 +1317,11 @@ def _normalise_snapshot_result(result: dict[str, Any]) -> dict[str, Any]:
         risk_score = round(risk_score * 100, 3)
     return {
         **result,
-        "signal": signal or "HOLD",
+        "signal": account_signal or "HOLD",
+        "research_signal": research_signal or account_signal or "HOLD",
+        "account_signal": account_signal or "HOLD",
+        "position_action": position_action,
+        "action_reason": _text_value(result, "action_reason") or _text_value(result, "reason") or "",
         "confidence": round(confidence, 3) if confidence is not None else None,
         "risk_score": round(risk_score, 3) if risk_score is not None else None,
         "target_price": extract_target_price(parse_text),
@@ -1214,14 +1341,19 @@ def _save_snapshot_report(
     depth: str = "snapshot",
     model_mode: str = "snapshot_report",
     investment_profile: dict[str, Any] | None = None,
+    holding_context: dict[str, Any] | None = None,
 ) -> int:
-    normalized = _normalise_snapshot_result(result)
+    normalized = _normalise_snapshot_result(result, holding_context=holding_context)
     raw_state = {
         "source": report_source,
         "run_id": run_id,
         "code": item.code,
         "name": item.name,
         "signal": normalized["signal"],
+        "research_signal": normalized.get("research_signal"),
+        "account_signal": normalized.get("account_signal"),
+        "position_action": normalized.get("position_action"),
+        "action_reason": normalized.get("action_reason"),
         "confidence": normalized.get("confidence"),
         "risk_score": normalized.get("risk_score"),
         "target_price": normalized.get("target_price"),
@@ -1229,6 +1361,8 @@ def _save_snapshot_report(
         "snapshot_created_at": snapshot_row["created_at"],
         "model": model,
     }
+    if holding_context:
+        raw_state["holding_context"] = holding_context
     if investment_profile:
         raw_state["investment_profile"] = investment_profile
         raw_state["style_match"] = style_match_assessment(normalized, investment_profile)
@@ -1602,8 +1736,9 @@ async def submit_snapshot_reports(
                 return
             started = datetime.now()
             try:
+                holding_context = await holding_context_service.build_holding_context(item.code)
                 result = await _call_snapshot_llm(
-                    _snapshot_prompt(item, snapshot_row, investment_profile_context),
+                    _snapshot_prompt(item, snapshot_row, investment_profile_context, holding_context=holding_context),
                     config,
                     timeout_seconds=timeout_seconds,
                 )
@@ -1616,6 +1751,7 @@ async def submit_snapshot_reports(
                     duration_seconds=(datetime.now() - started).total_seconds(),
                     model=config.get("model", ""),
                     investment_profile=investment_profile,
+                    holding_context=holding_context,
                 )
                 item.task_id = f"report:{report_id}"
                 item.status = "completed"
@@ -1656,6 +1792,7 @@ async def submit_snapshot_debate_reports(
                 return
             started = datetime.now()
             try:
+                holding_context = await holding_context_service.build_holding_context(item.code)
                 role_discussion: list[dict[str, str]] = []
                 for role_key, role_name, role_goal in SNAPSHOT_DEBATE_ROLES:
                     role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal}
@@ -1666,6 +1803,7 @@ async def submit_snapshot_debate_reports(
                         role_goal=role_goal,
                         previous_discussion=role_discussion,
                         investment_profile_context=investment_profile_context,
+                        holding_context=holding_context,
                     )
                     content = await _call_snapshot_debate_role_llm(role, prompt, config, timeout_seconds=timeout_seconds)
                     role_discussion.append({"role_key": role_key, "role_name": role_name, "content": content})
@@ -1681,6 +1819,7 @@ async def submit_snapshot_debate_reports(
                     depth="snapshot_debate",
                     model_mode="snapshot_debate",
                     investment_profile=investment_profile,
+                    holding_context=holding_context,
                 )
                 item.task_id = f"report:{report_id}"
                 item.status = "completed"
@@ -1721,12 +1860,14 @@ async def submit_snapshot_tradingagents_reports(
                 return
             started = datetime.now()
             try:
+                holding_context = await holding_context_service.build_holding_context(item.code)
                 graph_result = await _run_snapshot_tradingagents_graph(
                     item,
                     snapshot_row,
                     config,
                     timeout_seconds=timeout_seconds,
                     investment_profile_context=investment_profile_context,
+                    holding_context=holding_context,
                 )
                 report_id = _save_snapshot_report(
                     db_path,
@@ -1740,6 +1881,7 @@ async def submit_snapshot_tradingagents_reports(
                     depth="snapshot_tradingagents",
                     model_mode="snapshot_tradingagents",
                     investment_profile=investment_profile,
+                    holding_context=holding_context,
                 )
                 item.task_id = f"report:{report_id}"
                 item.status = "completed"

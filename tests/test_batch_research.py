@@ -118,6 +118,8 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
             "id": 7,
             "snapshot": {"market": {"quote": {"price": 10.0}}},
             "validation": {"ok": True, "missing_layers": [], "empty_layers": [], "layer_errors": {}},
+            "created_at": "2026-06-04 10:00:00",
+            "summary": {},
         }
         stock = batch_research.RankedCandidate("000001", "平安银行", "默认", 1, 0.0, {"price": 10.0})
         state = batch_research._initial_snapshot_agent_state(stock, snapshot_row)
@@ -136,6 +138,91 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("用户投资风格：进攻型", prompt)
         self.assertIn("单票上限 40%", prompt)
         self.assertIn("最终裁决必须输出 JSON 对象", prompt)
+
+    def test_snapshot_prompts_include_holding_context(self):
+        snapshot_row = {
+            "id": 7,
+            "snapshot": {"market": {"quote": {"price": 25.5}}},
+            "validation": {"ok": True, "missing_layers": [], "empty_layers": [], "layer_errors": {}},
+            "created_at": "2026-06-04 10:00:00",
+            "summary": {},
+        }
+        stock = batch_research.RankedCandidate("002241", "歌尔股份", "默认", 1, 0.0, {"price": 25.5})
+        holding_context = {
+            "is_holding": True,
+            "prompt_context": "## 当前账户持仓上下文\n- 真实持仓: 1000.000 股\n- 持仓成本: 26.006\n",
+        }
+
+        prompt = batch_research._snapshot_prompt(stock, snapshot_row, holding_context=holding_context)
+        debate_prompt = batch_research._snapshot_debate_prompt(
+            stock,
+            snapshot_row,
+            role_name="交易员/最终裁决",
+            role_goal="最终裁决",
+            previous_discussion=[],
+            holding_context=holding_context,
+        )
+        state_prompt = batch_research._snapshot_tradingagents_state_prompt(
+            stock,
+            snapshot_row,
+            role_key="portfolio_manager",
+            role_name="Portfolio Manager",
+            role_goal="最终裁决",
+            output_key="final_trade_decision",
+            state=batch_research._initial_snapshot_agent_state(stock, snapshot_row, holding_context=holding_context),
+            holding_context=holding_context,
+        )
+
+        self.assertIn("当前账户持仓上下文", prompt)
+        self.assertIn("research_signal", prompt)
+        self.assertIn("account_signal", debate_prompt)
+        self.assertIn("position_action", state_prompt)
+
+    def test_save_snapshot_report_persists_account_signal_and_holding_context(self):
+        snapshot_row = {
+            "id": 8,
+            "snapshot": {"market": {"quote": {"price": 25.5}}},
+            "validation": {"ok": True, "missing_layers": [], "empty_layers": [], "layer_errors": {}},
+            "created_at": "2026-06-04 10:00:00",
+            "summary": {"price": 25.5},
+        }
+        stock = batch_research.RankedCandidate("002241", "歌尔股份", "默认", 1, 0.0, {"price": 25.5})
+        holding_context = {
+            "is_holding": True,
+            "shares": 1000,
+            "avg_cost": 26.006,
+            "prompt_context": "## 当前账户持仓上下文\n- 真实持仓: 1000.000 股\n",
+        }
+
+        report_id = batch_research._save_snapshot_report(
+            self.db_path,
+            stock,
+            {
+                "research_signal": "BUY",
+                "account_signal": "HOLD",
+                "position_action": "hold",
+                "action_reason": "研究偏多，但已有持仓且未回到成本线。",
+                "confidence": 0.66,
+                "risk_score": 42,
+                "final_decision": "账户维持持有。",
+            },
+            snapshot_row,
+            run_id="unit",
+            duration_seconds=1.2,
+            model="unit-model",
+            holding_context=holding_context,
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT signal, raw_state FROM analysis_reports WHERE id = ?", (report_id,)).fetchone()
+
+        self.assertEqual(row["signal"], "HOLD")
+        raw_state = json.loads(row["raw_state"])
+        self.assertEqual(raw_state["research_signal"], "BUY")
+        self.assertEqual(raw_state["account_signal"], "HOLD")
+        self.assertEqual(raw_state["position_action"], "hold")
+        self.assertEqual(raw_state["holding_context"]["avg_cost"], 26.006)
 
     def test_validate_snapshot_flags_semantic_financial_failures(self):
         snapshot = {

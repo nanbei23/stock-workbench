@@ -55,6 +55,41 @@ class ShadowPortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pos["total_shares"], 200)
         self.assertAlmostEqual(pos["avg_cost"], 10.5033, places=4)
 
+    async def test_sync_reports_uses_account_signal_not_research_signal(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO analysis_reports (id, code, signal, confidence, risk_score, raw_state)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    2,
+                    "002241",
+                    "HOLD",
+                    0.72,
+                    0.35,
+                    json.dumps(
+                        {
+                            "name": "歌尔股份",
+                            "research_signal": "BUY",
+                            "account_signal": "HOLD",
+                            "holding_context": {"is_holding": True, "avg_cost": 26.006},
+                            "entry_price": 25.5,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            db.commit()
+
+        with patch("services.shadow_portfolio_service.get_batch_quotes", new=AsyncMock(return_value={"002241": {"price": 25.5}})):
+            synced = await shadow_portfolio_service.sync_reports()
+
+        self.assertEqual(synced["created"], 0)
+        with sqlite3.connect(self.db_path) as db:
+            order_count = db.execute("SELECT COUNT(*) FROM ai_shadow_orders").fetchone()[0]
+        self.assertEqual(order_count, 0)
+
     async def test_comparison_keeps_real_and_shadow_separate(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute(
