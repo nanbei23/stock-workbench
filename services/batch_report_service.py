@@ -1678,13 +1678,14 @@ def _final_status_from_counts(counts: dict[str, int]) -> str:
 
 def _auto_complete_if_all_items_finished(job_id: str) -> bool:
     with _connect() as conn:
-        row = conn.execute("SELECT status FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        row = conn.execute("SELECT status, job_type FROM batch_jobs WHERE job_id = ?", (job_id,)).fetchone()
     if not row or row["status"] not in {"pending", "running"}:
         return False
     if _unfinished_item_count(job_id):
         return False
     counts = _recount_job(job_id)
     final_status = _final_status_from_counts(counts)
+    should_run_completion_hooks = row["job_type"] == "report_generation" and _try_claim_finalize(job_id)
     _update_job(
         job_id,
         status=final_status,
@@ -1692,7 +1693,12 @@ def _auto_complete_if_all_items_finished(job_id: str) -> bool:
         current_code="",
         running_count=0,
     )
-    _mark_finalize_completed(job_id, status=final_status)
+    if row["job_type"] == "report_generation":
+        if should_run_completion_hooks:
+            _mark_finalize_completed(job_id, status=final_status)
+            _schedule_report_generation_completion_hooks(job_id)
+    else:
+        _mark_finalize_completed(job_id, status=final_status)
     log_job_event(
         job_id,
         "info",
@@ -1701,6 +1707,15 @@ def _auto_complete_if_all_items_finished(job_id: str) -> bool:
         {"status": final_status, "counts": counts},
     )
     return True
+
+
+def _schedule_report_generation_completion_hooks(job_id: str) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_run_report_generation_completion_hooks(job_id))
+        return
+    loop.create_task(_run_report_generation_completion_hooks(job_id))
 
 
 def get_research_job(job_id: str, *, auto_complete: bool = True) -> dict[str, Any]:
@@ -3261,6 +3276,17 @@ def _write_post_batch_artifacts(job_id: str, payload: dict[str, Any], counts: di
     return actions
 
 
+async def _run_report_generation_completion_hooks(job_id: str) -> None:
+    try:
+        from services import holding_review_service
+
+        result = await holding_review_service.finalize_waiting_reviews_for_batch_job(job_id)
+        if result.get("finalized") or result.get("failed"):
+            log_job_event(job_id, "info", "holding_review_finalized", "持仓日更等待任务已处理", result)
+    except Exception as exc:  # noqa: BLE001 - batch completion must not be rolled back by post hooks
+        log_job_event(job_id, "error", "holding_review_finalize_failed", "持仓日更等待任务处理失败", {"error": str(exc)})
+
+
 async def run_research_job(
     job_id: str,
     *,
@@ -3412,9 +3438,13 @@ async def run_research_job(
         if job_type == "report_generation":
             _mark_finalize_completed(job_id, status=final_status)
         log_job_event(job_id, "info", "job_completed", "批量任务执行结束", {"status": final_status, "counts": counts})
+        if job_type == "report_generation":
+            await _run_report_generation_completion_hooks(job_id)
     except Exception as exc:
         log_job_event(job_id, "error", "job_failed", "批量任务执行异常", {"error": str(exc)})
         _update_job(job_id, status="failed", error=str(exc), completed_at=_now_expr(), current_code="")
+        if job_type == "report_generation":
+            await _run_report_generation_completion_hooks(job_id)
     return get_research_job(job_id)
 
 

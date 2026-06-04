@@ -64,4 +64,25 @@ class HoldingReviewApiTests(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(items.json()["items"][0]["code"], "000001")
         self.assertGreaterEqual(flags.json()["count"], 1)
-        self.assertIn("所有建议必须基于当前真实仓位和可用资金", markdown.text)
+        self.assertIn("等待补报告完成", markdown.text)
+
+    def test_run_forwards_force_report_refresh_options(self):
+        async def fake_run_daily_review(**kwargs):
+            self.assertTrue(kwargs["force_refresh_holdings"])
+            self.assertTrue(kwargs["force_refresh_candidates"])
+            self.assertTrue(kwargs["refresh_snapshots_for_reports"])
+            return {"review_id": "hr-force", "ok": True}
+
+        with patch("api.holding_review_api.holding_review_service.run_daily_review", new=AsyncMock(side_effect=fake_run_daily_review)):
+            response = self.client.post(
+                "/api/holding-reviews/run",
+                json={
+                    "account_id": "default",
+                    "force_refresh_holdings": True,
+                    "force_refresh_candidates": True,
+                    "refresh_snapshots_for_reports": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["review_id"], "hr-force")

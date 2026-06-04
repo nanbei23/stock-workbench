@@ -64,7 +64,7 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             "services.portfolio_service.get_batch_quotes",
             new=AsyncMock(return_value={"000001": {"price": 11.0, "change_pct": 10.0, "name": "平安银行"}}),
         ):
-            review = await holding_review_service.run_daily_review(account_id="default", date_text="2026-06-04")
+            review = await holding_review_service.run_daily_review(account_id="default", date_text="2026-06-04", wait_for_report_refresh=False)
 
         self.assertEqual(review["status"], "completed")
         self.assertEqual(review["holding_count"], 1)
@@ -136,7 +136,7 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value={"breadth": {"up": 3000, "down": 1800, "limit_up": 60, "limit_down": 8, "total": 5200}, "northbound": {"total": 12.3}}),
             create=True,
         ):
-            review = await holding_review_service.run_daily_review(account_id="default", date_text="2026-06-04")
+            review = await holding_review_service.run_daily_review(account_id="default", date_text="2026-06-04", wait_for_report_refresh=False)
 
         plan = review["tomorrow_plan"]
         self.assertEqual(plan["title"], "明日交易作战计划")
@@ -255,3 +255,184 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(review["candidate_count"], 0)
         self.assertEqual(review["candidate_context"]["scope"], "none")
+
+    async def test_run_review_can_force_refresh_holding_and_selected_candidate_reports(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "5000"))
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.execute(
+                "INSERT INTO watchlist (code, name, group_name, sort_order) VALUES (?, ?, ?, ?)",
+                ("000002", "万科A", "默认", 1),
+            )
+            db.executemany(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    ("000001", "today-holding", "HOLD", 30, "2026-06-04 10:00:00"),
+                    ("000002", "today-candidate", "BUY", 25, "2026-06-04 10:00:00"),
+                ],
+            )
+            db.commit()
+
+        async def fake_create_job(**kwargs):
+            self.assertEqual(kwargs["codes"], ["000001", "000002"])
+            self.assertEqual(kwargs["skip_recent_days"], 0)
+            self.assertTrue(kwargs["refresh_snapshots"])
+            self.assertEqual(kwargs["analysis_mode"], "snapshot-tradingagents")
+            return {"job_id": "re-force", "job_type": "report_generation", "status": "pending", "total_count": 2}
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(
+                return_value={
+                    "000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"},
+                    "000002": {"price": 20.0, "change_pct": 1.0, "name": "万科A"},
+                }
+            ),
+        ), patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(side_effect=fake_create_job),
+        ):
+            review = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                include_watchlist_candidates=True,
+                candidate_codes=["000002"],
+                force_refresh_holdings=True,
+                force_refresh_candidates=True,
+                refresh_snapshots_for_reports=True,
+            )
+
+        self.assertEqual(review["rerun_report_codes"], ["000001", "000002"])
+        self.assertEqual(review["tomorrow_plan"]["report_refresh_job"]["job_id"], "re-force")
+        self.assertEqual(review["status"], "waiting_reports")
+        self.assertTrue(review["tomorrow_plan"]["report_refresh_policy"]["force_refresh_holdings"])
+        self.assertTrue(review["tomorrow_plan"]["report_refresh_policy"]["force_refresh_candidates"])
+        self.assertTrue(review["tomorrow_plan"]["report_refresh_policy"]["refresh_snapshots"])
+        self.assertFalse(review["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
+        self.assertIn("等待补报告完成", review["tomorrow_plan_markdown"])
+
+        items = await holding_review_service.get_review_items(review["review_id"])
+        by_code = {item["code"]: item for item in items["items"]}
+        self.assertEqual(by_code["000001"]["needs_report"], 1)
+        self.assertEqual(by_code["000002"]["needs_report"], 1)
+        self.assertIn("持有", by_code["000001"]["reason"])
+        self.assertIn("已强制加入补报告队列", by_code["000001"]["reason"])
+
+    async def test_run_review_waits_for_forced_reports_then_finalizes_with_latest_reports(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "5000"))
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "old-holding", "HOLD", 30, "2026-06-04 10:00:00"),
+            )
+            db.execute(
+                """
+                INSERT INTO batch_jobs (job_id, job_type, status, total_count, completed_count)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("re-force", "report_generation", "pending", 1, 0),
+            )
+            db.commit()
+
+        async def fake_create_job(**kwargs):
+            return {"job_id": "re-force", "job_type": "report_generation", "status": "pending", "total_count": 1}
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"}}),
+        ), patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(side_effect=fake_create_job),
+        ):
+            pending = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                force_refresh_holdings=True,
+            )
+
+        self.assertEqual(pending["status"], "waiting_reports")
+        self.assertEqual(pending["batch_job_id"], "re-force")
+        self.assertIn("等待补报告完成", pending["tomorrow_plan_markdown"])
+        self.assertFalse(pending["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
+
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "new-holding", "SELL", 90, "2026-06-04 11:00:00"),
+            )
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='completed', completed_count=1, completed_at=datetime('now')
+                WHERE job_id='re-force'
+                """
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 9.5, "change_pct": -1.0, "name": "平安银行"}}),
+        ):
+            result = await holding_review_service.finalize_waiting_reviews_for_batch_job("re-force")
+
+        self.assertEqual(result["finalized"], 1)
+        saved = await holding_review_service.get_review(pending["review_id"])
+        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["review_id"], pending["review_id"])
+        self.assertTrue(saved["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
+        items = await holding_review_service.get_review_items(pending["review_id"])
+        self.assertEqual(items["items"][0]["latest_signal"], "SELL")
+
+    async def test_run_review_marks_failed_when_report_refresh_job_cannot_be_created(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"}}),
+        ), patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(side_effect=RuntimeError("worker unavailable")),
+        ):
+            review = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                force_refresh_holdings=True,
+            )
+
+        self.assertEqual(review["status"], "report_refresh_failed")
+        self.assertIn("worker unavailable", review["error"])
+        self.assertEqual(review["tomorrow_plan"]["battle_plan"], {})
+        self.assertIn("未生成最终作战计划", review["tomorrow_plan_markdown"])

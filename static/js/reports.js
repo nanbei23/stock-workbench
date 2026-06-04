@@ -184,6 +184,8 @@
             failed: '失败',
             skipped: '已跳过',
             waiting_snapshot: '缺少快照',
+            waiting_reports: '等待补报告',
+            report_refresh_failed: '补报告失败',
             cancelled: '已取消',
             manual_completed: '手动完成',
             interrupted: '已中断',
@@ -197,7 +199,7 @@
 
     function statusClass(value) {
         if (value === 'completed' || value === 'skipped' || value === 'manual_completed') return 'signal-buy';
-        if (value === 'running' || value === 'pending' || value === 'pausing' || value === 'paused' || value === 'quota_paused' || value === 'guard_paused') return 'signal-hold';
+        if (value === 'running' || value === 'pending' || value === 'waiting_reports' || value === 'pausing' || value === 'paused' || value === 'quota_paused' || value === 'guard_paused') return 'signal-hold';
         return 'signal-sell';
     }
 

@@ -218,6 +218,30 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("(price - avg_cost) * total_shares", scheduler_source)
         self.assertNotIn("(price - prev_close) * total_shares", scheduler_source)
 
+    def test_portfolio_holding_review_exposes_force_report_refresh_options(self):
+        js = PORTFOLIO_JS.read_text(encoding="utf-8")
+        html = PORTFOLIO_TEMPLATE.read_text(encoding="utf-8")
+        batch_service = (ROOT / "services" / "batch_report_service.py").read_text(encoding="utf-8")
+
+        self.assertIn('id="holdingReviewForceHoldings"', html)
+        self.assertIn('id="holdingReviewForceCandidates"', html)
+        self.assertIn('id="holdingReviewRefreshSnapshots"', html)
+        self.assertIn("后台补跑持仓报告", html)
+        self.assertIn("后台补跑候选报告", html)
+        self.assertIn("补跑前刷新七层快照", html)
+        self.assertIn("force_refresh_holdings: forceRefreshHoldings", js)
+        self.assertIn("force_refresh_candidates: forceRefreshCandidates", js)
+        self.assertIn("refresh_snapshots_for_reports: refreshSnapshots", js)
+        self.assertIn("请先勾选“从自选股选择候选”并选择候选股，再补跑候选报告。", js)
+        self.assertIn("刷新七层快照需要配合持仓或候选报告补跑使用。", js)
+        self.assertIn("review.status === 'waiting_reports'", js)
+        self.assertIn("完成后自动生成作战计划", js)
+        self.assertIn("finalize_waiting_reviews_for_batch_job", batch_service)
+        self.assertIn("holding_review_finalized", batch_service)
+        reports_js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        self.assertIn("waiting_reports: '等待补报告'", reports_js)
+        self.assertIn("report_refresh_failed: '补报告失败'", reports_js)
+
     def test_reports_page_supports_grouped_collapsible_report_list(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
         html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
@@ -240,7 +264,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("const d = parseAppTime(value);", js)
         self.assertIn("function formatTime(value)", js)
         self.assertIn("function formatDate(value)", js)
-        self.assertIn("reports.js?v=2.9.11-holding-review", html)
+        self.assertIn("reports.js?v=2.9.13-holding-review-refresh-flow", html)
 
     def test_reports_page_links_to_full_report_detail(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -370,7 +394,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("/api/ai/reports/${encodeURIComponent(report.id)}", js)
         self.assertIn("formatReportMarkdown", js)
         self.assertIn("请选择要导出的报告", js)
-        self.assertIn("reports.js?v=2.9.11-holding-review", html)
+        self.assertIn("reports.js?v=2.9.13-holding-review-refresh-flow", html)
 
     def test_ai_page_supports_last_report_signal_filter_and_batch_select(self):
         js = AI_JS.read_text(encoding="utf-8")

@@ -493,7 +493,18 @@ function clearHoldingReviewCandidates() {
 async function runHoldingReview() {
   const includeWatchlist = Boolean(document.getElementById('holdingReviewIncludeWatchlist')?.checked);
   const includePool = Boolean(document.getElementById('holdingReviewIncludePool')?.checked);
+  const forceRefreshHoldings = Boolean(document.getElementById('holdingReviewForceHoldings')?.checked);
+  const forceRefreshCandidates = Boolean(document.getElementById('holdingReviewForceCandidates')?.checked);
+  const refreshSnapshots = Boolean(document.getElementById('holdingReviewRefreshSnapshots')?.checked);
   const candidateCodes = includeWatchlist ? Array.from(_selectedHoldingReviewCandidateCodes) : [];
+  if (forceRefreshCandidates && !includeWatchlist) {
+    showToast('请先勾选“从自选股选择候选”并选择候选股，再补跑候选报告。', 'warn');
+    return;
+  }
+  if (refreshSnapshots && !forceRefreshHoldings && !forceRefreshCandidates) {
+    showToast('刷新七层快照需要配合持仓或候选报告补跑使用。', 'warn');
+    return;
+  }
   if (includeWatchlist && candidateCodes.length === 0) {
     showToast('请先勾选要加入候选池的自选股，或取消候选池选项。', 'warn');
     return;
@@ -505,10 +516,17 @@ async function runHoldingReview() {
       account_id: selectedAccountId(),
       include_watchlist_candidates: candidateCodes.length > 0,
       include_observation_pool: includePool,
-      candidate_codes: candidateCodes
+      candidate_codes: candidateCodes,
+      force_refresh_holdings: forceRefreshHoldings,
+      force_refresh_candidates: forceRefreshCandidates,
+      refresh_snapshots_for_reports: refreshSnapshots
     });
     await loadHoldingReviewSummary();
-    showToast(`作战计划已生成：持仓${review.holding_count || 0}只，触发${review.trigger_count || 0}项`, 'success');
+    if (review.status === 'waiting_reports') {
+      showToast(`已进入补报告队列：${(review.rerun_report_codes || []).length}只，完成后自动生成作战计划`, 'success');
+    } else {
+      showToast(`作战计划已生成：持仓${review.holding_count || 0}只，触发${review.trigger_count || 0}项`, 'success');
+    }
   } catch (e) {
     if (el) el.innerHTML = `<div class="empty-state"><p>生成失败：${esc(e.message)}</p></div>`;
     showToast('作战计划生成失败: ' + e.message, 'error');

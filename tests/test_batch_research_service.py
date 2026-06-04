@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sqlite3
@@ -917,6 +918,30 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(runtime["finalize"]["state"], "completed")
+
+    async def test_auto_complete_report_generation_triggers_completion_hook(self):
+        created = await batch_report_service.create_research_job(
+            job_type="report_generation",
+            codes=["000001"],
+            auto_start=False,
+        )
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                UPDATE batch_job_items
+                SET status='completed', completed_at=datetime('now')
+                WHERE job_id = ?
+                """,
+                (created["job_id"],),
+            )
+            db.commit()
+
+        with patch("services.batch_report_service._run_report_generation_completion_hooks", new=AsyncMock()) as hooks:
+            job = batch_report_service.get_research_job(created["job_id"])
+            await asyncio.sleep(0)
+
+        self.assertEqual(job["status"], "completed")
+        hooks.assert_awaited_once_with(created["job_id"])
 
     async def test_guard_pause_stops_batch_after_consecutive_failures(self):
         self._insert_snapshot("000001", "平安银行")

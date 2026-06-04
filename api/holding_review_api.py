@@ -15,6 +15,9 @@ class HoldingReviewRunPayload(BaseModel):
     include_watchlist_candidates: bool = False
     include_observation_pool: bool = False
     candidate_codes: list[str] = Field(default_factory=list)
+    force_refresh_holdings: bool = False
+    force_refresh_candidates: bool = False
+    refresh_snapshots_for_reports: bool = False
 
 
 @router.get("/holding-reviews")
@@ -33,6 +36,9 @@ async def run_holding_review(payload: HoldingReviewRunPayload):
         include_watchlist_candidates=payload.include_watchlist_candidates,
         include_observation_pool=payload.include_observation_pool,
         candidate_codes=payload.candidate_codes,
+        force_refresh_holdings=payload.force_refresh_holdings,
+        force_refresh_candidates=payload.force_refresh_candidates,
+        refresh_snapshots_for_reports=payload.refresh_snapshots_for_reports,
     )
 
 

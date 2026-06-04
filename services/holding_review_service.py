@@ -66,6 +66,24 @@ def _review_id() -> str:
     return f"hr-{datetime.now().strftime('%Y%m%d%H%M%S')}-{str(uuid.uuid4())[:6]}"
 
 
+def _waiting_markdown(review: dict[str, Any]) -> str:
+    refresh_job = (review.get("tomorrow_plan") or {}).get("report_refresh_job") or {}
+    codes = ", ".join(refresh_job.get("codes") or []) or "无"
+    return "\n".join(
+        [
+            f"# 明日交易作战计划 {review['date']}",
+            "",
+            "## 状态",
+            "",
+            "- 当前状态: 等待补报告完成",
+            f"- 补报告任务: {refresh_job.get('job_id') or '--'}",
+            f"- 补报告标的: {codes}",
+            "",
+            "> 系统会先等待新报告写入数据库，再自动生成最终作战计划，避免使用旧报告做决策。",
+        ]
+    )
+
+
 def _cash_pct(summary: dict[str, Any]) -> float:
     total = _float(summary.get("total_assets"))
     return round(_float(summary.get("cash")) / total * 100, 3) if total else 0.0
@@ -289,7 +307,13 @@ def _holding_item(
     ]
 
 
-def _candidate_item(candidate: dict[str, Any], quote: dict[str, Any], report: dict[str, Any] | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _candidate_item(
+    candidate: dict[str, Any],
+    quote: dict[str, Any],
+    report: dict[str, Any] | None,
+    *,
+    force_report: bool = False,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     code = str(candidate.get("code") or "")[:6]
     name = quote.get("name") or candidate.get("name") or code
     latest_signal = (report or {}).get("signal")
@@ -311,9 +335,9 @@ def _candidate_item(candidate: dict[str, Any], quote: dict[str, Any], report: di
         "latest_report_id": (report or {}).get("id"),
         "latest_report_created_at": (report or {}).get("created_at"),
         "latest_snapshot_id": None,
-        "needs_report": 0,
+        "needs_report": 1 if force_report else 0,
         "action_hint": "candidate",
-        "reason": "自选股候选池，仅作为替代或加仓候选，不参与当前持仓风险主体。",
+        "reason": "已强制加入补报告队列。" if force_report else "自选股候选池，仅作为替代或加仓候选，不参与当前持仓风险主体。",
     }
     flags = []
     if latest_signal in POSITIVE_SIGNALS:
@@ -456,7 +480,7 @@ async def _market_context() -> dict[str, Any]:
     return context
 
 
-async def _create_report_refresh_job(codes: list[str], *, date_text: str) -> dict[str, Any]:
+async def _create_report_refresh_job(codes: list[str], *, date_text: str, refresh_snapshots: bool = False) -> dict[str, Any]:
     clean_codes = list(dict.fromkeys(code for code in codes if code))
     if not clean_codes:
         return {"status": "not_needed", "codes": []}
@@ -465,14 +489,14 @@ async def _create_report_refresh_job(codes: list[str], *, date_text: str) -> dic
             job_type="report_generation",
             codes=clean_codes,
             skip_recent_days=0,
-            refresh_snapshots=False,
+            refresh_snapshots=bool(refresh_snapshots),
             analysis_mode="snapshot-tradingagents",
             analysis_depth="standard",
             model_mode="balanced",
             title=f"持仓日更补报告 {date_text}",
             auto_start=True,
         )
-        return {"status": "created", "codes": clean_codes, **result}
+        return {**result, "status": "created", "codes": clean_codes}
     except Exception as exc:  # noqa: BLE001 - keep daily review durable even when background job creation fails
         return {"status": "failed", "codes": clean_codes, "error": str(exc)}
 
@@ -650,6 +674,7 @@ def _markdown(
     layer_context = tomorrow_plan.get("layer_context") or {}
     battle_plan = tomorrow_plan.get("battle_plan") or {}
     report_refresh = tomorrow_plan.get("report_refresh_job") or {}
+    report_refresh_policy = tomorrow_plan.get("report_refresh_policy") or {}
     lines = [
         f"# 明日交易作战计划 {review['date']}",
         "",
@@ -704,6 +729,7 @@ def _markdown(
             f"- 状态: {report_refresh.get('status') or '--'}",
             f"- 标的: {', '.join(report_refresh.get('codes') or []) or '无'}",
             f"- 任务: {report_refresh.get('job_id') or '--'}",
+            f"- 口径: {report_refresh_policy.get('note') or '本次计划基于生成时已入库的数据。'}",
             "",
             "## 当前持仓",
             "",
@@ -783,131 +809,92 @@ def _row_to_review(row: Any) -> dict[str, Any]:
     return item
 
 
-async def run_daily_review(
+async def _persist_review(
+    review: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    flags: list[dict[str, Any]],
     *,
-    account_id: str = "default",
-    date_text: str | None = None,
-    include_watchlist_candidates: bool = False,
-    include_observation_pool: bool = False,
-    candidate_codes: list[str] | None = None,
-) -> dict[str, Any]:
-    date_text = date_text or _date_today()
-    account_id = account_id or "default"
-    review_id = _review_id()
-    positions, summary = await portfolio_service._portfolio_snapshot(account_id)
-    holding_codes = {position["code"] for position in positions}
-    candidate_rows, candidate_scope = await _watchlist_candidates(
-        holding_codes,
-        include_watchlist_candidates=include_watchlist_candidates,
-        include_observation_pool=include_observation_pool,
-        candidate_codes=candidate_codes,
-    )
-    candidate_codes_clean = [row["code"] for row in candidate_rows]
-    all_codes = [position["code"] for position in positions] + candidate_codes_clean
-    latest_reports = await _latest_report_map(all_codes)
-    latest_snapshots = await _latest_snapshot_map(all_codes)
-    candidate_quotes = await portfolio_service.get_batch_quotes(candidate_codes_clean) if candidate_codes_clean else {}
-
-    holdings: list[dict[str, Any]] = []
-    candidates: list[dict[str, Any]] = []
-    flags: list[dict[str, Any]] = []
-    for position in positions:
-        item, item_flags = _holding_item(position, latest_reports.get(position["code"]), latest_snapshots.get(position["code"]), date_text)
-        holdings.append(item)
-        flags.extend(item_flags)
-    for candidate in candidate_rows:
-        item, item_flags = _candidate_item(candidate, candidate_quotes.get(candidate["code"], {}), latest_reports.get(candidate["code"]))
-        candidates.append(item)
-        flags.extend(item_flags)
-
-    for flag in flags:
-        flag["review_id"] = review_id
-        flag["date"] = date_text
-        flag["account_id"] = account_id
-
-    asset_snapshot = _asset_snapshot(summary, account_id)
-    portfolio_snapshot = {"items": holdings, "count": len(holdings), "captured_at": asset_snapshot["captured_at"]}
-    candidate_context = {"scope": candidate_scope, "items": candidates, "count": len(candidates), "captured_at": asset_snapshot["captured_at"]}
-    source_report_ids = sorted({int(item["latest_report_id"]) for item in holdings + candidates if item.get("latest_report_id")})
-    source_snapshot_ids = sorted({int(item["latest_snapshot_id"]) for item in holdings if item.get("latest_snapshot_id")})
-    rerun_report_codes = sorted({flag["code"] for flag in flags if flag.get("requires_full_report")})
-    critical_count = sum(1 for flag in flags if flag.get("severity") == "critical")
-    settings = await _settings_map()
-    investment_profile = investment_profile_service.investment_profile_snapshot(settings)
-    layer_context = _layer_context(all_codes, latest_snapshots)
-    market_context = await _market_context()
-    report_refresh_job = await _create_report_refresh_job(rerun_report_codes, date_text=date_text)
-    battle_plan = _battle_plan(holdings, candidates, flags, asset_snapshot, investment_profile, market_context)
-    role_discussion = _role_discussion(asset_snapshot, holdings, candidates, flags, rerun_report_codes)
-
-    review = {
-        "review_id": review_id,
-        "date": date_text,
-        "account_id": account_id,
-        "status": "completed",
-        "holding_count": len(holdings),
-        "candidate_count": len(candidates),
-        "trigger_count": len(flags),
-        "critical_count": critical_count,
-        "candidate_scope": candidate_scope,
-        "asset_snapshot": asset_snapshot,
-        "portfolio_snapshot": portfolio_snapshot,
-        "candidate_context": candidate_context,
-        "market_snapshot": market_context,
-        "source_report_ids": source_report_ids,
-        "source_snapshot_ids": source_snapshot_ids,
-        "rerun_report_codes": rerun_report_codes,
-        "summary": f"{date_text} 持仓 {len(holdings)} 只，触发 {len(flags)} 项，其中高风险 {critical_count} 项；候选池 {len(candidates)} 只。",
-    }
-    review["tomorrow_plan"] = {
-        "title": "明日交易作战计划",
-        "constraint": "所有建议必须基于当前真实仓位和可用资金，不允许默认全仓建仓。",
-        "role_discussion": role_discussion,
-        "report_refresh_job": report_refresh_job,
-        "investment_profile": investment_profile,
-        "layer_context": layer_context,
-        "market_context": market_context,
-        "battle_plan": battle_plan,
-        "rerun_report_codes": rerun_report_codes,
-        "candidate_scope": candidate_scope,
-        "candidate_count": len(candidates),
-    }
-    review["tomorrow_plan_markdown"] = _markdown(review, holdings, candidates, flags, role_discussion, review["tomorrow_plan"])
-
+    replace_existing: bool = False,
+) -> None:
     db = await get_db()
     try:
-        await db.execute(
-            """
-            INSERT INTO holding_daily_reviews (
-                review_id, date, account_id, status, holding_count, candidate_count,
-                trigger_count, critical_count, candidate_scope, rerun_report_codes_json,
-                source_report_ids_json, source_snapshot_ids_json, asset_snapshot_json,
-                portfolio_snapshot_json, candidate_context_json, market_snapshot_json,
-                summary, tomorrow_plan_markdown, tomorrow_plan_json, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            """,
-            (
-                review_id,
-                date_text,
-                account_id,
-                "completed",
-                len(holdings),
-                len(candidates),
-                len(flags),
-                critical_count,
-                candidate_scope,
-                _dumps(rerun_report_codes),
-                _dumps(source_report_ids),
-                _dumps(source_snapshot_ids),
-                _dumps(asset_snapshot),
-                _dumps(portfolio_snapshot),
-                _dumps(candidate_context),
-                _dumps(review["market_snapshot"]),
-                review["summary"],
-                review["tomorrow_plan_markdown"],
-                _dumps(review["tomorrow_plan"]),
-            ),
-        )
+        if replace_existing:
+            await db.execute("DELETE FROM holding_review_items WHERE review_id = ?", (review["review_id"],))
+            await db.execute("DELETE FROM holding_trigger_flags WHERE review_id = ?", (review["review_id"],))
+            await db.execute(
+                """
+                UPDATE holding_daily_reviews
+                SET date = ?, account_id = ?, status = ?, holding_count = ?, candidate_count = ?,
+                    trigger_count = ?, critical_count = ?, candidate_scope = ?, rerun_report_codes_json = ?,
+                    source_report_ids_json = ?, source_snapshot_ids_json = ?, asset_snapshot_json = ?,
+                    portfolio_snapshot_json = ?, candidate_context_json = ?, market_snapshot_json = ?,
+                    summary = ?, tomorrow_plan_markdown = ?, tomorrow_plan_json = ?,
+                    batch_job_id = ?, error = ?, updated_at = datetime('now'),
+                    completed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END
+                WHERE review_id = ?
+                """,
+                (
+                    review["date"],
+                    review["account_id"],
+                    review["status"],
+                    review["holding_count"],
+                    review["candidate_count"],
+                    review["trigger_count"],
+                    review["critical_count"],
+                    review["candidate_scope"],
+                    _dumps(review["rerun_report_codes"]),
+                    _dumps(review["source_report_ids"]),
+                    _dumps(review["source_snapshot_ids"]),
+                    _dumps(review["asset_snapshot"]),
+                    _dumps(review["portfolio_snapshot"]),
+                    _dumps(review["candidate_context"]),
+                    _dumps(review["market_snapshot"]),
+                    review["summary"],
+                    review["tomorrow_plan_markdown"],
+                    _dumps(review["tomorrow_plan"]),
+                    review.get("batch_job_id"),
+                    review.get("error") or "",
+                    1 if review["status"] == "completed" else 0,
+                    review["review_id"],
+                ),
+            )
+        else:
+            await db.execute(
+                """
+                INSERT INTO holding_daily_reviews (
+                    review_id, date, account_id, status, holding_count, candidate_count,
+                    trigger_count, critical_count, candidate_scope, rerun_report_codes_json,
+                    source_report_ids_json, source_snapshot_ids_json, asset_snapshot_json,
+                    portfolio_snapshot_json, candidate_context_json, market_snapshot_json,
+                    summary, tomorrow_plan_markdown, tomorrow_plan_json, batch_job_id, error, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') ELSE NULL END)
+                """,
+                (
+                    review["review_id"],
+                    review["date"],
+                    review["account_id"],
+                    review["status"],
+                    review["holding_count"],
+                    review["candidate_count"],
+                    review["trigger_count"],
+                    review["critical_count"],
+                    review["candidate_scope"],
+                    _dumps(review["rerun_report_codes"]),
+                    _dumps(review["source_report_ids"]),
+                    _dumps(review["source_snapshot_ids"]),
+                    _dumps(review["asset_snapshot"]),
+                    _dumps(review["portfolio_snapshot"]),
+                    _dumps(review["candidate_context"]),
+                    _dumps(review["market_snapshot"]),
+                    review["summary"],
+                    review["tomorrow_plan_markdown"],
+                    _dumps(review["tomorrow_plan"]),
+                    review.get("batch_job_id"),
+                    review.get("error") or "",
+                    1 if review["status"] == "completed" else 0,
+                ),
+            )
         for item in holdings + candidates:
             await db.execute(
                 """
@@ -920,9 +907,9 @@ async def run_daily_review(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    review_id,
-                    date_text,
-                    account_id,
+                    review["review_id"],
+                    review["date"],
+                    review["account_id"],
                     item["item_type"],
                     item["code"],
                     item["name"],
@@ -954,9 +941,9 @@ async def run_daily_review(
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    review_id,
-                    date_text,
-                    account_id,
+                    review["review_id"],
+                    review["date"],
+                    review["account_id"],
                     flag["code"],
                     flag["name"],
                     flag["flag_type"],
@@ -972,7 +959,262 @@ async def run_daily_review(
         await db.commit()
     finally:
         await db.close()
+
+
+async def run_daily_review(
+    *,
+    account_id: str = "default",
+    date_text: str | None = None,
+    include_watchlist_candidates: bool = False,
+    include_observation_pool: bool = False,
+    candidate_codes: list[str] | None = None,
+    force_refresh_holdings: bool = False,
+    force_refresh_candidates: bool = False,
+    refresh_snapshots_for_reports: bool = False,
+    wait_for_report_refresh: bool = True,
+    review_id: str | None = None,
+    replace_existing: bool = False,
+    skip_report_refresh_job: bool = False,
+    completed_report_refresh_job: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    date_text = date_text or _date_today()
+    account_id = account_id or "default"
+    review_id = review_id or _review_id()
+    positions, summary = await portfolio_service._portfolio_snapshot(account_id)
+    holding_codes = {position["code"] for position in positions}
+    candidate_rows, candidate_scope = await _watchlist_candidates(
+        holding_codes,
+        include_watchlist_candidates=include_watchlist_candidates,
+        include_observation_pool=include_observation_pool,
+        candidate_codes=candidate_codes,
+    )
+    candidate_codes_clean = [row["code"] for row in candidate_rows]
+    all_codes = [position["code"] for position in positions] + candidate_codes_clean
+    latest_reports = await _latest_report_map(all_codes)
+    latest_snapshots = await _latest_snapshot_map(all_codes)
+    candidate_quotes = await portfolio_service.get_batch_quotes(candidate_codes_clean) if candidate_codes_clean else {}
+
+    holdings: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    flags: list[dict[str, Any]] = []
+    for position in positions:
+        item, item_flags = _holding_item(position, latest_reports.get(position["code"]), latest_snapshots.get(position["code"]), date_text)
+        if force_refresh_holdings:
+            item["needs_report"] = 1
+            forced_reason = "已强制加入补报告队列。"
+            current_reason = str(item.get("reason") or "").strip()
+            item["reason"] = f"{current_reason}；{forced_reason}" if current_reason else forced_reason
+        holdings.append(item)
+        flags.extend(item_flags)
+    for candidate in candidate_rows:
+        item, item_flags = _candidate_item(
+            candidate,
+            candidate_quotes.get(candidate["code"], {}),
+            latest_reports.get(candidate["code"]),
+            force_report=force_refresh_candidates,
+        )
+        candidates.append(item)
+        flags.extend(item_flags)
+
+    for flag in flags:
+        flag["review_id"] = review_id
+        flag["date"] = date_text
+        flag["account_id"] = account_id
+
+    asset_snapshot = _asset_snapshot(summary, account_id)
+    portfolio_snapshot = {"items": holdings, "count": len(holdings), "captured_at": asset_snapshot["captured_at"]}
+    candidate_context = {"scope": candidate_scope, "items": candidates, "count": len(candidates), "captured_at": asset_snapshot["captured_at"]}
+    source_report_ids = sorted({int(item["latest_report_id"]) for item in holdings + candidates if item.get("latest_report_id")})
+    source_snapshot_ids = sorted({int(item["latest_snapshot_id"]) for item in holdings if item.get("latest_snapshot_id")})
+    rerun_report_codes = sorted(
+        {
+            *(flag["code"] for flag in flags if flag.get("requires_full_report")),
+            *(item["code"] for item in holdings if force_refresh_holdings),
+            *(item["code"] for item in candidates if force_refresh_candidates),
+        }
+    )
+    critical_count = sum(1 for flag in flags if flag.get("severity") == "critical")
+    settings = await _settings_map()
+    investment_profile = investment_profile_service.investment_profile_snapshot(settings)
+    layer_context = _layer_context(all_codes, latest_snapshots)
+    market_context = await _market_context()
+    report_refresh_job = completed_report_refresh_job or {"status": "not_needed", "codes": []}
+    if not skip_report_refresh_job:
+        report_refresh_job = await _create_report_refresh_job(
+            rerun_report_codes,
+            date_text=date_text,
+            refresh_snapshots=refresh_snapshots_for_reports,
+        )
+    should_wait_for_reports = (
+        wait_for_report_refresh
+        and bool(rerun_report_codes)
+        and report_refresh_job.get("status") == "created"
+        and bool(report_refresh_job.get("job_id"))
+    )
+    report_refresh_failed = wait_for_report_refresh and bool(rerun_report_codes) and report_refresh_job.get("status") == "failed"
+    plan_uses_refreshed_reports = bool(skip_report_refresh_job and completed_report_refresh_job)
+    report_refresh_policy = {
+        "force_refresh_holdings": bool(force_refresh_holdings),
+        "force_refresh_candidates": bool(force_refresh_candidates),
+        "refresh_snapshots": bool(refresh_snapshots_for_reports),
+        "wait_for_report_refresh": bool(wait_for_report_refresh),
+        "plan_uses_refreshed_reports": plan_uses_refreshed_reports,
+        "note": (
+            "已等待补报告任务完成，本次作战计划基于补跑后的最新入库报告和快照。"
+            if plan_uses_refreshed_reports
+            else "系统会先等待新报告写入数据库，再自动生成最终作战计划。"
+            if should_wait_for_reports
+            else f"补报告任务创建失败：{report_refresh_job.get('error') or '未知错误'}"
+            if report_refresh_failed
+            else "本次计划基于生成时已入库的数据。"
+        ),
+    }
+    plan_rerun_codes = [] if skip_report_refresh_job else rerun_report_codes
+    defer_final_plan = should_wait_for_reports or report_refresh_failed
+    battle_plan = {} if defer_final_plan else _battle_plan(holdings, candidates, flags, asset_snapshot, investment_profile, market_context)
+    role_discussion = [] if defer_final_plan else _role_discussion(asset_snapshot, holdings, candidates, flags, plan_rerun_codes)
+
+    review = {
+        "review_id": review_id,
+        "date": date_text,
+        "account_id": account_id,
+        "status": "waiting_reports" if should_wait_for_reports else "report_refresh_failed" if report_refresh_failed else "completed",
+        "holding_count": len(holdings),
+        "candidate_count": len(candidates),
+        "trigger_count": len(flags),
+        "critical_count": critical_count,
+        "candidate_scope": candidate_scope,
+        "asset_snapshot": asset_snapshot,
+        "portfolio_snapshot": portfolio_snapshot,
+        "candidate_context": candidate_context,
+        "market_snapshot": market_context,
+        "source_report_ids": source_report_ids,
+        "source_snapshot_ids": source_snapshot_ids,
+        "rerun_report_codes": plan_rerun_codes if skip_report_refresh_job else rerun_report_codes,
+        "report_refresh_policy": report_refresh_policy,
+        "batch_job_id": report_refresh_job.get("job_id") if report_refresh_job.get("status") == "created" else (completed_report_refresh_job or {}).get("job_id"),
+        "error": report_refresh_job.get("error") if report_refresh_failed else "",
+        "summary": f"{date_text} 持仓 {len(holdings)} 只，触发 {len(flags)} 项，其中高风险 {critical_count} 项；候选池 {len(candidates)} 只。",
+    }
+    review["tomorrow_plan"] = {
+        "title": "明日交易作战计划",
+        "constraint": "所有建议必须基于当前真实仓位和可用资金，不允许默认全仓建仓。",
+        "role_discussion": role_discussion,
+        "report_refresh_job": report_refresh_job,
+        "report_refresh_policy": report_refresh_policy,
+        "investment_profile": investment_profile,
+        "layer_context": layer_context,
+        "market_context": market_context,
+        "battle_plan": battle_plan,
+        "rerun_report_codes": review["rerun_report_codes"],
+        "candidate_scope": candidate_scope,
+        "candidate_count": len(candidates),
+        "pending_request": {
+            "account_id": account_id,
+            "date_text": date_text,
+            "include_watchlist_candidates": include_watchlist_candidates,
+            "include_observation_pool": include_observation_pool,
+            "candidate_codes": candidate_codes or [],
+        }
+        if should_wait_for_reports
+        else {},
+    }
+    review["tomorrow_plan_markdown"] = (
+        _waiting_markdown(review)
+        if should_wait_for_reports
+        else "\n".join(
+            [
+                f"# 明日交易作战计划 {review['date']}",
+                "",
+                "## 状态",
+                "",
+                "- 当前状态: 补报告任务创建失败",
+                f"- 错误: {review.get('error') or '--'}",
+                "",
+                "> 未生成最终作战计划。请修复补报告任务后重新生成，避免使用旧报告做决策。",
+            ]
+        )
+        if report_refresh_failed
+        else _markdown(review, holdings, candidates, flags, role_discussion, review["tomorrow_plan"])
+    )
+
+    await _persist_review(review, holdings, candidates, flags, replace_existing=replace_existing)
     return review
+
+
+async def finalize_waiting_reviews_for_batch_job(job_id: str) -> dict[str, Any]:
+    clean_job_id = str(job_id or "").strip()
+    if not clean_job_id:
+        return {"job_id": "", "finalized": 0, "failed": 0, "pending": 0}
+    db = await get_db()
+    try:
+        job = await (await db.execute("SELECT * FROM batch_jobs WHERE job_id = ?", (clean_job_id,))).fetchone()
+        rows = await db.execute_fetchall(
+            """
+            SELECT * FROM holding_daily_reviews
+            WHERE status = 'waiting_reports' AND batch_job_id = ?
+            ORDER BY id ASC
+            """,
+            (clean_job_id,),
+        )
+    finally:
+        await db.close()
+    if not rows:
+        return {"job_id": clean_job_id, "finalized": 0, "failed": 0, "pending": 0}
+    if not job or job["status"] not in {"completed", "failed", "cancelled", "manual_completed"}:
+        return {"job_id": clean_job_id, "finalized": 0, "failed": 0, "pending": len(rows)}
+
+    finalized = 0
+    failed = 0
+    if job["status"] != "completed":
+        db = await get_db()
+        try:
+            for row in rows:
+                await db.execute(
+                    """
+                    UPDATE holding_daily_reviews
+                    SET status = 'report_refresh_failed',
+                        error = ?,
+                        updated_at = datetime('now')
+                    WHERE review_id = ?
+                    """,
+                    (job["error"] or f"补报告任务未完成: {job['status']}", row["review_id"]),
+                )
+                failed += 1
+            await db.commit()
+        finally:
+            await db.close()
+        return {"job_id": clean_job_id, "finalized": finalized, "failed": failed, "pending": 0}
+
+    for row in rows:
+        review = _row_to_review(row)
+        pending_request = (review.get("tomorrow_plan") or {}).get("pending_request") or {}
+        await run_daily_review(
+            account_id=pending_request.get("account_id") or review["account_id"],
+            date_text=pending_request.get("date_text") or review["date"],
+            include_watchlist_candidates=bool(pending_request.get("include_watchlist_candidates")),
+            include_observation_pool=bool(pending_request.get("include_observation_pool")),
+            candidate_codes=pending_request.get("candidate_codes") or [],
+            force_refresh_holdings=False,
+            force_refresh_candidates=False,
+            refresh_snapshots_for_reports=False,
+            wait_for_report_refresh=False,
+            review_id=review["review_id"],
+            replace_existing=True,
+            skip_report_refresh_job=True,
+            completed_report_refresh_job={
+                "job_id": clean_job_id,
+                "job_type": job["job_type"],
+                "status": job["status"],
+                "total_count": job["total_count"],
+                "completed_count": job["completed_count"],
+                "failed_count": job["failed_count"],
+                "skipped_count": job["skipped_count"],
+                "completed_at": job["completed_at"],
+            },
+        )
+        finalized += 1
+    return {"job_id": clean_job_id, "finalized": finalized, "failed": failed, "pending": 0}
 
 
 async def list_reviews(limit: int = 30, account_id: str | None = None) -> dict[str, Any]:

@@ -96,6 +96,9 @@
     <div class="holding-review-options">
       <label><input type="checkbox" id="holdingReviewIncludeWatchlist" onchange="toggleHoldingReviewCandidatePanel()"> 从自选股选择候选</label>
       <label><input type="checkbox" id="holdingReviewIncludePool" onchange="loadHoldingReviewCandidates()"> 包含观察池</label>
+      <label><input type="checkbox" id="holdingReviewForceHoldings"> 后台补跑持仓报告</label>
+      <label><input type="checkbox" id="holdingReviewForceCandidates"> 后台补跑候选报告</label>
+      <label><input type="checkbox" id="holdingReviewRefreshSnapshots"> 补跑前刷新七层快照</label>
     </div>
     <div id="holdingReviewCandidatePanel" class="holding-review-candidates" style="display:none;">
       <div class="holding-review-candidate-toolbar">
@@ -323,5 +326,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/portfolio.js?v=2.9.11-holding-review"></script>
+<script src="/static/js/portfolio.js?v=2.9.13-holding-review-refresh-flow"></script>
 {% endblock %}
