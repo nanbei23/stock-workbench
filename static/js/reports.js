@@ -215,6 +215,11 @@
         }[value] || value || '--';
     }
 
+    function isPlanSelectableWorker(worker) {
+        const selectableStates = new Set(['idle', 'online', 'running']);
+        return worker && worker.enabled !== false && selectableStates.has(worker.state);
+    }
+
     function formatJsonBlock(value) {
         return `<pre>${escapeHtml(JSON.stringify(value || {}, null, 2))}</pre>`;
     }
@@ -727,12 +732,12 @@
         const grid = document.getElementById('planWorkerGrid');
         if (!grid) return;
         const workers = workerStatusCache?.workers || [];
-        const enabled = workers.filter(worker => worker.enabled !== false);
-        if (!enabled.length) {
-            grid.innerHTML = '<div class="library-empty-state">暂无启用 Worker；留空表示由可用 worker 自动领取。</div>';
+        const selectable = workers.filter(isPlanSelectableWorker);
+        if (!selectable.length) {
+            grid.innerHTML = '<div class="library-empty-state">暂无在线 Worker；留空表示由系统自动调度，离线或卡死 Worker 不会参与本次选择。</div>';
             return;
         }
-        grid.innerHTML = enabled.map(worker => `
+        grid.innerHTML = selectable.map(worker => `
             <label class="mini-check-row">
                 <input type="checkbox" value="${escapeAttr(worker.worker_id)}" checked>
                 <span>${escapeHtml(worker.name || worker.worker_id)} · ${escapeHtml(workerStateLabel(worker.state))}</span>

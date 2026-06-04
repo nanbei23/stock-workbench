@@ -1990,8 +1990,11 @@ def _attach_current_positions(items: list[dict[str, Any]], portfolio_context: di
                 "avg_cost": position.get("avg_cost") or 0.0,
                 "current_price": position.get("current_price") or 0.0,
                 "market_value": position.get("market_value") or 0.0,
+                "unrealized_pnl": position.get("unrealized_pnl") or 0.0,
+                "unrealized_pnl_pct": position.get("unrealized_pnl_pct") or 0.0,
                 "position_pct_of_assets": position.get("position_pct_of_assets") or 0.0,
                 "account_id": position.get("account_id") or "default",
+                "updated_at": position.get("updated_at") or "",
             }
         else:
             item["current_position"] = {
@@ -2000,8 +2003,11 @@ def _attach_current_positions(items: list[dict[str, Any]], portfolio_context: di
                 "avg_cost": 0.0,
                 "current_price": 0.0,
                 "market_value": 0.0,
+                "unrealized_pnl": 0.0,
+                "unrealized_pnl_pct": 0.0,
                 "position_pct_of_assets": 0.0,
                 "account_id": "default",
+                "updated_at": "",
             }
 
 

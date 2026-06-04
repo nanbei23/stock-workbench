@@ -143,6 +143,11 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("previewBatchAnalysis", js)
         self.assertIn("/analysis", js)
         self.assertIn("信号分布", js)
+        self.assertIn("function isPlanSelectableWorker", js)
+        self.assertIn("new Set(['idle', 'online', 'running'])", js)
+        self.assertIn("workers.filter(isPlanSelectableWorker)", js)
+        self.assertIn("暂无在线 Worker", js)
+        self.assertIn("离线或卡死 Worker 不会参与本次选择", js)
 
     def test_reports_page_separates_stale_workers_and_position_plan_decisions(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")

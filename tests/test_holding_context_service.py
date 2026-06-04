@@ -68,6 +68,7 @@ class HoldingContextServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx["avg_cost"], 26.006)
         self.assertEqual(ctx["current_price"], 25.5)
         self.assertLess(ctx["holding_pnl"], 0)
+        self.assertEqual(ctx["cash"], 200000.0)
         self.assertEqual(ctx["last_report"]["signal"], "BUY")
         self.assertEqual(ctx["signal_tracking"]["status"], "open")
         self.assertEqual(ctx["shadow_position"]["total_shares"], 800.0)
@@ -81,3 +82,14 @@ class HoldingContextServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ctx["is_holding"])
         self.assertEqual(ctx["position_action_scope"], "watch_only")
         self.assertIn("当前账户未持仓", ctx["prompt_context"])
+
+    async def test_build_context_uses_default_cash_fallback_for_named_account(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "12345.678"))
+            db.commit()
+
+        ctx = await holding_context_service.build_holding_context("000001", account_id="secondary")
+
+        self.assertEqual(ctx["cash"], 12345.678)
+        self.assertIn("可用资金: 12345.678", ctx["prompt_context"])

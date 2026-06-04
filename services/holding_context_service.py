@@ -33,6 +33,8 @@ def _prompt_context(ctx: dict[str, Any]) -> str:
             "## 当前账户持仓上下文\n"
             f"- 股票: {ctx['name']} {ctx['code']}\n"
             "- 当前账户未持仓，只能输出观察、建仓或回避建议。\n"
+            f"- 可用资金: {ctx['cash']:.3f}\n"
+            f"- 当前账户总资产估算: {ctx['total_assets']:.3f}\n"
             "- 研究信号可以独立判断股票质量；账户信号应按空仓视角判断是否值得新开仓。\n"
         )
     return (
@@ -66,8 +68,28 @@ async def build_holding_context(code: str, *, account_id: str = "default") -> di
                 (account_id, code),
             )
         ).fetchone()
+        cash_keys = [f"cash_balance_{account_id}"]
+        if account_id == "default":
+            cash_keys.append("cash_balance")
+        else:
+            cash_keys.extend(["cash_balance_default", "cash_balance"])
+        placeholders = ",".join("?" for _ in cash_keys)
         cash_row = await (
-            await db.execute("SELECT value FROM settings WHERE key = ?", (f"cash_balance_{account_id}",))
+            await db.execute(
+                f"""
+                SELECT key, value
+                FROM settings
+                WHERE key IN ({placeholders})
+                ORDER BY CASE key
+                    WHEN ? THEN 0
+                    WHEN 'cash_balance_default' THEN 1
+                    WHEN 'cash_balance' THEN 2
+                    ELSE 3
+                END
+                LIMIT 1
+                """,
+                (*cash_keys, f"cash_balance_{account_id}"),
+            )
         ).fetchone()
         report = await (
             await db.execute(

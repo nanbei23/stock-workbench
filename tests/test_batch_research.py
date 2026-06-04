@@ -768,6 +768,8 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan["available_reports"], 2)
         self.assertEqual(plan["recommendations"][0]["code"], "000001")
         self.assertEqual(plan["recommendations"][0]["current_position"]["shares"], 1000)
+        self.assertEqual(plan["recommendations"][0]["current_position"]["unrealized_pnl"], 1000.0)
+        self.assertEqual(plan["recommendations"][0]["current_position"]["unrealized_pnl_pct"], 10.0)
         self.assertLessEqual(plan["recommendations"][0]["suggested_amount"], 253375.68 * 0.15)
         self.assertGreater(plan["recommendations"][0]["suggested_amount"], 0)
         self.assertEqual(plan["recommendations"][1]["action"], "watch")
