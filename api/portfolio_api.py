@@ -309,10 +309,10 @@ async def set_cash_balance(req: CashBalanceRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── 盈亏日历 ─────────────────────────────────────────────
+# ── 持仓盈亏日历 ─────────────────────────────────────────
 @router.get("/pnl/calendar")
 async def get_pnl_calendar(year: int = Query(None), month: int = Query(None), code: Optional[str] = Query(None)):
-    """盈亏日历数据，支持 ?code=XXXXXX 按个股筛选"""
+    """持仓盈亏日历数据，支持 ?code=XXXXXX 按个股筛选"""
     try:
         return await portfolio_service.get_pnl_calendar(year, month, code)
     except Exception as e:
@@ -459,7 +459,7 @@ async def delete_buy_point(point_id: int):
 # ── Calendar Day Detail ─────────────────────────────────────
 @router.get("/pnl/calendar/day/{date}")
 async def get_pnl_day_detail(date: str):
-    """获取某日各股票盈亏明细"""
+    """获取某日各股票持仓盈亏明细"""
     try:
         return await portfolio_service.get_pnl_day_detail(date)
     except Exception as e:

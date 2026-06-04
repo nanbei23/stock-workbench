@@ -346,12 +346,11 @@ async def _run_scheduled_report(report_type):
                 code6 = stock["code"][:6]
                 today = now[:10]
                 price = q.get("price", 0)
-                prev_close = q.get("prev_close", 0)
                 total_shares = stock.get("total_shares", 0)
                 avg_cost = stock.get("avg_cost", 0)
                 stock_pnl = 0
-                if total_shares > 0 and prev_close > 0 and price > 0:
-                    stock_pnl = round((price - prev_close) * total_shares, 2)
+                if total_shares > 0 and avg_cost > 0 and price > 0:
+                    stock_pnl = round((price - avg_cost) * total_shares, 3)
                 db.execute(
                     "INSERT OR REPLACE INTO daily_pnl (date, code6, pnl, close_price, shares) "
                     "VALUES (?, ?, ?, ?, ?)",

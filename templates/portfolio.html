@@ -48,7 +48,7 @@
         <div style="font-size:1.5rem;font-weight:700;font-family:var(--font-mono);" id="cash">--</div>
       </div>
       <div>
-        <div style="font-size:0.8rem;color:var(--text-secondary);">当日盈亏</div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">当日涨跌幅</div>
         <div style="font-size:1.5rem;font-weight:700;font-family:var(--font-mono);" id="dailyPnl">--</div>
       </div>
     </div>
@@ -96,7 +96,7 @@
     <div class="card">
       <table class="data-table">
         <thead>
-          <tr><th>股票</th><th>持仓</th><th>成本</th><th>现价</th><th>市值</th><th>仓位%</th><th>当日盈亏</th><th>盈亏</th><th>盈亏%</th><th>止损距离 <select id="stopLossSelect" onchange="updateStopLoss()" style="font-size:0.75rem;padding:2px 4px;border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);"><option value="5">-5%</option><option value="8" selected>-8%</option><option value="10">-10%</option><option value="15">-15%</option></select></th></tr>
+          <tr><th>股票</th><th>持仓</th><th>成本</th><th>现价</th><th>涨跌幅</th><th>市值</th><th>仓位%</th><th>持仓盈亏</th><th>持仓盈亏%</th><th>止损距离 <select id="stopLossSelect" onchange="updateStopLoss()" style="font-size:0.75rem;padding:2px 4px;border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);"><option value="5">-5%</option><option value="8" selected>-8%</option><option value="10">-10%</option><option value="15">-15%</option></select></th></tr>
         </thead>
         <tbody id="holdingsBody">
           <tr><td colspan="10" class="empty-state"><p>暂无持仓</p></td></tr>
@@ -127,15 +127,15 @@
       </div>
     </div>
 
-    <!-- 盈亏日历 -->
+    <!-- 持仓盈亏日历 -->
     <div class="card" style="margin-top:12px;">
-      <div style="font-weight:600;padding:12px 12px 0;">盈亏日历</div>
+      <div style="font-weight:600;padding:12px 12px 0;">持仓盈亏日历</div>
       <div class="calendar-header">
         <button onclick="changeMonth(-1)">上月</button>
         <span id="calendarTitle">2026年5月</span>
         <button onclick="changeMonth(1)">下月</button>
         <span class="calendar-stats">
-          本月盈亏: <span id="monthPnl">--</span>
+          本月持仓盈亏: <span id="monthPnl">--</span>
           胜率: <span id="winRate">--</span>
         </span>
       </div>
@@ -290,5 +290,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/portfolio.js?v=2.9.2-ui-search"></script>
+<script src="/static/js/portfolio.js?v=2.9.20-pnl-pct"></script>
 {% endblock %}

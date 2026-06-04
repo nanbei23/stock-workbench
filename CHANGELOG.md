@@ -4,6 +4,31 @@
 
 No unreleased changes.
 
+## 2.9.10 - 2026-06-04
+
+### Added
+
+- Added `scripts/replay_trade_cash_ledger.py`, a dry-run-first utility for deployment machines to replay existing trade cash effects into the cash ledger after upgrading.
+
+### Changed
+
+- Changed portfolio asset calculations so trades update cash automatically, preventing total assets from double-counting newly bought holdings while leaving available cash unchanged.
+- Changed portfolio overview, account dashboard, stock cards, and AI analysis cards to display daily change percentage instead of daily PnL.
+- Changed the portfolio PnL calendar to explicitly represent holding PnL snapshots and to load on the default holdings view.
+- Changed scheduled daily PnL snapshots to store holding PnL based on current price versus position cost.
+- Updated release metadata, package metadata, frontend cache versions, and README version to `2.9.10`.
+
+### Fixed
+
+- Fixed multi-account portfolio rows so the same stock can exist independently across accounts.
+- Fixed portfolio day-detail PnL so it reads per-stock holding PnL rows instead of deriving amounts from buy/sell trade cash flow.
+- Fixed stale visible "当日盈亏" copy across portfolio, watchlist, stock detail, and AI analysis surfaces.
+
+### Deployment
+
+- Database initialization migrates the `portfolio` table from a global `code` primary key to `UNIQUE(account_id, code)` automatically.
+- After pulling this release, run `scripts/replay_trade_cash_ledger.py --apply` once if the deployment database already has trades recorded before `2.9.10`.
+
 ## 2.9.7 - 2026-06-03
 
 ### Added

@@ -176,11 +176,12 @@ function stockCardMetrics(s) {
   const cls = priceClass(s.change_pct);
   const pctSign = s.change_pct != null ? (s.change_pct >= 0 ? '+' : '') : '';
   const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
-  const dailyPnl = s.daily_pnl ? formatPnl(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(3) + '元') : '--');
-  const dailyPnlCls = s.daily_pnl ? priceClass(s.daily_pnl) : cls;
+  const dailyPnl = s.change_pct != null ? `${pctSign}${s.change_pct.toFixed(3)}%` : '--';
+  const dailyPnlCls = cls;
+  const dailyChange = s.change != null ? `${chgSign}${s.change.toFixed(3)}元` : '--';
   const holdPnl = s.unrealized_pnl ? formatPnl(s.unrealized_pnl) : '--';
   const holdPnlCls = s.unrealized_pnl ? priceClass(s.unrealized_pnl) : '';
-  return { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls };
+  return { cls, pctSign, dailyPnl, dailyPnlCls, dailyChange, holdPnl, holdPnlCls };
 }
 
 /* ============================================================
@@ -444,7 +445,7 @@ function renderWatchlistSections(coreStocks, poolStocks, signals) {
 
 function renderStockCard(s, signal, options = {}) {
   const isActive = currentCode === s.code;
-  const { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls } = stockCardMetrics(s);
+  const { cls, dailyPnl, dailyPnlCls, dailyChange, holdPnl, holdPnlCls } = stockCardMetrics(s);
   const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
   const reportSignal = lastReportSignal(s);
   const reportSignalLabel = STOCK_SIGNAL_LABEL[reportSignal] || reportSignal;
@@ -473,7 +474,7 @@ function renderStockCard(s, signal, options = {}) {
         </div>
         <div class="sc-right">
           <div class="sc-data-row">
-            <span class="sc-data-lbl">当日盈亏</span>
+            <span class="sc-data-lbl">当日涨跌幅</span>
             <span class="sc-data-val ${dailyPnlCls}">${dailyPnl}</span>
           </div>
           <div class="sc-data-row">
@@ -481,8 +482,8 @@ function renderStockCard(s, signal, options = {}) {
             <span class="sc-data-val ${holdPnlCls}">${holdPnl}</span>
           </div>
           <div class="sc-data-row">
-            <span class="sc-data-lbl">当日涨幅</span>
-            <span class="sc-data-val ${cls}">${pctSign}${s.change_pct != null ? s.change_pct.toFixed(3) : '--'}%</span>
+            <span class="sc-data-lbl">当日涨跌额</span>
+            <span class="sc-data-val ${cls}">${dailyChange}</span>
           </div>
           ${signalBadge(signal)}
         </div>
@@ -849,12 +850,12 @@ async function loadStockDetail(code) {
         pnlEl.className = 'pnl-value ' + priceClass(q.unrealized_pnl);
       }
       if (dailyPnlEl) {
-        dailyPnlEl.textContent = formatPnl(q.daily_pnl || 0);
-        dailyPnlEl.className = 'pnl-value ' + priceClass(q.daily_pnl || 0);
+        dailyPnlEl.textContent = formatPct(q.change_pct);
+        dailyPnlEl.className = 'pnl-value ' + priceClass(q.change_pct);
       }
       if (dailyChgEl) {
-        dailyChgEl.textContent = formatPct(q.change_pct);
-        dailyChgEl.className = 'pnl-value ' + priceClass(q.change_pct);
+        dailyChgEl.textContent = q.change != null ? `${q.change >= 0 ? '+' : ''}${q.change.toFixed(3)}元` : '--';
+        dailyChgEl.className = 'pnl-value ' + priceClass(q.change);
       }
     }
   }
@@ -1167,7 +1168,7 @@ async function refreshQuotes() {
       const el = document.querySelector(`.stock-card[data-code="${s.code}"]`);
       if (!el) return;
 
-      const { cls, pctSign, dailyPnl, dailyPnlCls, holdPnl, holdPnlCls } = stockCardMetrics(s);
+      const { cls, dailyPnl, dailyPnlCls, dailyChange, holdPnl, holdPnlCls } = stockCardMetrics(s);
       const barCls = cls === 'up' ? 'up' : cls === 'down' ? 'down' : 'flat';
 
       // 底部色条
@@ -1181,7 +1182,7 @@ async function refreshQuotes() {
         priceEl.className = `sc-price ${cls}`;
       }
 
-      // 当日盈亏
+      // 当日涨跌幅
       const pnlEl = el.querySelector('.sc-data-row:nth-child(1) .sc-data-val');
       if (pnlEl) {
         pnlEl.textContent = dailyPnl;
@@ -1195,10 +1196,10 @@ async function refreshQuotes() {
         holdEl.className = `sc-data-val ${holdPnlCls}`;
       }
 
-      // 当日涨幅
+      // 当日涨跌额
       const pctEl = el.querySelector('.sc-data-row:nth-child(3) .sc-data-val');
       if (pctEl) {
-        pctEl.textContent = `${pctSign}${s.change_pct != null ? s.change_pct.toFixed(3) : '--'}%`;
+        pctEl.textContent = dailyChange;
         pctEl.className = `sc-data-val ${cls}`;
       }
     });
@@ -1243,12 +1244,12 @@ async function refreshQuotes() {
           pnlEl.className = 'pnl-value ' + priceClass(q.unrealized_pnl);
         }
         if (dailyPnlEl) {
-          dailyPnlEl.textContent = formatPnl(q.daily_pnl || 0);
-          dailyPnlEl.className = 'pnl-value ' + priceClass(q.daily_pnl || 0);
+          dailyPnlEl.textContent = formatPct(q.change_pct);
+          dailyPnlEl.className = 'pnl-value ' + priceClass(q.change_pct);
         }
         if (dailyChgEl) {
-          dailyChgEl.textContent = formatPct(q.change_pct);
-          dailyChgEl.className = 'pnl-value ' + priceClass(q.change_pct);
+          dailyChgEl.textContent = q.change != null ? `${q.change >= 0 ? '+' : ''}${q.change.toFixed(3)}元` : '--';
+          dailyChgEl.className = 'pnl-value ' + priceClass(q.change);
         }
       }
     }
@@ -1420,14 +1421,14 @@ function updateCardsFromWS(quotesMap) {
 
     const pnlEl = el.querySelector('.sc-data-row:nth-child(1) .sc-data-val');
     if (pnlEl) {
-      const v = q.daily_pnl || q.change;
-      pnlEl.textContent = v != null ? formatPnl(v) : '--';
-      pnlEl.className = `sc-data-val ${priceClass(v || 0)}`;
+      pnlEl.textContent = `${pctSign}${q.change_pct != null ? q.change_pct.toFixed(3) : '--'}%`;
+      pnlEl.className = `sc-data-val ${cls}`;
     }
 
     const pctEl = el.querySelector('.sc-data-row:nth-child(3) .sc-data-val');
     if (pctEl) {
-      pctEl.textContent = `${pctSign}${q.change_pct != null ? q.change_pct.toFixed(3) : '--'}%`;
+      const chgSign = q.change != null ? (q.change >= 0 ? '+' : '') : '';
+      pctEl.textContent = q.change != null ? `${chgSign}${q.change.toFixed(3)}元` : '--';
       pctEl.className = `sc-data-val ${cls}`;
     }
   });

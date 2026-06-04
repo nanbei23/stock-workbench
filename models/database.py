@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS watchlist (
 );
 
 CREATE TABLE IF NOT EXISTS portfolio (
-    code TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
     name TEXT,
     total_shares REAL DEFAULT 0,
     available_shares REAL DEFAULT 0,
@@ -42,7 +43,8 @@ CREATE TABLE IF NOT EXISTS portfolio (
     unrealized_pnl REAL DEFAULT 0,
     unrealized_pnl_pct REAL DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    account_id TEXT DEFAULT 'default'
+    account_id TEXT DEFAULT 'default',
+    UNIQUE(account_id, code)
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -1283,6 +1285,76 @@ async def ensure_batch_worker_heartbeats_table(db):
     )
 
 
+async def ensure_portfolio_account_key(db):
+    """Migrate portfolio from code-only primary key to account/code uniqueness."""
+    rows = await db.execute_fetchall("PRAGMA table_info(portfolio)")
+    if not rows:
+        return
+    pk_columns = [row[1] for row in rows if row[5]]
+    indexes = await db.execute_fetchall("PRAGMA index_list(portfolio)")
+    has_account_code_unique = False
+    for index in indexes:
+        if not index[2]:
+            continue
+        columns = await db.execute_fetchall(f"PRAGMA index_info({index[1]})")
+        names = [column[2] for column in columns]
+        if names == ["account_id", "code"]:
+            has_account_code_unique = True
+            break
+    if has_account_code_unique and pk_columns != ["code"]:
+        return
+
+    await db.execute("DROP TABLE IF EXISTS portfolio_account_key_backup")
+    await db.execute("ALTER TABLE portfolio RENAME TO portfolio_account_key_backup")
+    await db.executescript(
+        """
+        CREATE TABLE portfolio (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL,
+            name TEXT,
+            total_shares REAL DEFAULT 0,
+            available_shares REAL DEFAULT 0,
+            avg_cost REAL DEFAULT 0,
+            current_price REAL DEFAULT 0,
+            market_value REAL DEFAULT 0,
+            unrealized_pnl REAL DEFAULT 0,
+            unrealized_pnl_pct REAL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            account_id TEXT DEFAULT 'default',
+            UNIQUE(account_id, code)
+        );
+        INSERT INTO portfolio (
+            code, name, total_shares, available_shares, avg_cost, current_price,
+            market_value, unrealized_pnl, unrealized_pnl_pct, updated_at, account_id
+        )
+        SELECT
+            code,
+            MAX(name),
+            ROUND(SUM(COALESCE(total_shares, 0)), 3),
+            ROUND(SUM(COALESCE(available_shares, total_shares, 0)), 3),
+            CASE
+                WHEN SUM(COALESCE(total_shares, 0)) > 0
+                THEN ROUND(SUM(COALESCE(avg_cost, 0) * COALESCE(total_shares, 0)) / SUM(COALESCE(total_shares, 0)), 3)
+                ELSE 0
+            END,
+            MAX(COALESCE(current_price, 0)),
+            SUM(COALESCE(market_value, 0)),
+            SUM(COALESCE(unrealized_pnl, 0)),
+            CASE
+                WHEN SUM(COALESCE(avg_cost, 0) * COALESCE(total_shares, 0)) > 0
+                THEN ROUND(SUM(COALESCE(unrealized_pnl, 0)) / SUM(COALESCE(avg_cost, 0) * COALESCE(total_shares, 0)) * 100, 3)
+                ELSE 0
+            END,
+            MAX(updated_at),
+            COALESCE(account_id, 'default')
+        FROM portfolio_account_key_backup
+        WHERE code IS NOT NULL AND code != ''
+        GROUP BY COALESCE(account_id, 'default'), code;
+        DROP TABLE portfolio_account_key_backup;
+        """
+    )
+
+
 async def init_db():
     """初始化数据库，创建所有表"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1292,6 +1364,7 @@ async def init_db():
         await ensure_batch_job_item_steps_table(db)
         await ensure_batch_runtime_ops(db)
         await ensure_batch_worker_heartbeats_table(db)
+        await ensure_portfolio_account_key(db)
         await ensure_position_plan_adoption_columns(db)
         await ensure_position_plan_market_context_columns(db)
         await db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")

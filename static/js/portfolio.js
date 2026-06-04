@@ -1,6 +1,6 @@
 /**
  * portfolio.js - 持仓管理页面 Phase 3
- * 功能：资产概览、持仓列表、交易记录、盈亏日历
+ * 功能：资产概览、持仓列表、交易记录、持仓盈亏日历
  */
 
 // ── Toast 通知系统 ─────────────────────────────────────────
@@ -55,7 +55,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadOverview(),
     loadPortfolio(),
     loadHoldingsTable(),
-    loadAccountDashboard()
+    loadAccountDashboard(),
+    loadCalendar()
   ]);
   // 标记 holdings tab 已加载
   _tabLoaded['holdings'] = true;
@@ -208,10 +209,10 @@ async function loadOverview() {
     pnlEl.textContent = formatMoney(data.unrealized_pnl) + ' (' + formatPct(data.unrealized_pnl_pct) + ')';
     pnlEl.className = 'pnl-value ' + priceClass(data.unrealized_pnl);
 
-    // 当日盈亏
+    // 当日涨跌幅
     const dailyPnlEl = document.getElementById('dailyPnl');
     if (dailyPnlEl) {
-      dailyPnlEl.textContent = formatMoney(data.daily_pnl) + ' (' + formatPct(data.daily_pnl_pct) + ')';
+      dailyPnlEl.textContent = formatPct(data.daily_pnl_pct);
       dailyPnlEl.className = 'pnl-value ' + priceClass(data.daily_pnl);
     }
 
@@ -299,7 +300,7 @@ async function loadAccountDashboard() {
     const combinedRow = `<div class="account-dashboard-summary">
       <div><span>合并总资产</span><strong>${formatMoney(combined.total_assets || 0)}</strong></div>
       <div><span>持仓市值</span><strong>${formatMoney(combined.market_value || 0)}</strong></div>
-      <div><span>当日盈亏</span><strong class="${priceClass(combined.daily_pnl || 0)}">${formatMoney(combined.daily_pnl || 0)}</strong></div>
+      <div><span>当日涨跌幅</span><strong class="${priceClass(combined.daily_pnl || 0)}">${formatPct(combined.daily_pnl_pct || 0)}</strong></div>
       <div><span>浮动盈亏</span><strong class="${priceClass(combined.unrealized_pnl || 0)}">${formatMoney(combined.unrealized_pnl || 0)}</strong></div>
     </div>`;
     const rows = accounts.length ? accounts.map(a => {
@@ -412,25 +413,19 @@ function updateStopLoss() {
 // ── 持仓明细表格 ──────────────────────────────────────────
 async function loadHoldingsTable() {
   try {
-    const [portfolioData, overview] = await Promise.all([
-      portfolioGet(withAccount('/api/portfolio')),
-      portfolioGet(withAccount('/api/portfolio/overview'))
-    ]);
+    const portfolioData = await portfolioGet(withAccount('/api/portfolio'));
     const positions = portfolioData.positions || [];
-    const totalAssets = overview.total_assets || 1;
     const tbody = document.getElementById('holdingsBody');
     
     if (positions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><p>暂无持仓</p></td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="empty-state"><p>暂无持仓</p></td></tr>';
       return;
     }
     
     tbody.innerHTML = positions.map(p => {
       const cls = priceClass(p.unrealized_pnl);
-      const marketValue = p.price * p.total_shares;
-      const weight = (marketValue / totalAssets * 100).toFixed(1);
-      const dailyPnl = p.daily_pnl != null ? p.daily_pnl : (p.price - (p.prev_close || p.avg_cost)) * p.total_shares;
-      const dailyCls = priceClass(dailyPnl);
+      const marketValue = p.market_value ?? (p.price * p.total_shares);
+      const weight = p.weight_pct != null ? Number(p.weight_pct).toFixed(1) : '0.0';
       const code = esc(p.code);
       const name = esc(p.name);
       const clickCode = jsArg(p.code);
@@ -446,9 +441,9 @@ async function loadHoldingsTable() {
           <td>${p.total_shares}</td>
           <td>${p.avg_cost.toFixed(3)}</td>
           <td class="${priceClass(p.change_pct)}">${p.price ? p.price.toFixed(3) : '--'}</td>
+          <td class="${priceClass(p.change_pct)}">${formatPct(p.change_pct)}</td>
           <td>${formatMoney(marketValue)}</td>
           <td>${weight}%</td>
-          <td class="${dailyCls}">${formatMoney(dailyPnl)}</td>
           <td class="${cls}">${formatMoney(p.unrealized_pnl)}</td>
           <td class="${cls}">${formatPct(p.unrealized_pnl_pct)}</td>
           <td class="${stopLossCls}">${stopLossDist}%</td>
@@ -702,11 +697,12 @@ async function refreshAll() {
     loadPortfolio(),
     loadHoldingsTable(),
     loadTrades(),
-    loadAccountDashboard()
+    loadAccountDashboard(),
+    loadCalendar()
   ]);
 }
 
-// ── 盈亏日历 ──────────────────────────────────────────────
+// ── 持仓盈亏日历 ──────────────────────────────────────────
 async function loadCalendar() {
   try {
     const data = await portfolioGet(`/api/pnl/calendar?year=${calendarYear}&month=${calendarMonth}`);
@@ -794,7 +790,7 @@ function changeMonth(delta) {
 }
 
 function showDayDetail(day) {
-  // 显示当日各股票盈亏明细
+  // 显示当日各股票持仓盈亏明细
   const dateStr = `${calendarYear}-${String(calendarMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
 
   // 找到日历格子的位置
@@ -849,7 +845,7 @@ async function loadDayDetailData(dateStr, popup) {
     `;
 
     if (stockPnl.length > 0) {
-      html += '<div class="day-detail-stocks">';
+      html += '<div class="day-detail-stocks"><div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px;">持仓盈亏明细</div>';
       stockPnl.forEach(s => {
         const amt = s.amount || 0;
         const cls = priceClass(amt);
@@ -876,7 +872,7 @@ async function loadDayDetailData(dateStr, popup) {
     }
 
     if (stockPnl.length === 0 && trades.length === 0) {
-      html += '<div style="text-align:center;color:var(--text-muted);padding:12px;">当日无交易记录</div>';
+      html += '<div style="text-align:center;color:var(--text-muted);padding:12px;">暂无持仓盈亏快照或交易记录</div>';
     }
 
     popup.innerHTML = html;

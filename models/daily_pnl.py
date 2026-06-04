@@ -1,9 +1,9 @@
-"""盈亏日历"""
+"""持仓盈亏日历"""
 from models.database import get_db
 
 
 async def record_daily_snapshot(code6, date, pnl, close_price=None, shares=None):
-    """记录每日盈亏快照（per-stock）"""
+    """记录每日持仓盈亏快照（per-stock）"""
     db = await get_db()
     try:
         await db.execute(
@@ -18,7 +18,7 @@ async def record_daily_snapshot(code6, date, pnl, close_price=None, shares=None)
 
 async def get_monthly_pnl(year, month):
     """
-    获取某月盈亏日历。
+    获取某月持仓盈亏日历。
     返回 {date_str: {total_pnl, stocks: [{code6, pnl, close_price, shares}]}}
     """
     db = await get_db()

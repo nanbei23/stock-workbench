@@ -51,6 +51,39 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["days"][0]["date"], "2026-05-01")
         self.assertEqual(len(result["days"][0]["stocks"]), 2)
 
+    async def test_pnl_day_detail_uses_holding_pnl_rows_not_trade_cashflow(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO daily_pnl (date, code6, pnl, close_price, shares)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("2026-05-01", "002241", -506.0, 25.5, 1000),
+            )
+            db.execute(
+                """
+                INSERT INTO daily_pnl (date, code6, pnl, close_price, shares)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("2026-05-01", "002156", 443.3, 71.35, 3100),
+            )
+            db.execute(
+                """
+                INSERT INTO trades (code, name, direction, price, shares, amount, trade_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("002241", "歌尔股份", "buy", 26.006, 1000, 26006.0, "2026-05-01 10:00:00"),
+            )
+            db.commit()
+
+        detail = await portfolio_service.get_pnl_day_detail("2026-05-01")
+
+        self.assertEqual(detail["daily_pnl"]["total_pnl"], -62.7)
+        self.assertEqual(len(detail["stock_pnl"]), 2)
+        amounts = {row["code"]: row["amount"] for row in detail["stock_pnl"]}
+        self.assertEqual(amounts["002241"], -506.0)
+        self.assertEqual(amounts["002156"], 443.3)
+
     async def test_trading_plan_crud_and_quote_enrichment(self):
         request = SimpleNamespace(
             code="000001",
@@ -82,6 +115,77 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
 
         deleted = await portfolio_service.delete_trading_plan(created["id"])
         self.assertEqual(deleted["id"], created["id"])
+
+    async def test_position_daily_pnl_prefers_quote_change_pct_over_prev_close(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("002241", "歌尔股份", 1000, 26.006, "default"),
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"002241": {"price": 25.5, "prev_close": 26.81, "change_pct": 0.59}}),
+        ):
+            portfolio = await portfolio_service.get_portfolio("default")
+            overview = await portfolio_service.get_portfolio_overview("default")
+
+        expected_daily = round(25.5 * 1000 * 0.59 / (100 + 0.59), 3)
+        position = portfolio["positions"][0]
+        self.assertEqual(position["unrealized_pnl"], -506.0)
+        self.assertEqual(position["daily_pnl"], expected_daily)
+        self.assertEqual(overview["daily_pnl"], expected_daily)
+
+    async def test_portfolio_overview_daily_pct_uses_holdings_change_not_cash_weight(self):
+        await portfolio_service.set_cash_balance("default", 9000, "现金")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 11.0, "change_pct": 10.0}}),
+        ):
+            overview = await portfolio_service.get_portfolio_overview("default")
+
+        self.assertEqual(overview["market_value"], 1100.0)
+        self.assertEqual(overview["total_assets"], 10100.0)
+        self.assertEqual(overview["daily_pnl"], 100.0)
+        self.assertEqual(overview["daily_pnl_pct"], 10.0)
+
+    async def test_portfolio_list_returns_backend_snapshot_metrics(self):
+        await portfolio_service.set_cash_balance("default", 9000, "现金")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 11.0, "change_pct": 10.0}}),
+        ):
+            portfolio = await portfolio_service.get_portfolio("default")
+
+        position = portfolio["positions"][0]
+        self.assertEqual(portfolio["summary"]["total_assets"], 10100.0)
+        self.assertEqual(position["market_value"], 1100.0)
+        self.assertEqual(position["weight_pct"], 10.891)
+        self.assertEqual(position["unrealized_pnl"], 100.0)
 
     async def test_pending_position_not_found_raises_404(self):
         request = SimpleNamespace(
@@ -296,6 +400,98 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(overview["cash"], 8000.0)
         self.assertEqual(overview["cash_source"], "manual")
 
+    async def test_buy_trade_debits_cash_and_prevents_asset_double_counting(self):
+        await portfolio_service.set_cash_balance("default", 100000, "初始资金")
+        request = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="buy",
+            price=10.0,
+            shares=100,
+            commission=1.0,
+            stamp_tax=0,
+            transfer_fee=0.1,
+            notes="买入扣现金",
+            trade_time=None,
+            account_id="default",
+        )
+
+        await portfolio_service.add_trade(request)
+        ledger = await portfolio_service.get_cash_ledger("default", limit=5)
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={"000001": {"price": 10.0, "prev_close": 10.0}})):
+            overview = await portfolio_service.get_portfolio_overview("default")
+
+        self.assertEqual(overview["cash"], 98998.9)
+        self.assertEqual(overview["market_value"], 1000.0)
+        self.assertEqual(overview["total_assets"], 99998.9)
+        self.assertEqual(ledger["entries"][0]["direction"], "trade_buy")
+        self.assertEqual(ledger["entries"][0]["amount"], -1001.1)
+
+    async def test_sell_trade_credits_cash_net_of_fees(self):
+        await portfolio_service.set_cash_balance("default", 100000, "初始资金")
+        buy = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="buy",
+            price=10.0,
+            shares=100,
+            commission=1.0,
+            stamp_tax=0,
+            transfer_fee=0.1,
+            notes="买入",
+            trade_time=None,
+            account_id="default",
+        )
+        sell = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="sell",
+            price=11.0,
+            shares=40,
+            commission=1.0,
+            stamp_tax=0.22,
+            transfer_fee=0.044,
+            notes="卖出",
+            trade_time=None,
+            account_id="default",
+        )
+
+        await portfolio_service.add_trade(buy)
+        await portfolio_service.add_trade(sell)
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={"000001": {"price": 11.0, "prev_close": 10.0}})):
+            overview = await portfolio_service.get_portfolio_overview("default")
+        ledger = await portfolio_service.get_cash_ledger("default", limit=5)
+
+        self.assertEqual(overview["cash"], 99437.636)
+        self.assertEqual(ledger["entries"][0]["direction"], "trade_sell")
+        self.assertEqual(ledger["entries"][0]["amount"], 438.736)
+
+    async def test_delete_trade_reverses_cash_effect(self):
+        await portfolio_service.set_cash_balance("default", 100000, "初始资金")
+        request = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="buy",
+            price=10.0,
+            shares=100,
+            commission=1.0,
+            stamp_tax=0,
+            transfer_fee=0.1,
+            notes="删除反冲",
+            trade_time=None,
+            account_id="default",
+        )
+
+        await portfolio_service.add_trade(request)
+        trade_id = (await portfolio_service.get_trades("000001", "default"))["trades"][0]["id"]
+        await portfolio_service.delete_trade(trade_id)
+        overview = await portfolio_service.get_portfolio_overview("default")
+        ledger = await portfolio_service.get_cash_ledger("default", limit=5)
+
+        self.assertEqual(overview["cash"], 100000.0)
+        self.assertEqual(ledger["entries"][0]["direction"], "trade_reversal")
+        self.assertEqual(ledger["entries"][0]["amount"], 1001.1)
+
     async def test_add_trade_keeps_position_in_selected_account(self):
         request = SimpleNamespace(
             code="000001",
@@ -320,6 +516,60 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected["positions"][0]["code"], "000001")
         self.assertEqual(selected["positions"][0]["total_shares"], 100)
         self.assertEqual(default["count"], 0)
+
+    async def test_same_stock_can_exist_in_multiple_accounts(self):
+        buy_default = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="buy",
+            price=10.0,
+            shares=100,
+            commission=0,
+            stamp_tax=0,
+            transfer_fee=0,
+            notes="默认账户",
+            trade_time=None,
+            account_id="default",
+        )
+        buy_alt = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="buy",
+            price=12.0,
+            shares=200,
+            commission=0,
+            stamp_tax=0,
+            transfer_fee=0,
+            notes="另一账户",
+            trade_time=None,
+            account_id="account-a",
+        )
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={})):
+            await portfolio_service.add_trade(buy_default)
+            await portfolio_service.add_trade(buy_alt)
+            default = await portfolio_service.get_portfolio("default")
+            selected = await portfolio_service.get_portfolio("account-a")
+
+        self.assertEqual(default["count"], 1)
+        self.assertEqual(selected["count"], 1)
+        self.assertEqual(default["positions"][0]["total_shares"], 100)
+        self.assertEqual(default["positions"][0]["avg_cost"], 10.0)
+        self.assertEqual(selected["positions"][0]["total_shares"], 200)
+        self.assertEqual(selected["positions"][0]["avg_cost"], 12.0)
+
+    async def test_account_dashboard_combines_cash_from_all_accounts(self):
+        await portfolio_service.create_account("账户A", account_id="account-a")
+        await portfolio_service.set_cash_balance("default", 1000, "默认现金")
+        await portfolio_service.set_cash_balance("account-a", 2000, "账户A现金")
+
+        dashboard = await portfolio_service.get_account_dashboard()
+
+        self.assertEqual(dashboard["combined"]["cash"], 3000.0)
+        self.assertEqual(dashboard["combined"]["total_assets"], 3000.0)
+        cash_by_account = {item["id"]: item["cash"] for item in dashboard["accounts"]}
+        self.assertEqual(cash_by_account["default"], 1000.0)
+        self.assertEqual(cash_by_account["account-a"], 2000.0)
 
     async def test_add_trade_preserves_three_decimal_asset_numbers(self):
         request = SimpleNamespace(

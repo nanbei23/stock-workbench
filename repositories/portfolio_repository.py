@@ -20,7 +20,18 @@ async def fetch_watchlist_and_positions(db):
     )
     stocks = [dict(row) for row in rows]
     portfolio_rows = await db.execute_fetchall(
-        "SELECT code, avg_cost, total_shares FROM portfolio"
+        """
+        SELECT
+            code,
+            SUM(total_shares) AS total_shares,
+            CASE
+                WHEN SUM(total_shares) > 0
+                THEN SUM(avg_cost * total_shares) / SUM(total_shares)
+                ELSE 0
+            END AS avg_cost
+        FROM portfolio
+        GROUP BY code
+        """
     )
     portfolio_map = {row["code"]: dict(row) for row in portfolio_rows}
     return stocks, portfolio_map
@@ -145,7 +156,7 @@ async def insert_trade(db, req):
     amount = round(req.price * req.shares, 3)
     total_cost = round(amount + req.commission + req.stamp_tax + req.transfer_fee, 3)
     trade_time = req.trade_time if req.trade_time else None
-    await db.execute(
+    cursor = await db.execute(
         """
         INSERT INTO trades (
             code, name, direction, price, shares, amount,
@@ -169,11 +180,60 @@ async def insert_trade(db, req):
         ),
     )
     await db.commit()
+    return await fetch_trade(db, cursor.lastrowid)
 
 
 async def fetch_trade(db, trade_id: int):
     row = await (await db.execute("SELECT * FROM trades WHERE id = ?", (trade_id,))).fetchone()
     return dict(row) if row else None
+
+
+def trade_cash_delta(trade: dict) -> float:
+    direction = str(trade.get("direction") or "").lower()
+    amount = float(trade.get("amount") or 0)
+    fees = (
+        float(trade.get("commission") or 0)
+        + float(trade.get("stamp_tax") or 0)
+        + float(trade.get("transfer_fee") or 0)
+    )
+    if direction == "buy":
+        return round(-(amount + fees), 3)
+    if direction == "sell":
+        return round(amount - fees, 3)
+    return 0.0
+
+
+async def apply_trade_cash_effect(db, trade: dict, *, reverse: bool = False):
+    aid = trade.get("account_id") or "default"
+    delta = trade_cash_delta(trade)
+    if reverse:
+        delta = round(-delta, 3)
+    current = await fetch_cash_and_fees(db, aid)
+    new_cash = round(float(current["cash"]) + delta, 3)
+    key = f"cash_balance_{aid}"
+    direction = "trade_reversal" if reverse else f"trade_{str(trade.get('direction') or 'adjust').lower()}"
+    notes = (
+        f"{'冲销' if reverse else '交易'}现金变动："
+        f"{trade.get('name') or trade.get('code') or ''} {trade.get('code') or ''} "
+        f"#{trade.get('id') or ''}"
+    ).strip()
+    await db.execute(
+        """
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, str(new_cash)),
+    )
+    await db.execute(
+        """
+        INSERT INTO cash_ledger (account_id, direction, amount, balance_after, source, notes)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (aid, direction, delta, new_cash, "trade", notes),
+    )
+    await db.commit()
+    return {"account_id": aid, "cash": new_cash, "amount": delta, "direction": direction}
 
 
 async def fetch_trade_stats(db, code: str):
@@ -277,7 +337,7 @@ async def recalc_portfolio(db, code: str, account_id: str | None = None):
             """
             INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost, updated_at, account_id)
             VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
-            ON CONFLICT(code) DO UPDATE SET
+            ON CONFLICT(account_id, code) DO UPDATE SET
                 total_shares=excluded.total_shares,
                 available_shares=excluded.available_shares,
                 avg_cost=excluded.avg_cost,
@@ -295,21 +355,39 @@ async def recalc_portfolio(db, code: str, account_id: str | None = None):
 async def fetch_positions(db, account_id=None):
     if account_id:
         rows = await db.execute_fetchall(
-            "SELECT * FROM portfolio WHERE total_shares > 0 AND account_id = ?",
+            "SELECT * FROM portfolio WHERE total_shares > 0 AND account_id = ? ORDER BY market_value DESC, code ASC",
             (account_id,),
         )
     else:
-        rows = await db.execute_fetchall("SELECT * FROM portfolio WHERE total_shares > 0")
+        rows = await db.execute_fetchall("SELECT * FROM portfolio WHERE total_shares > 0 ORDER BY account_id ASC, market_value DESC, code ASC")
     return [dict(row) for row in rows]
 
 
 async def fetch_cash_and_fees(db, account_id=None):
-    cash_key = f"cash_balance_{account_id}" if account_id else "cash_balance"
-    cash_row = await (
-        await db.execute("SELECT value FROM settings WHERE key = ?", (cash_key,))
-    ).fetchone()
-    cash = float(cash_row[0]) if cash_row else 0.0
-    cash_source = "manual" if cash_row else "unset"
+    if account_id:
+        cash_key = f"cash_balance_{account_id}"
+        cash_row = await (
+            await db.execute("SELECT value FROM settings WHERE key = ?", (cash_key,))
+        ).fetchone()
+        if not cash_row and account_id == "default":
+            cash_row = await (
+                await db.execute("SELECT value FROM settings WHERE key = 'cash_balance'")
+            ).fetchone()
+        cash = float(cash_row[0]) if cash_row else 0.0
+        cash_source = "manual" if cash_row else "unset"
+    else:
+        cash_rows = await db.execute_fetchall(
+            "SELECT key, value FROM settings WHERE key LIKE 'cash_balance_%'"
+        )
+        if cash_rows:
+            cash = sum(float(row["value"] or 0) for row in cash_rows)
+            cash_source = "manual"
+        else:
+            cash_row = await (
+                await db.execute("SELECT value FROM settings WHERE key = 'cash_balance'")
+            ).fetchone()
+            cash = float(cash_row[0]) if cash_row else 0.0
+            cash_source = "manual" if cash_row else "unset"
     if account_id:
         fee_row = await (
             await db.execute(
@@ -550,8 +628,34 @@ async def fetch_day_trades(db, day: str):
 
 
 async def fetch_daily_pnl_day(db, day: str):
-    row = await (await db.execute("SELECT * FROM daily_pnl WHERE date = ?", (day,))).fetchone()
-    return dict(row) if row else None
+    rows = await db.execute_fetchall(
+        "SELECT * FROM daily_pnl WHERE date = ? ORDER BY code6",
+        (day,),
+    )
+    if not rows:
+        return None
+    items = [dict(row) for row in rows]
+    summary = next((row for row in items if not row.get("code6")), None)
+    if summary and summary.get("total_pnl") is not None:
+        total_pnl = summary.get("total_pnl") or 0
+    else:
+        total_pnl = sum((row.get("pnl") or 0) for row in items if row.get("code6"))
+    result = dict(summary) if summary else {"date": day, "code6": ""}
+    result["total_pnl"] = round(total_pnl, 3)
+    return result
+
+
+async def fetch_daily_pnl_stock_rows_day(db, day: str):
+    rows = await db.execute_fetchall(
+        """
+        SELECT date, code6, pnl, close_price, shares
+        FROM daily_pnl
+        WHERE date = ? AND COALESCE(code6, '') <> ''
+        ORDER BY code6
+        """,
+        (day,),
+    )
+    return [dict(row) for row in rows]
 
 
 async def fetch_trading_plans(db, status=None, account_id=None):

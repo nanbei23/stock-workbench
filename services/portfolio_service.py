@@ -21,11 +21,34 @@ async def _with_db(fn):
         await db.close()
 
 
+def _daily_pnl_from_quote(quote: dict, shares) -> float:
+    price = float(quote.get("price") or 0)
+    total_shares = float(shares or 0)
+    if not price or not total_shares:
+        return 0.0
+
+    change_pct = quote.get("change_pct")
+    if change_pct is not None:
+        pct = float(change_pct or 0)
+        if pct != -100:
+            return round(price * total_shares * pct / (100 + pct), 3)
+
+    change = quote.get("change")
+    if change is not None:
+        return round(float(change or 0) * total_shares, 3)
+
+    prev_close = float(quote.get("prev_close") or 0)
+    return round((price - prev_close) * total_shares, 3) if prev_close else 0.0
+
+
 def _enrich_position(position: dict, quote: dict):
-    position["price"] = quote.get("price", 0)
-    position["prev_close"] = quote.get("prev_close", 0)
-    position["change_pct"] = quote.get("change_pct", 0)
+    position["price"] = float(quote.get("price") or 0)
+    position["prev_close"] = float(quote.get("prev_close") or 0)
+    position["change_pct"] = float(quote.get("change_pct") or 0)
     position["name"] = quote.get("name", position.get("name", ""))
+    position["market_value"] = round(position["price"] * float(position.get("total_shares") or 0), 3)
+    position["unrealized_pnl"] = 0.0
+    position["unrealized_pnl_pct"] = 0.0
     if position["avg_cost"] and position["price"]:
         position["unrealized_pnl"] = round(
             (position["price"] - position["avg_cost"]) * position["total_shares"], 3
@@ -33,10 +56,49 @@ def _enrich_position(position: dict, quote: dict):
         position["unrealized_pnl_pct"] = round(
             (position["price"] - position["avg_cost"]) / position["avg_cost"] * 100, 3
         )
-    if position["prev_close"] and position["price"]:
-        position["daily_pnl"] = round(
-            (position["price"] - position["prev_close"]) * position["total_shares"], 3
-        )
+    position["daily_pnl"] = _daily_pnl_from_quote(quote, position["total_shares"])
+
+
+def _summary_from_positions(positions: list[dict], cash_and_fees: dict) -> dict:
+    total_market_value = sum(float(position.get("market_value") or 0) for position in positions)
+    total_cost = sum(float(position.get("avg_cost") or 0) * float(position.get("total_shares") or 0) for position in positions)
+    total_daily_pnl = sum(float(position.get("daily_pnl") or 0) for position in positions)
+    total_unrealized_pnl = sum(float(position.get("unrealized_pnl") or 0) for position in positions)
+    cash = float(cash_and_fees["cash"])
+    total_assets = total_market_value + cash
+    previous_market_value = total_market_value - total_daily_pnl
+    return {
+        "total_assets": round(total_assets, 3),
+        "market_value": round(total_market_value, 3),
+        "cash": round(cash, 3),
+        "cash_source": cash_and_fees.get("cash_source") or "unset",
+        "total_cost": round(total_cost, 3),
+        "daily_pnl": round(total_daily_pnl, 3),
+        "unrealized_pnl": round(total_unrealized_pnl, 3),
+        "daily_pnl_pct": round(total_daily_pnl / previous_market_value * 100, 3) if previous_market_value else 0,
+        "unrealized_pnl_pct": round(total_unrealized_pnl / total_cost * 100, 3) if total_cost else 0,
+        "total_commission": round(cash_and_fees["total_commission"], 3),
+        "total_stamp_tax": round(cash_and_fees["total_stamp_tax"], 3),
+    }
+
+
+async def _portfolio_snapshot(account_id=None):
+    async def _load(db):
+        positions = await repo.fetch_positions(db, account_id)
+        cash_and_fees = await repo.fetch_cash_and_fees(db, account_id)
+        return positions, cash_and_fees
+
+    positions, cash_and_fees = await _with_db(_load)
+    if positions:
+        quotes = await get_batch_quotes([position["code"] for position in positions])
+        for position in positions:
+            _enrich_position(position, quotes.get(position["code"], {}))
+    summary = _summary_from_positions(positions, cash_and_fees)
+    total_assets = summary["total_assets"]
+    for position in positions:
+        position["weight_pct"] = round(float(position.get("market_value") or 0) / total_assets * 100, 3) if total_assets else 0
+    positions.sort(key=lambda item: (-(float(item.get("market_value") or 0)), item.get("code") or ""))
+    return positions, summary
 
 
 async def list_accounts():
@@ -88,11 +150,7 @@ async def get_watchlist():
             else:
                 stock["unrealized_pnl"] = 0
                 stock["unrealized_pnl_pct"] = 0
-            stock["daily_pnl"] = (
-                round((stock["price"] - stock["prev_close"]) * stock["total_shares"], 3)
-                if stock["prev_close"] and stock["total_shares"] and stock["price"]
-                else 0
-            )
+            stock["daily_pnl"] = _daily_pnl_from_quote(quote, stock["total_shares"])
             latest_report = latest_reports.get(stock["code"], {})
             stock["last_report_id"] = latest_report.get("id")
             stock["last_report_signal"] = latest_report.get("signal")
@@ -367,7 +425,8 @@ async def get_trades(code=None, account_id=None):
 
 async def add_trade(req):
     async def _add(db):
-        await repo.insert_trade(db, req)
+        trade = await repo.insert_trade(db, req)
+        await repo.apply_trade_cash_effect(db, trade)
         return await repo.recalc_portfolio(db, req.code, getattr(req, "account_id", None) or "default")
 
     return {"status": "ok", "trade": await _with_db(_add)}
@@ -387,6 +446,7 @@ async def delete_trade(trade_id: int):
         if not trade:
             raise HTTPException(status_code=404, detail="未找到交易记录")
         await repo.delete_trade(db, trade_id)
+        await repo.apply_trade_cash_effect(db, trade, reverse=True)
         portfolio = await repo.recalc_portfolio(db, trade["code"], trade.get("account_id") or "default")
         return trade, portfolio
 
@@ -396,11 +456,17 @@ async def delete_trade(trade_id: int):
 
 async def clear_stock_trades(code: str):
     async def _clear(db):
+        trades = await repo.fetch_trades(db, code)
         count = await repo.count_stock_trades(db, code)
         if count == 0:
             raise HTTPException(status_code=404, detail=f"未找到 {code} 的交易记录")
         await repo.delete_stock_trades(db, code)
+        affected_accounts = {trade.get("account_id") or "default" for trade in trades}
+        for trade in trades:
+            await repo.apply_trade_cash_effect(db, trade, reverse=True)
         portfolio = await repo.recalc_portfolio(db, code)
+        for account_id in affected_accounts - {"default"}:
+            await repo.recalc_portfolio(db, code, account_id)
         return count, portfolio
 
     count, portfolio = await _with_db(_clear)
@@ -430,6 +496,9 @@ async def edit_trade(trade_id: int, req):
             3,
         )
         await repo.update_trade(db, trade_id, values)
+        updated = await repo.fetch_trade(db, trade_id)
+        await repo.apply_trade_cash_effect(db, trade, reverse=True)
+        await repo.apply_trade_cash_effect(db, updated)
         return await repo.recalc_portfolio(db, trade["code"], trade.get("account_id") or "default")
 
     portfolio = await _with_db(_edit)
@@ -437,57 +506,13 @@ async def edit_trade(trade_id: int, req):
 
 
 async def get_portfolio(account_id=None):
-    async def _load(db):
-        return await repo.fetch_positions(db, account_id)
-
-    positions = await _with_db(_load)
-    if positions:
-        quotes = await get_batch_quotes([position["code"] for position in positions])
-        for position in positions:
-            _enrich_position(position, quotes.get(position["code"], {}))
-    return {"count": len(positions), "positions": positions}
+    positions, summary = await _portfolio_snapshot(account_id)
+    return {"count": len(positions), "positions": positions, "summary": summary}
 
 
 async def get_portfolio_overview(account_id=None):
-    async def _load(db):
-        positions = await repo.fetch_positions(db, account_id)
-        cash_and_fees = await repo.fetch_cash_and_fees(db, account_id)
-        return positions, cash_and_fees
-
-    positions, cash_and_fees = await _with_db(_load)
-    total_market_value = 0
-    total_cost = 0
-    total_daily_pnl = 0
-    total_unrealized_pnl = 0
-
-    if positions:
-        quotes = await get_batch_quotes([position["code"] for position in positions])
-        for position in positions:
-            quote = quotes.get(position["code"], {})
-            price = quote.get("price", 0)
-            prev_close = quote.get("prev_close", 0)
-            shares = position["total_shares"]
-            avg_cost = position["avg_cost"]
-            total_market_value += price * shares
-            total_cost += avg_cost * shares
-            total_daily_pnl += (price - prev_close) * shares if price and prev_close else 0
-            total_unrealized_pnl += (price - avg_cost) * shares if price and avg_cost else 0
-
-    cash = cash_and_fees["cash"]
-    total_assets = total_market_value + cash
-    return {
-        "total_assets": round(total_assets, 3),
-        "market_value": round(total_market_value, 3),
-        "cash": round(cash, 3),
-        "cash_source": cash_and_fees.get("cash_source") or "unset",
-        "total_cost": round(total_cost, 3),
-        "daily_pnl": round(total_daily_pnl, 3),
-        "unrealized_pnl": round(total_unrealized_pnl, 3),
-        "daily_pnl_pct": round(total_daily_pnl / total_assets * 100, 3) if total_assets else 0,
-        "unrealized_pnl_pct": round(total_unrealized_pnl / total_cost * 100, 3) if total_cost else 0,
-        "total_commission": round(cash_and_fees["total_commission"], 3),
-        "total_stamp_tax": round(cash_and_fees["total_stamp_tax"], 3),
-    }
+    _, summary = await _portfolio_snapshot(account_id)
+    return summary
 
 
 async def get_account_dashboard():
@@ -708,23 +733,27 @@ async def get_pnl_day_detail(day: str):
     async def _load(db):
         trades = await repo.fetch_day_trades(db, day)
         daily_pnl = await repo.fetch_daily_pnl_day(db, day)
-        return trades, daily_pnl
+        daily_rows = await repo.fetch_daily_pnl_stock_rows_day(db, day)
+        return trades, daily_pnl, daily_rows
 
-    trades, daily_pnl = await _with_db(_load)
-    stock_pnl = {}
+    trades, daily_pnl, daily_rows = await _with_db(_load)
+    trade_names = {}
     for trade in trades:
-        code = trade["code"]
-        if code not in stock_pnl:
-            stock_pnl[code] = {"code": code, "name": trade["name"], "trades": [], "amount": 0}
-        stock_pnl[code]["trades"].append(trade)
-        if trade["direction"] == "buy":
-            stock_pnl[code]["amount"] -= trade["amount"]
-        else:
-            stock_pnl[code]["amount"] += trade["amount"]
+        trade_names.setdefault((trade.get("code") or "")[:6], trade.get("name"))
+    stock_pnl = [
+        {
+            "code": row.get("code6"),
+            "name": trade_names.get(row.get("code6")) or row.get("code6"),
+            "amount": round(row.get("pnl") or 0, 3),
+            "close_price": row.get("close_price"),
+            "shares": row.get("shares"),
+        }
+        for row in daily_rows
+    ]
     return {
         "date": day,
         "daily_pnl": daily_pnl,
-        "stock_pnl": list(stock_pnl.values()),
+        "stock_pnl": stock_pnl,
         "trades": trades,
     }
 

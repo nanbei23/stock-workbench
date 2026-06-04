@@ -193,8 +193,9 @@ function renderAIStockCards() {
             const barCls = cls;
             const pctSign = cp >= 0 ? '+' : '';
             const chgSign = s.change != null ? (s.change >= 0 ? '+' : '') : '';
-            const dailyPnl = s.daily_pnl ? formatPnlJS(s.daily_pnl) : (s.change != null ? (chgSign + s.change.toFixed(3) + '元') : '--');
-            const dailyPnlCls = s.daily_pnl ? (s.daily_pnl >= 0 ? 'up' : 'down') : cls;
+            const dailyPnl = `${pctSign}${cp.toFixed(3)}%`;
+            const dailyPnlCls = cls;
+            const dailyChange = s.change != null ? `${chgSign}${s.change.toFixed(3)}元` : '--';
             const holdPnl = s.unrealized_pnl ? formatPnlJS(s.unrealized_pnl) : '--';
             const holdPnlCls = s.unrealized_pnl ? (s.unrealized_pnl >= 0 ? 'up' : 'down') : '';
             const lastSignal = getStockLastSignal(s);
@@ -212,9 +213,9 @@ function renderAIStockCards() {
                         <div class="sc-price ${cls}">${(s.price??0).toFixed(3)}<span class="sc-price-unit">元</span></div>
                     </div>
                     <div class="sc-right">
-                        <div class="sc-data-row"><span class="sc-data-lbl">当日盈亏</span><span class="sc-data-val ${dailyPnlCls}">${dailyPnl}</span></div>
+                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨跌幅</span><span class="sc-data-val ${dailyPnlCls}">${dailyPnl}</span></div>
                         <div class="sc-data-row"><span class="sc-data-lbl">持仓盈亏</span><span class="sc-data-val ${holdPnlCls}">${holdPnl}</span></div>
-                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨幅</span><span class="sc-data-val ${cls}">${pctSign}${cp.toFixed(3)}%</span></div>
+                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨跌额</span><span class="sc-data-val ${cls}">${dailyChange}</span></div>
                     </div>
                 </div>
                 <div class="stock-card-bar ${barCls}"></div>

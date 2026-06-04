@@ -1,8 +1,13 @@
 import importlib.util
+import asyncio
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+
+import aiosqlite
+
+from models import database
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +24,11 @@ SETTINGS_TEMPLATE = ROOT / "templates" / "settings.html"
 STYLE_CSS = ROOT / "static" / "css" / "style.css"
 CHART_JS = ROOT / "static" / "js" / "chart.js"
 INDEX_TEMPLATE = ROOT / "templates" / "index.html"
+STOCK_JS = ROOT / "static" / "js" / "stock.js"
 AURORA_FLOW_CSS = ROOT / "static" / "css" / "aurora-flow.css"
 WIND_DASHBOARD_CSS = ROOT / "static" / "css" / "wind-dashboard.css"
+PORTFOLIO_TEMPLATE = ROOT / "templates" / "portfolio.html"
+PORTFOLIO_JS = ROOT / "static" / "js" / "portfolio.js"
 
 
 def load_migration_module():
@@ -175,6 +183,29 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("positionActionLabel(item.action)", js)
         self.assertNotIn("<td>${escapeHtml(item.action)}</td>", js)
 
+    def test_portfolio_page_uses_change_pct_and_holding_pnl_copy(self):
+        js = PORTFOLIO_JS.read_text(encoding="utf-8")
+        html = PORTFOLIO_TEMPLATE.read_text(encoding="utf-8")
+        stock_js = STOCK_JS.read_text(encoding="utf-8")
+        ai_js = AI_JS.read_text(encoding="utf-8")
+        index_html = INDEX_TEMPLATE.read_text(encoding="utf-8")
+        ai_html = AI_TEMPLATE.read_text(encoding="utf-8")
+        scheduler_source = (ROOT / "scheduler" / "report_runner.py").read_text(encoding="utf-8")
+
+        for source in (html, js, stock_js, ai_js, index_html, ai_html):
+            self.assertNotIn("当日盈亏", source)
+        self.assertIn("当日涨跌幅", html)
+        self.assertIn("当日涨跌幅", js)
+        self.assertIn("当日涨跌幅", stock_js)
+        self.assertIn("当日涨跌幅", ai_js)
+        self.assertIn("持仓盈亏日历", html)
+        self.assertIn("本月持仓盈亏", html)
+        self.assertIn("持仓盈亏明细", js)
+        self.assertIn("stock.js?v=2.9.20-pnl-pct", index_html)
+        self.assertIn("ai.js?v=2.9.20-pnl-pct", ai_html)
+        self.assertIn("(price - avg_cost) * total_shares", scheduler_source)
+        self.assertNotIn("(price - prev_close) * total_shares", scheduler_source)
+
     def test_reports_page_supports_grouped_collapsible_report_list(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
         html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
@@ -217,6 +248,70 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertNotIn("formatMarkdown(typeof report.risk_debate === 'string' ? report.risk_debate : JSON.stringify", js)
         self.assertIn(".structured-report", css)
         self.assertIn(".structured-key", css)
+
+    def test_portfolio_table_separates_holding_pnl_and_change_pct(self):
+        html = PORTFOLIO_TEMPLATE.read_text(encoding="utf-8")
+        js = PORTFOLIO_JS.read_text(encoding="utf-8")
+
+        self.assertIn("<th>持仓盈亏</th>", html)
+        self.assertIn("<th>持仓盈亏%</th>", html)
+        self.assertIn("<th>涨跌幅</th>", html)
+        self.assertNotIn("<th>当日涨跌盈亏</th>", html)
+        self.assertIn("${formatMoney(p.unrealized_pnl)}</td>", js)
+        self.assertIn("${formatPct(p.unrealized_pnl_pct)}</td>", js)
+        self.assertIn("${formatPct(p.change_pct)}</td>", js)
+
+    def test_portfolio_schema_migrates_to_account_code_unique_key(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                db_path = Path(tmp) / "workbench.db"
+                async with aiosqlite.connect(db_path) as db:
+                    db.row_factory = aiosqlite.Row
+                    await db.executescript(
+                        """
+                        CREATE TABLE portfolio (
+                            code TEXT PRIMARY KEY,
+                            name TEXT,
+                            total_shares REAL DEFAULT 0,
+                            available_shares REAL DEFAULT 0,
+                            avg_cost REAL DEFAULT 0,
+                            current_price REAL DEFAULT 0,
+                            market_value REAL DEFAULT 0,
+                            unrealized_pnl REAL DEFAULT 0,
+                            unrealized_pnl_pct REAL DEFAULT 0,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            account_id TEXT DEFAULT 'default'
+                        );
+                        INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost, account_id)
+                        VALUES ('000001', '平安银行', 100, 100, 10, 'default');
+                        """
+                    )
+                    await database.ensure_portfolio_account_key(db)
+                    await db.execute(
+                        """
+                        INSERT INTO portfolio (code, name, total_shares, available_shares, avg_cost, account_id)
+                        VALUES ('000001', '平安银行', 200, 200, 12, 'account-a')
+                        """
+                    )
+                    await db.commit()
+                    rows = await db.execute_fetchall(
+                        "SELECT account_id, total_shares, avg_cost FROM portfolio WHERE code='000001' ORDER BY account_id"
+                    )
+                    indexes = await db.execute_fetchall("PRAGMA index_list(portfolio)")
+                    unique_columns = []
+                    for index in indexes:
+                        if not index[2]:
+                            continue
+                        columns = await db.execute_fetchall(f"PRAGMA index_info({index[1]})")
+                        unique_columns.append([column[2] for column in columns])
+                    return rows, unique_columns
+
+        rows, unique_columns = asyncio.run(run())
+        self.assertEqual([(row["account_id"], row["total_shares"], row["avg_cost"]) for row in rows], [
+            ("account-a", 200.0, 12.0),
+            ("default", 100.0, 10.0),
+        ])
+        self.assertIn(["account_id", "code"], unique_columns)
 
     def test_reports_batch_jobs_have_manual_refresh_and_skip_reason(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -356,7 +451,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("图表组件加载失败，请刷新页面", stock_js)
         self.assertIn("source: data?.source", stock_js)
         self.assertIn("fallbackSource: data?.fallback_source", stock_js)
-        self.assertIn("static/js/stock.js?v=2.9.15-report-fixes", html)
+        self.assertIn("static/js/stock.js?v=2.9.20-pnl-pct", html)
 
     def test_kline_resilience_state_machine_fallback_and_diagnostics_are_present(self):
         chart_js = CHART_JS.read_text(encoding="utf-8")
@@ -384,7 +479,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         css = AURORA_FLOW_CSS.read_text(encoding="utf-8")
         chart_js = CHART_JS.read_text(encoding="utf-8")
 
-        self.assertIn("aurora-flow.css?v=2.9.8", base)
+        self.assertIn("aurora-flow.css?v=2.9.10", base)
         self.assertIn("id: 'aurora-flow'", base)
         self.assertIn("name: '蓝紫流光'", base)
         self.assertIn("icon: '流'", base)
