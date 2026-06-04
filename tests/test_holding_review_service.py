@@ -407,6 +407,72 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         items = await holding_review_service.get_review_items(pending["review_id"])
         self.assertEqual(items["items"][0]["latest_signal"], "SELL")
 
+    async def test_list_reviews_reconciles_waiting_review_after_completed_refresh_job(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "5000"))
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.execute(
+                """
+                INSERT INTO batch_jobs (job_id, job_type, status, total_count, completed_count)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("re-force", "report_generation", "pending", 1, 0),
+            )
+            db.commit()
+
+        async def fake_create_job(**kwargs):
+            return {"job_id": "re-force", "job_type": "report_generation", "status": "pending", "total_count": 1}
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"}}),
+        ), patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(side_effect=fake_create_job),
+        ):
+            pending = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                force_refresh_holdings=True,
+            )
+
+        self.assertEqual(pending["status"], "waiting_reports")
+
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "new-holding", "SELL", 90, "2026-06-04 11:00:00"),
+            )
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='completed', completed_count=1, completed_at=datetime('now')
+                WHERE job_id='re-force'
+                """
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 9.5, "change_pct": -1.0, "name": "平安银行"}}),
+        ):
+            reviews = await holding_review_service.list_reviews(limit=1)
+
+        self.assertEqual(reviews["reviews"][0]["review_id"], pending["review_id"])
+        self.assertEqual(reviews["reviews"][0]["status"], "completed")
+        self.assertTrue(reviews["reviews"][0]["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
+        self.assertNotIn("等待补报告完成", reviews["reviews"][0]["tomorrow_plan_markdown"])
+
     async def test_run_review_marks_failed_when_report_refresh_job_cannot_be_created(self):
         await database.init_db()
         with sqlite3.connect(self.db_path) as db:

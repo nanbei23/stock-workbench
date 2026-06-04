@@ -1217,7 +1217,48 @@ async def finalize_waiting_reviews_for_batch_job(job_id: str) -> dict[str, Any]:
     return {"job_id": clean_job_id, "finalized": finalized, "failed": failed, "pending": 0}
 
 
+async def reconcile_waiting_reviews(limit: int = 20) -> dict[str, Any]:
+    """Finalize stale waiting reviews whose report refresh job is already terminal.
+
+    The batch completion hook is best-effort. A web/process restart or an older
+    worker can leave a review in waiting_reports after the related report job has
+    already finished. Listing or opening reviews should self-heal that durable
+    state instead of requiring an operator to run a manual repair command.
+    """
+
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            """
+            SELECT DISTINCT h.batch_job_id
+            FROM holding_daily_reviews h
+            JOIN batch_jobs b ON b.job_id = h.batch_job_id
+            WHERE h.status = 'waiting_reports'
+              AND h.batch_job_id IS NOT NULL
+              AND h.batch_job_id != ''
+              AND b.status IN ('completed', 'failed', 'cancelled', 'manual_completed')
+            ORDER BY h.id ASC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit or 20), 100)),),
+        )
+    finally:
+        await db.close()
+    result = {"checked": len(rows), "finalized": 0, "failed": 0, "pending": 0, "job_ids": []}
+    for row in rows:
+        job_id = row["batch_job_id"]
+        if not job_id:
+            continue
+        outcome = await finalize_waiting_reviews_for_batch_job(job_id)
+        result["job_ids"].append(job_id)
+        result["finalized"] += int(outcome.get("finalized") or 0)
+        result["failed"] += int(outcome.get("failed") or 0)
+        result["pending"] += int(outcome.get("pending") or 0)
+    return result
+
+
 async def list_reviews(limit: int = 30, account_id: str | None = None) -> dict[str, Any]:
+    await reconcile_waiting_reviews()
     params: list[Any] = []
     where = ""
     if account_id:
@@ -1242,6 +1283,7 @@ async def list_reviews(limit: int = 30, account_id: str | None = None) -> dict[s
 
 
 async def get_review(review_id: str) -> dict[str, Any]:
+    await reconcile_waiting_reviews()
     db = await get_db()
     try:
         row = await (await db.execute("SELECT * FROM holding_daily_reviews WHERE review_id = ?", (review_id,))).fetchone()
