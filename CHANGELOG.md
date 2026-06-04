@@ -27,7 +27,7 @@ No unreleased changes.
 ### Deployment
 
 - Database initialization migrates the `portfolio` table from a global `code` primary key to `UNIQUE(account_id, code)` automatically.
-- After pulling this release, run `scripts/replay_trade_cash_ledger.py --apply` once if the deployment database already has trades recorded before `2.9.10`.
+- After pulling this release, run `scripts/replay_trade_cash_ledger.py --since <date> --starting-cash <cash_before_window> --apply` once if the deployment database already has trades recorded before `2.9.10`.
 
 ## 2.9.7 - 2026-06-03
 
