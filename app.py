@@ -83,6 +83,14 @@ async def page_position_plan_detail(request: Request, plan_id: str):
         context={"plan_id": plan_id},
     )
 
+@app.get("/holding-reviews/{review_id}", response_class=HTMLResponse)
+async def page_holding_review_detail(request: Request, review_id: str):
+    return templates.TemplateResponse(
+        request=request,
+        name="holding_review_detail.html",
+        context={"review_id": review_id},
+    )
+
 @app.get("/hotspots", response_class=HTMLResponse)
 async def page_hotspots(request: Request):
     return templates.TemplateResponse(request=request, name="hotspots.html")
@@ -124,6 +132,7 @@ from api.shadow_api import router as shadow_router
 from api.performance_api import router as performance_router
 from api.batch_report_api import router as batch_report_router
 from api.position_plan_api import router as position_plan_router
+from api.holding_review_api import router as holding_review_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -140,6 +149,7 @@ app.include_router(shadow_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
 app.include_router(batch_report_router, prefix="/api")
 app.include_router(position_plan_router, prefix="/api")
+app.include_router(holding_review_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")

@@ -85,6 +85,39 @@
     </div>
   </div>
 
+  <div class="card holding-review-card">
+    <div class="card-header portfolio-card-header">
+      <div>
+        <div class="card-title">明日交易作战计划</div>
+        <div class="cash-source-line">基于当前真实仓位、可用资金、持仓盈亏、候选池和市场环境生成明日执行口径。</div>
+      </div>
+      <button class="btn btn-sm btn-ghost" onclick="loadHoldingReviewSummary()">刷新</button>
+    </div>
+    <div class="holding-review-options">
+      <label><input type="checkbox" id="holdingReviewIncludeWatchlist" onchange="toggleHoldingReviewCandidatePanel()"> 从自选股选择候选</label>
+      <label><input type="checkbox" id="holdingReviewIncludePool" onchange="loadHoldingReviewCandidates()"> 包含观察池</label>
+    </div>
+    <div id="holdingReviewCandidatePanel" class="holding-review-candidates" style="display:none;">
+      <div class="holding-review-candidate-toolbar">
+        <input type="search" id="holdingReviewCandidateSearch" placeholder="搜索候选股票名称 / 代码"
+               oninput="filterHoldingReviewCandidates(this.value)">
+        <button class="btn btn-sm btn-ghost" onclick="selectVisibleHoldingReviewCandidates()">全选当前</button>
+        <button class="btn btn-sm btn-ghost" onclick="clearHoldingReviewCandidates()">清空</button>
+        <span id="holdingReviewCandidateCount">已选 0 只</span>
+      </div>
+      <div id="holdingReviewCandidateList" class="holding-review-candidate-list">
+        <div class="empty-state"><p>勾选后加载可选候选股。</p></div>
+      </div>
+    </div>
+    <div id="holdingReviewSummary" class="holding-review-summary">
+      <div class="empty-state"><p>暂无明日交易作战计划。点击生成后可在报告库回看详情。</p></div>
+    </div>
+    <div class="library-action-row" style="margin-top:10px;">
+      <button class="btn btn-sm btn-primary" onclick="runHoldingReview()">生成作战计划</button>
+      <a class="btn btn-sm" href="/reports?tab=holding-reviews">查看历史</a>
+    </div>
+  </div>
+
   <!-- Tab切换 -->
   <div class="detail-tabs">
     <button class="detail-tab active" data-tab="holdings" onclick="switchPTab('holdings')">持仓</button>
@@ -290,5 +323,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/portfolio.js?v=2.9.20-pnl-pct"></script>
+<script src="/static/js/portfolio.js?v=2.9.11-holding-review"></script>
 {% endblock %}

@@ -15,6 +15,7 @@
     let filtered = [];
     let snapshotsLoaded = false;
     let plansLoaded = false;
+    let holdingReviewsLoaded = false;
     let jobsLoaded = false;
     let modelProvidersLoaded = false;
     let modelProviders = [];
@@ -39,6 +40,8 @@
         if (window.StockMarketPermissions?.load) await window.StockMarketPermissions.load();
         renderReportMarketFilterState();
         await loadReportLibrary();
+        const tab = new URLSearchParams(window.location.search).get('tab');
+        if (tab) switchReportTab(tab);
     }
 
     async function requestJson(url, options) {
@@ -122,7 +125,11 @@
             candidate_screening: '候选筛选',
             single: '单模型',
             dual: '双模型',
-            per_role: '按角色'
+            per_role: '按角色',
+            none: '未加入候选池',
+            watchlist: '自选股',
+            watchlist_and_pool: '自选股+观察池',
+            selected: '手动选择'
         }[value] || value || '--';
     }
 
@@ -144,7 +151,10 @@
             strong_sell: '强烈卖出',
             clear: '清仓',
             no_buy: '禁止买入',
-            no_action: '不操作'
+            no_action: '不操作',
+            candidate: '候选观察',
+            review: '需要复核',
+            take_profit: '止盈观察'
         }[key] || value || '--';
     }
 
@@ -299,12 +309,14 @@
             reports: ['报告列表', '筛选、比较、勾选完整单股报告，并生成组合级多角色建仓建议。'],
             snapshots: ['数据快照', '查看七层数据底稿的完整性、批次、关联报告和快照详情。'],
             plans: ['建仓计划', '长期保存、回看和对比多角色建仓建议。'],
+            'holding-reviews': ['作战计划', '回看每日持仓扫描、资产上下文、触发项和明日交易作战计划。'],
             jobs: ['批量任务', '查看数据预取、报告生成和建仓计划任务进度。']
         }[tab] || ['报告列表', ''];
         if (title) title.textContent = meta[0];
         if (hint) hint.textContent = meta[1];
         if (tab === 'snapshots' && !snapshotsLoaded) loadSnapshots();
         if (tab === 'plans' && !plansLoaded) loadPositionPlans();
+        if (tab === 'holding-reviews' && !holdingReviewsLoaded) loadHoldingReviews();
         if (tab === 'jobs' && !jobsLoaded) loadBatchJobs();
     }
 
@@ -1029,6 +1041,110 @@
         await previewPositionPlan(encodeURIComponent(planId));
     }
 
+    async function loadHoldingReviews() {
+        const tbody = document.getElementById('holdingReviewRows');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">正在加载...</td></tr>';
+        try {
+            const data = await requestJson('/api/holding-reviews?limit=100');
+            const reviews = data.reviews || [];
+            holdingReviewsLoaded = true;
+            if (!reviews.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">暂无明日交易作战计划</td></tr>';
+                return;
+            }
+            tbody.innerHTML = reviews.map(review => {
+                const asset = review.asset_snapshot || {};
+                const encodedId = encodeURIComponent(review.review_id);
+                return `<tr onclick="previewHoldingReview('${encodedId}')">
+                    <td><strong>${escapeHtml(review.date || '--')}</strong><span>${escapeHtml(review.review_id)}</span></td>
+                    <td><span class="report-signal ${escapeHtml(statusClass(review.status))}">${escapeHtml(statusLabel(review.status))}</span></td>
+                    <td>${Number(review.holding_count || 0)} / ${Number(review.candidate_count || 0)}<span>${escapeHtml(strategyLabel(review.candidate_scope))}</span></td>
+                    <td>${Number(review.trigger_count || 0)}<span>高风险 ${Number(review.critical_count || 0)}</span></td>
+                    <td>${Number(asset.position_usage_pct || 0).toFixed(3)}%<span>现金 ${Number(asset.cash_pct || 0).toFixed(3)}%</span></td>
+                    <td>${(review.rerun_report_codes || []).length}<span>${escapeHtml((review.rerun_report_codes || []).slice(0, 3).join('、') || '--')}</span></td>
+                    <td>${escapeHtml(formatTime(review.created_at))}</td>
+                    <td onclick="event.stopPropagation()">
+                        <div class="library-action-row">
+                            <button class="btn btn-sm btn-primary" onclick="previewHoldingReview('${encodedId}')">预览</button>
+                            <a class="btn btn-sm" href="/holding-reviews/${encodedId}">详情页</a>
+                            <a class="btn btn-sm" href="/api/holding-reviews/${encodedId}/markdown" target="_blank">Markdown</a>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('');
+        } catch (err) {
+            if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`;
+        }
+    }
+
+    async function previewHoldingReview(encodedReviewId) {
+        const reviewId = decodeURIComponent(encodedReviewId);
+        const meta = document.getElementById('reportPreviewMeta');
+        const body = document.getElementById('reportPreview');
+        if (meta) meta.textContent = reviewId;
+        if (body) body.innerHTML = '<div class="library-empty-state">加载明日交易作战计划...</div>';
+        try {
+            const [review, items, flags] = await Promise.all([
+                requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}`),
+                requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}/items`),
+                requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}/flags`)
+            ]);
+            const asset = review.asset_snapshot || {};
+            const holdingRows = (items.items || []).filter(item => item.item_type === 'holding').map(item => `<tr>
+                <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
+                <td>${Number(item.position_pct || 0).toFixed(3)}%</td>
+                <td>${Number(item.price || 0).toFixed(3)}</td>
+                <td>${Number(item.change_pct || 0).toFixed(3)}%</td>
+                <td>${Number(item.holding_pnl || 0).toFixed(3)}</td>
+                <td>${escapeHtml(positionActionLabel(item.action_hint))}</td>
+            </tr>`).join('');
+            const candidateRows = (items.items || []).filter(item => item.item_type === 'candidate').slice(0, 20).map(item => `<tr>
+                <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
+                <td>${escapeHtml(item.source_group || '--')}</td>
+                <td>${Number(item.price || 0).toFixed(3)}</td>
+                <td>${Number(item.change_pct || 0).toFixed(3)}%</td>
+                <td>${escapeHtml(item.latest_signal || '--')}</td>
+            </tr>`).join('');
+            const flagHtml = (flags.flags || []).map(flag => `<li>
+                <strong>${escapeHtml(flag.name || flag.code)} ${escapeHtml(flag.code)}</strong>
+                <span class="report-signal ${escapeHtml(statusClass(flag.severity === 'critical' ? 'failed' : flag.severity === 'warning' ? 'running' : 'completed'))}">${escapeHtml(flag.severity)}</span>
+                ${escapeHtml(flag.description || '')}
+            </li>`).join('');
+            if (meta) meta.textContent = `${escapeHtml(review.tomorrow_plan?.title || '明日交易作战计划')} ${review.date || ''}`;
+            if (body) body.innerHTML = `
+                <div class="preview-signal">
+                    <span>${escapeHtml(statusLabel(review.status))}</span>
+                    <span>持仓 ${Number(review.holding_count || 0)} 只</span>
+                    <span>候选 ${Number(review.candidate_count || 0)} 只</span>
+                    <span>触发 ${Number(review.trigger_count || 0)} 项</span>
+                </div>
+                <h4>资产上下文</h4>
+                <div class="preview-block">
+                    <div class="snapshot-quality-summary">
+                        <div><span>总资产</span><strong>${Number(asset.total_assets || 0).toFixed(3)}</strong></div>
+                        <div><span>可用资金</span><strong>${Number(asset.cash || 0).toFixed(3)}</strong></div>
+                        <div><span>仓位使用率</span><strong>${Number(asset.position_usage_pct || 0).toFixed(3)}%</strong></div>
+                        <div><span>现金占比</span><strong>${Number(asset.cash_pct || 0).toFixed(3)}%</strong></div>
+                    </div>
+                </div>
+                <h4>持仓明细</h4>
+                <div class="preview-block"><table class="report-library-table"><tbody>${holdingRows || '<tr><td>暂无持仓</td></tr>'}</tbody></table></div>
+                <h4>触发项</h4>
+                <div class="preview-block"><ul class="structured-list">${flagHtml || '<li>暂无异常触发项</li>'}</ul></div>
+                <h4>自选候选池</h4>
+                <div class="preview-block"><table class="report-library-table"><tbody>${candidateRows || '<tr><td>未加入候选池</td></tr>'}</tbody></table></div>
+                <h4>明日交易作战计划</h4>
+                <div class="preview-block">${formatMarkdown(review.tomorrow_plan_markdown || '暂无')}</div>
+                <div class="preview-actions">
+                    <a class="btn btn-sm btn-primary" href="/holding-reviews/${encodeURIComponent(reviewId)}">打开完整详情页</a>
+                    <a class="btn btn-sm" href="/api/holding-reviews/${encodeURIComponent(reviewId)}/markdown" target="_blank">Markdown</a>
+                </div>
+            `;
+        } catch (err) {
+            if (body) body.innerHTML = `<div class="library-empty-state">加载失败：${escapeHtml(err.message)}</div>`;
+        }
+    }
+
     async function loadBatchJobs() {
         await loadWorkerRuntimeSummary();
         const tbody = document.getElementById('batchJobRows');
@@ -1522,6 +1638,8 @@
     window.previewReport = previewReport;
     window.previewSnapshot = previewSnapshot;
     window.previewPositionPlan = previewPositionPlan;
+    window.loadHoldingReviews = loadHoldingReviews;
+    window.previewHoldingReview = previewHoldingReview;
     window.archivePositionPlan = archivePositionPlan;
     window.adoptPositionPlan = adoptPositionPlan;
     window.abandonPositionPlan = abandonPositionPlan;

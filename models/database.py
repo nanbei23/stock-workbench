@@ -351,6 +351,81 @@ CREATE TABLE IF NOT EXISTS position_plan_items (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS holding_daily_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id TEXT UNIQUE NOT NULL,
+    date TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT 'default',
+    status TEXT NOT NULL DEFAULT 'pending',
+    holding_count INTEGER DEFAULT 0,
+    candidate_count INTEGER DEFAULT 0,
+    trigger_count INTEGER DEFAULT 0,
+    critical_count INTEGER DEFAULT 0,
+    candidate_scope TEXT DEFAULT 'none',
+    rerun_report_codes_json TEXT DEFAULT '[]',
+    source_report_ids_json TEXT DEFAULT '[]',
+    source_snapshot_ids_json TEXT DEFAULT '[]',
+    asset_snapshot_json TEXT DEFAULT '{}',
+    portfolio_snapshot_json TEXT DEFAULT '{}',
+    candidate_context_json TEXT DEFAULT '{}',
+    market_snapshot_json TEXT DEFAULT '{}',
+    summary TEXT,
+    tomorrow_plan_markdown TEXT,
+    tomorrow_plan_json TEXT DEFAULT '{}',
+    model_config_json TEXT DEFAULT '{}',
+    batch_job_id TEXT,
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS holding_review_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT 'default',
+    item_type TEXT NOT NULL DEFAULT 'holding',
+    code TEXT NOT NULL,
+    name TEXT,
+    source_group TEXT,
+    shares REAL DEFAULT 0,
+    avg_cost REAL DEFAULT 0,
+    price REAL DEFAULT 0,
+    change_pct REAL DEFAULT 0,
+    market_value REAL DEFAULT 0,
+    position_pct REAL DEFAULT 0,
+    holding_pnl REAL DEFAULT 0,
+    holding_pnl_pct REAL DEFAULT 0,
+    latest_signal TEXT,
+    latest_risk_score REAL,
+    latest_report_id INTEGER,
+    latest_report_created_at TEXT,
+    needs_report INTEGER DEFAULT 0,
+    action_hint TEXT,
+    reason TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS holding_trigger_flags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    account_id TEXT NOT NULL DEFAULT 'default',
+    code TEXT NOT NULL,
+    name TEXT,
+    flag_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    source TEXT NOT NULL DEFAULT 'holding_review',
+    description TEXT,
+    evidence_json TEXT DEFAULT '{}',
+    requires_full_report INTEGER DEFAULT 0,
+    source_report_id INTEGER,
+    source_snapshot_id INTEGER,
+    resolved INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS anomaly_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL,
@@ -627,6 +702,12 @@ CREATE INDEX IF NOT EXISTS idx_position_plans_status_created ON position_plans(s
 CREATE INDEX IF NOT EXISTS idx_position_plans_stage_created ON position_plans(stage, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_position_plan_items_plan ON position_plan_items(plan_id);
 CREATE INDEX IF NOT EXISTS idx_position_plan_items_code ON position_plan_items(code);
+CREATE INDEX IF NOT EXISTS idx_holding_daily_reviews_date ON holding_daily_reviews(date DESC, account_id);
+CREATE INDEX IF NOT EXISTS idx_holding_daily_reviews_status ON holding_daily_reviews(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_holding_review_items_review ON holding_review_items(review_id, item_type);
+CREATE INDEX IF NOT EXISTS idx_holding_review_items_code ON holding_review_items(code, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_review ON holding_trigger_flags(review_id, severity);
+CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_code ON holding_trigger_flags(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_anomaly_logs_code_created ON anomaly_logs(code, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_code_cached ON news_cache(code6, cached_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_cache_url ON news_cache(url);
@@ -1087,6 +1168,96 @@ MIGRATIONS = [
             ON batch_job_artifacts(job_id, created_at DESC);
         """,
     ),
+    (
+        12,
+        "holding_daily_reviews",
+        """
+        CREATE TABLE IF NOT EXISTS holding_daily_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT UNIQUE NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            status TEXT NOT NULL DEFAULT 'pending',
+            holding_count INTEGER DEFAULT 0,
+            candidate_count INTEGER DEFAULT 0,
+            trigger_count INTEGER DEFAULT 0,
+            critical_count INTEGER DEFAULT 0,
+            candidate_scope TEXT DEFAULT 'none',
+            rerun_report_codes_json TEXT DEFAULT '[]',
+            source_report_ids_json TEXT DEFAULT '[]',
+            source_snapshot_ids_json TEXT DEFAULT '[]',
+            asset_snapshot_json TEXT DEFAULT '{}',
+            portfolio_snapshot_json TEXT DEFAULT '{}',
+            candidate_context_json TEXT DEFAULT '{}',
+            market_snapshot_json TEXT DEFAULT '{}',
+            summary TEXT,
+            tomorrow_plan_markdown TEXT,
+            tomorrow_plan_json TEXT DEFAULT '{}',
+            model_config_json TEXT DEFAULT '{}',
+            batch_job_id TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            completed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS holding_review_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            item_type TEXT NOT NULL DEFAULT 'holding',
+            code TEXT NOT NULL,
+            name TEXT,
+            source_group TEXT,
+            shares REAL DEFAULT 0,
+            avg_cost REAL DEFAULT 0,
+            price REAL DEFAULT 0,
+            change_pct REAL DEFAULT 0,
+            market_value REAL DEFAULT 0,
+            position_pct REAL DEFAULT 0,
+            holding_pnl REAL DEFAULT 0,
+            holding_pnl_pct REAL DEFAULT 0,
+            latest_signal TEXT,
+            latest_risk_score REAL,
+            latest_report_id INTEGER,
+            latest_report_created_at TEXT,
+            needs_report INTEGER DEFAULT 0,
+            action_hint TEXT,
+            reason TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS holding_trigger_flags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            code TEXT NOT NULL,
+            name TEXT,
+            flag_type TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info',
+            source TEXT NOT NULL DEFAULT 'holding_review',
+            description TEXT,
+            evidence_json TEXT DEFAULT '{}',
+            requires_full_report INTEGER DEFAULT 0,
+            source_report_id INTEGER,
+            source_snapshot_id INTEGER,
+            resolved INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_holding_daily_reviews_date
+            ON holding_daily_reviews(date DESC, account_id);
+        CREATE INDEX IF NOT EXISTS idx_holding_daily_reviews_status
+            ON holding_daily_reviews(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_holding_review_items_review
+            ON holding_review_items(review_id, item_type);
+        CREATE INDEX IF NOT EXISTS idx_holding_review_items_code
+            ON holding_review_items(code, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_review
+            ON holding_trigger_flags(review_id, severity);
+        CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_code
+            ON holding_trigger_flags(code, created_at DESC);
+        """,
+    ),
 ]
 
 
@@ -1285,6 +1456,98 @@ async def ensure_batch_worker_heartbeats_table(db):
     )
 
 
+async def ensure_holding_daily_review_tables(db):
+    """Backfill holding daily review tables for existing databases."""
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS holding_daily_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT UNIQUE NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            status TEXT NOT NULL DEFAULT 'pending',
+            holding_count INTEGER DEFAULT 0,
+            candidate_count INTEGER DEFAULT 0,
+            trigger_count INTEGER DEFAULT 0,
+            critical_count INTEGER DEFAULT 0,
+            candidate_scope TEXT DEFAULT 'none',
+            rerun_report_codes_json TEXT DEFAULT '[]',
+            source_report_ids_json TEXT DEFAULT '[]',
+            source_snapshot_ids_json TEXT DEFAULT '[]',
+            asset_snapshot_json TEXT DEFAULT '{}',
+            portfolio_snapshot_json TEXT DEFAULT '{}',
+            candidate_context_json TEXT DEFAULT '{}',
+            market_snapshot_json TEXT DEFAULT '{}',
+            summary TEXT,
+            tomorrow_plan_markdown TEXT,
+            tomorrow_plan_json TEXT DEFAULT '{}',
+            model_config_json TEXT DEFAULT '{}',
+            batch_job_id TEXT,
+            error TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            completed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS holding_review_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            item_type TEXT NOT NULL DEFAULT 'holding',
+            code TEXT NOT NULL,
+            name TEXT,
+            source_group TEXT,
+            shares REAL DEFAULT 0,
+            avg_cost REAL DEFAULT 0,
+            price REAL DEFAULT 0,
+            change_pct REAL DEFAULT 0,
+            market_value REAL DEFAULT 0,
+            position_pct REAL DEFAULT 0,
+            holding_pnl REAL DEFAULT 0,
+            holding_pnl_pct REAL DEFAULT 0,
+            latest_signal TEXT,
+            latest_risk_score REAL,
+            latest_report_id INTEGER,
+            latest_report_created_at TEXT,
+            needs_report INTEGER DEFAULT 0,
+            action_hint TEXT,
+            reason TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS holding_trigger_flags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL DEFAULT 'default',
+            code TEXT NOT NULL,
+            name TEXT,
+            flag_type TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info',
+            source TEXT NOT NULL DEFAULT 'holding_review',
+            description TEXT,
+            evidence_json TEXT DEFAULT '{}',
+            requires_full_report INTEGER DEFAULT 0,
+            source_report_id INTEGER,
+            source_snapshot_id INTEGER,
+            resolved INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_holding_daily_reviews_date
+            ON holding_daily_reviews(date DESC, account_id);
+        CREATE INDEX IF NOT EXISTS idx_holding_daily_reviews_status
+            ON holding_daily_reviews(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_holding_review_items_review
+            ON holding_review_items(review_id, item_type);
+        CREATE INDEX IF NOT EXISTS idx_holding_review_items_code
+            ON holding_review_items(code, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_review
+            ON holding_trigger_flags(review_id, severity);
+        CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_code
+            ON holding_trigger_flags(code, created_at DESC);
+        """
+    )
+
+
 async def ensure_portfolio_account_key(db):
     """Migrate portfolio from code-only primary key to account/code uniqueness."""
     rows = await db.execute_fetchall("PRAGMA table_info(portfolio)")
@@ -1364,6 +1627,7 @@ async def init_db():
         await ensure_batch_job_item_steps_table(db)
         await ensure_batch_runtime_ops(db)
         await ensure_batch_worker_heartbeats_table(db)
+        await ensure_holding_daily_review_tables(db)
         await ensure_portfolio_account_key(db)
         await ensure_position_plan_adoption_columns(db)
         await ensure_position_plan_market_context_columns(db)

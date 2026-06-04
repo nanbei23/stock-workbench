@@ -228,7 +228,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("const d = parseAppTime(value);", js)
         self.assertIn("function formatTime(value)", js)
         self.assertIn("function formatDate(value)", js)
-        self.assertIn("reports.js?v=2.9.16-report-export", html)
+        self.assertIn("reports.js?v=2.9.11-holding-review", html)
 
     def test_reports_page_links_to_full_report_detail(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -358,7 +358,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("/api/ai/reports/${encodeURIComponent(report.id)}", js)
         self.assertIn("formatReportMarkdown", js)
         self.assertIn("请选择要导出的报告", js)
-        self.assertIn("reports.js?v=2.9.16-report-export", html)
+        self.assertIn("reports.js?v=2.9.11-holding-review", html)
 
     def test_ai_page_supports_last_report_signal_filter_and_batch_select(self):
         js = AI_JS.read_text(encoding="utf-8")
