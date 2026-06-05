@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import models.database as database
 from services import holding_context_service
@@ -93,3 +94,54 @@ class HoldingContextServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx["cash"], 12345.678)
         self.assertIn("可用资金: 12345.678", ctx["prompt_context"])
+
+    async def test_build_context_refreshes_quote_when_position_market_value_is_zero(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "100000"))
+            db.execute(
+                """
+                INSERT INTO portfolio (
+                    code, name, total_shares, avg_cost, current_price,
+                    market_value, unrealized_pnl, unrealized_pnl_pct, account_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("002156", "通富微电", 3100, 71.207, 0, 0, 0, 0, "default"),
+            )
+            db.commit()
+
+        with patch(
+            "services.holding_context_service.get_batch_quotes",
+            new=AsyncMock(return_value={"002156": {"price": 71.35, "name": "通富微电"}}),
+        ):
+            ctx = await holding_context_service.build_holding_context("002156", account_id="default")
+
+        self.assertTrue(ctx["is_holding"])
+        self.assertEqual(ctx["current_price"], 71.35)
+        self.assertEqual(ctx["market_value"], 221185.0)
+        self.assertEqual(ctx["valuation_source"], "realtime_quote")
+        self.assertIn("市值来源: realtime_quote", ctx["prompt_context"])
+        self.assertIn("不得因行情缺失或市值估算为 0 而当作空仓", ctx["prompt_context"])
+
+    async def test_build_context_keeps_holding_valid_with_cost_fallback_when_quote_missing(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (
+                    code, name, total_shares, avg_cost, current_price,
+                    market_value, unrealized_pnl, unrealized_pnl_pct, account_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("002241", "歌尔股份", 1000, 26.006, 0, 0, 0, 0, "default"),
+            )
+            db.commit()
+
+        with patch("services.holding_context_service.get_batch_quotes", new=AsyncMock(return_value={})):
+            ctx = await holding_context_service.build_holding_context("002241", account_id="default")
+
+        self.assertTrue(ctx["is_holding"])
+        self.assertEqual(ctx["market_value"], 26006.0)
+        self.assertEqual(ctx["valuation_source"], "cost_fallback")
+        self.assertEqual(ctx["holding_pnl"], 0.0)
+        self.assertIn("真实持仓: 1000.000 股", ctx["prompt_context"])

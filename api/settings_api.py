@@ -4,7 +4,7 @@
 import os
 import httpx
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, Any
 
@@ -156,12 +156,12 @@ async def test_verification_connection(req: VerificationTestRequest | None = Non
 
 @router.get("/settings/export")
 async def export_all_data():
-    """导出全部数据（JSON下载）"""
-    content, filename = settings_service.export_payload()
-    return StreamingResponse(
-        iter([content]),
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    """导出完整 SQLite 数据库文件"""
+    backup = settings_service.create_backup_file()
+    return FileResponse(
+        backup["path"],
+        media_type="application/vnd.sqlite3",
+        filename=backup["filename"],
     )
 
 
@@ -181,13 +181,13 @@ async def backup_status():
 
 @router.post("/settings/backup/create")
 async def create_backup():
-    """一键创建本地JSON备份"""
+    """一键创建本地 SQLite 数据库备份"""
     return settings_service.create_backup_file()
 
 
 @router.post("/settings/backup/restore-latest")
 async def restore_latest_backup():
-    """从最近一次本地备份恢复可导入数据"""
+    """从最近一次本地 SQLite 数据库备份恢复"""
     return settings_service.restore_latest_backup()
 
 

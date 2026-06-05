@@ -82,10 +82,16 @@ async def list_anomalies(db, today: str, limit: int, code: str | None = None):
     if code:
         rows = await db.execute_fetchall(
             """
-            SELECT code, name, anomaly_type, description, severity, created_at
-            FROM anomaly_logs
-            WHERE date(created_at, 'localtime') = ? AND code LIKE ?
-            ORDER BY created_at DESC
+            WITH latest AS (
+                SELECT MAX(id) AS id
+                FROM anomaly_logs
+                WHERE date(created_at, 'localtime') = ? AND code LIKE ?
+                GROUP BY code, anomaly_type
+            )
+            SELECT a.code, a.name, a.anomaly_type, a.description, a.severity, a.created_at
+            FROM anomaly_logs a
+            JOIN latest l ON l.id = a.id
+            ORDER BY a.created_at DESC, a.id DESC
             LIMIT ?
             """,
             (today, f"%{code[:6]}%", limit),
@@ -93,10 +99,16 @@ async def list_anomalies(db, today: str, limit: int, code: str | None = None):
     else:
         rows = await db.execute_fetchall(
             """
-            SELECT code, name, anomaly_type, description, severity, created_at
-            FROM anomaly_logs
-            WHERE date(created_at, 'localtime') = ?
-            ORDER BY created_at DESC
+            WITH latest AS (
+                SELECT MAX(id) AS id
+                FROM anomaly_logs
+                WHERE date(created_at, 'localtime') = ?
+                GROUP BY code, anomaly_type
+            )
+            SELECT a.code, a.name, a.anomaly_type, a.description, a.severity, a.created_at
+            FROM anomaly_logs a
+            JOIN latest l ON l.id = a.id
+            ORDER BY a.created_at DESC, a.id DESC
             LIMIT ?
             """,
             (today, limit),
@@ -106,5 +118,29 @@ async def list_anomalies(db, today: str, limit: int, code: str | None = None):
 
 async def delete_anomalies_for_date(db, day: str) -> int:
     cursor = await db.execute("DELETE FROM anomaly_logs WHERE date(created_at) = ?", (day,))
+    await db.commit()
+    return cursor.rowcount
+
+
+async def delete_anomalies_before_date(db, day: str) -> int:
+    cursor = await db.execute("DELETE FROM anomaly_logs WHERE date(created_at, 'localtime') < ?", (day,))
+    await db.commit()
+    return cursor.rowcount
+
+
+async def dedupe_anomalies_for_date(db, day: str) -> int:
+    cursor = await db.execute(
+        """
+        DELETE FROM anomaly_logs
+        WHERE date(created_at, 'localtime') = ?
+          AND id NOT IN (
+              SELECT MAX(id)
+              FROM anomaly_logs
+              WHERE date(created_at, 'localtime') = ?
+              GROUP BY code, anomaly_type
+          )
+        """,
+        (day, day),
+    )
     await db.commit()
     return cursor.rowcount

@@ -36,6 +36,21 @@ def _get_all_watchlist_codes():
         db.close()
 
 
+def _has_today_anomaly(db, code: str, anomaly_type: str) -> bool:
+    row = db.execute(
+        """
+        SELECT id
+        FROM anomaly_logs
+        WHERE code = ?
+          AND anomaly_type = ?
+          AND date(created_at, 'localtime') = date('now', 'localtime')
+        LIMIT 1
+        """,
+        (code, anomaly_type),
+    ).fetchone()
+    return row is not None
+
+
 def _check_strategy_thresholds(code: str, name: str, price: float, db) -> tuple:
     """Check if current price has crossed strategy thresholds from watchlist.
     Returns (anomaly_type, description, severity) or (None, None, None).
@@ -122,12 +137,7 @@ async def _check_anomalies():
                 if abs(total_net) >= 1000000:
                     direction = "流入" if total_net >= 0 else "流出"
                     nb_desc = f"北向资金大幅{direction}: {total_net/10000:.1f}亿元"
-                    one_hour_ago_nb = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
-                    existing_nb = db.execute(
-                        "SELECT id FROM anomaly_logs WHERE anomaly_type = ? AND created_at > ?",
-                        ("northbound_active", one_hour_ago_nb)
-                    ).fetchone()
-                    if not existing_nb:
+                    if not _has_today_anomaly(db, "000000", "northbound_active"):
                         db.execute(
                             "INSERT INTO anomaly_logs (code, name, anomaly_type, description, severity) "
                             "VALUES (?, ?, ?, ?, ?)",
@@ -193,12 +203,7 @@ async def _check_anomalies():
                     vol_ratio = volume / avg_vol
                     if vol_ratio >= ANOMALY_THRESHOLDS["volume_ratio"]:
                         vol_desc = f"{name}({code}) 成交量 {volume}手，近5日均量 {avg_vol:.0f}手，倍率 {vol_ratio:.1f}x"
-                        one_hour_ago_vol = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
-                        existing_vol = db.execute(
-                            "SELECT id FROM anomaly_logs WHERE code = ? AND anomaly_type = ? AND created_at > ?",
-                            (code, "volume_spike", one_hour_ago_vol)
-                        ).fetchone()
-                        if not existing_vol:
+                        if not _has_today_anomaly(db, code, "volume_spike"):
                             db.execute(
                                 "INSERT INTO anomaly_logs (code, name, anomaly_type, description, severity) "
                                 "VALUES (?, ?, ?, ?, ?)",
@@ -218,14 +223,8 @@ async def _check_anomalies():
                             logger.info("⚠️ 异动检测: %s", vol_desc)
 
             if anomaly_type:
-                # 检查最近1小时内是否已有同类型异动日志（避免重复）
-                one_hour_ago = (datetime.datetime.now() - datetime.timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
-                existing = db.execute(
-                    "SELECT id FROM anomaly_logs WHERE code = ? AND anomaly_type = ? AND created_at > ?",
-                    (code, anomaly_type, one_hour_ago)
-                ).fetchone()
-
-                if not existing:
+                # 同一交易日同股票同类型异动只记录一次，避免每分钟重复刷屏。
+                if not _has_today_anomaly(db, code, anomaly_type):
                     db.execute(
                         "INSERT INTO anomaly_logs (code, name, anomaly_type, description, severity) "
                         "VALUES (?, ?, ?, ?, ?)",

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 from scheduler import jobs
@@ -31,14 +32,78 @@ class SchedulerJobTests(unittest.IsolatedAsyncioTestCase):
 
         check_anomalies.assert_awaited_once()
 
-    async def test_clear_anomaly_logs_job_uses_report_service(self):
+    async def test_clear_anomaly_logs_job_clears_stale_logs_only(self):
         with patch(
-            "scheduler.jobs.ai_report_service.clear_anomalies_for_date",
+            "scheduler.jobs.ai_report_service.clear_stale_anomalies",
             new=AsyncMock(return_value=3),
         ) as clear_anomalies:
             await jobs.clear_anomaly_logs_job()
 
         clear_anomalies.assert_awaited_once_with()
+
+    async def test_daily_pnl_snapshot_job_uses_portfolio_service(self):
+        with patch(
+            "scheduler.jobs.portfolio_service.ensure_daily_pnl_snapshot",
+            new=AsyncMock(return_value={"status": "ok", "written": 2}),
+        ) as snapshot:
+            await jobs.daily_pnl_snapshot_job()
+
+        snapshot.assert_awaited_once_with()
+
+    async def test_daily_decision_report_job_runs_once_at_configured_time(self):
+        settings = {
+            "daily_decision_auto_enabled": "true",
+            "daily_decision_auto_time": "15:20",
+            "daily_decision_account_id": "default",
+        }
+
+        def fake_get_setting(key):
+            return {"key": key, "value": settings.get(key, "")}
+
+        with (
+            patch("scheduler.jobs.settings_service.get_setting", side_effect=fake_get_setting),
+            patch("scheduler.jobs.holding_review_service.review_exists_for_date", new=AsyncMock(return_value=False)) as exists,
+            patch(
+                "scheduler.jobs.holding_review_service.run_scheduled_daily_decision_report",
+                new=AsyncMock(return_value={"review_id": "dr-1"}),
+            ) as run_review,
+        ):
+            await jobs.daily_decision_report_job(now=datetime(2026, 6, 4, 15, 20))
+
+        exists.assert_awaited_once_with(date_text="2026-06-04", account_id="default")
+        run_review.assert_awaited_once_with(account_id="default", date_text="2026-06-04")
+
+    async def test_daily_decision_report_job_skips_existing_review(self):
+        settings = {
+            "daily_decision_auto_enabled": "true",
+            "daily_decision_auto_time": "15:20",
+            "daily_decision_account_id": "default",
+        }
+
+        def fake_get_setting(key):
+            return {"key": key, "value": settings.get(key, "")}
+
+        with (
+            patch("scheduler.jobs.settings_service.get_setting", side_effect=fake_get_setting),
+            patch("scheduler.jobs.holding_review_service.review_exists_for_date", new=AsyncMock(return_value=True)) as exists,
+            patch("scheduler.jobs.holding_review_service.run_scheduled_daily_decision_report", new=AsyncMock()) as run_review,
+        ):
+            await jobs.daily_decision_report_job(now=datetime(2026, 6, 4, 15, 20))
+
+        exists.assert_awaited_once_with(date_text="2026-06-04", account_id="default")
+        run_review.assert_not_awaited()
+
+    def test_setup_scheduler_registers_daily_pnl_snapshot_job(self):
+        with patch.object(jobs.scheduler, "start"):
+            scheduler = jobs.setup_scheduler()
+
+        self.assertIsNotNone(scheduler.get_job("daily_pnl_snapshot"))
+
+    def test_setup_scheduler_registers_daily_decision_report_guard_job(self):
+        with patch.object(jobs.scheduler, "start"):
+            scheduler = jobs.setup_scheduler()
+
+        self.assertIsNotNone(scheduler.get_job("daily_decision_report_guard"))
 
     async def test_signal_tracking_job_uses_open_tracking_codes(self):
         async def fake_quotes(codes):

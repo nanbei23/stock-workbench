@@ -4,6 +4,32 @@
 
 No unreleased changes.
 
+## 2.9.15 - 2026-06-05
+
+### Added
+
+- Added "每日 AI 决策报告" as the daily account-level decision report entry, with scheduled generation settings and candidate-pool controls.
+- Added full SQLite database backup and restore support for deployment-to-development data synchronization.
+- Added holding context to multi-role position plans and daily decision reports, including current holdings, costs, prices, cash, position weight, and account-level constraints.
+
+### Changed
+
+- Changed daily decision report generation to wait for forced report refresh jobs before finalizing the account-level report.
+- Changed scheduled anomaly cleanup to retain the current Beijing trading day while removing stale anomaly logs.
+- Changed anomaly display timestamps to explicit Beijing time and deduplicated same-day repeated anomaly records by stock and anomaly type.
+- Updated release metadata, package metadata, frontend cache versions, and README version to `2.9.15`.
+
+### Fixed
+
+- Fixed repeated anomaly records caused by mixing SQLite UTC timestamps with local Python time during deduplication.
+- Fixed pre-market-looking anomaly times caused by raw UTC timestamps being rendered as local browser time.
+- Fixed daily decision and trading-hour scheduler checks to use `Asia/Shanghai` explicitly.
+
+### Deployment
+
+- No manual database migration is required from `2.9.14`; normal app startup applies schema migrations.
+- Restart the web process and worker services after pulling the release so scheduler and anomaly cleanup changes take effect.
+
 ## 2.9.12 - 2026-06-04
 
 ### Added

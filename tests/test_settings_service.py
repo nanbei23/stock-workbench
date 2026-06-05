@@ -45,6 +45,16 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(result["trade_market_star"], "true")
         self.assertEqual(result["trade_market_bse"], "true")
 
+    def test_daily_decision_schedule_defaults_are_available(self):
+        result = settings_service.get_all_settings()
+
+        self.assertEqual(result["daily_decision_auto_enabled"], "false")
+        self.assertEqual(result["daily_decision_auto_time"], "15:20")
+        self.assertEqual(result["daily_decision_candidate_mode"], "holdings_only")
+        self.assertEqual(result["daily_decision_candidate_group"], "每日决策候选")
+        self.assertEqual(result["daily_decision_force_refresh_holdings"], "true")
+        self.assertEqual(result["daily_decision_refresh_snapshots"], "true")
+
     def test_investment_profile_defaults_are_available(self):
         result = settings_service.get_all_settings()
 
@@ -53,6 +63,12 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(result["investment_min_cash_pct"], "5")
         self.assertEqual(result["investment_allow_left_side"], "false")
         self.assertIn("右侧确认", result["investment_entry_preference"])
+        self.assertIn("investment_entry_required_conditions", result)
+        self.assertIn("investment_buy_veto_rules", result)
+        self.assertIn("investment_position_sizing_discipline", result)
+        self.assertIn("investment_max_sector_position_pct", result)
+        self.assertIn("investment_max_total_position_pct", result)
+        self.assertIn("investment_max_single_trade_loss_pct", result)
 
     def test_investment_profile_context_includes_version_and_execution_contract(self):
         profile = investment_profile_service.investment_profile_snapshot({
@@ -68,6 +84,32 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertIn("加仓条件", profile["context"])
         self.assertIn("放弃条件", profile["context"])
         self.assertIn("style_match", profile["output_contract"])
+
+    def test_investment_profile_strategy_context_is_config_driven(self):
+        profile = investment_profile_service.investment_profile_snapshot({
+            "investment_style_preset": "custom",
+            "investment_entry_strategy_name": "自定义回踩买入",
+            "investment_entry_required_conditions": "必须满足 A 和 B",
+            "investment_entry_supporting_conditions": "至少满足 C",
+            "investment_buy_veto_rules": "触发 D 禁止买入",
+            "investment_position_sizing_discipline": "分三批试仓",
+            "investment_add_position_discipline": "只在二次确认后加仓",
+            "investment_max_single_position_pct": "30",
+            "investment_max_sector_position_pct": "50",
+            "investment_max_total_position_pct": "85",
+            "investment_max_single_trade_loss_pct": "3",
+            "investment_initial_entry_fraction": "0.333",
+        })
+
+        self.assertEqual(profile["entry_strategy_name"], "自定义回踩买入")
+        self.assertEqual(profile["max_sector_position_pct"], "50")
+        self.assertEqual(profile["max_total_position_pct"], "85")
+        self.assertEqual(profile["max_single_trade_loss_pct"], "3")
+        self.assertIn("自定义回踩买入", profile["context"])
+        self.assertIn("必须满足 A 和 B", profile["context"])
+        self.assertIn("触发 D 禁止买入", profile["context"])
+        self.assertIn("单一交易最大亏损：3%", profile["context"])
+        self.assertIn("strategy_checklist", profile["output_contract"])
 
     def test_infer_investment_profile_from_trade_history_prefers_aggressive_when_concentrated(self):
         with sqlite3.connect(self.db_path) as db:
@@ -158,6 +200,55 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertIn("stock-workbench-backup-", filename)
         self.assertEqual(payload["settings"]["model_mode"], "balanced")
         self.assertIn("watchlist", payload)
+
+    def test_create_backup_file_copies_full_sqlite_database(self):
+        settings_service.update_setting("model_mode", "balanced")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO batch_jobs (job_id, name, job_type, status, total_count)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("job-full", "完整批量任务", "report_generation", "completed", 1),
+            )
+            db.commit()
+
+        result = settings_service.create_backup_file()
+        backup_path = Path(result["path"])
+
+        self.assertEqual(result["backup_type"], "sqlite")
+        self.assertTrue(result["filename"].endswith(".db"))
+        self.assertTrue(backup_path.exists())
+        with sqlite3.connect(backup_path) as backup:
+            self.assertEqual(
+                backup.execute("SELECT value FROM settings WHERE key='model_mode'").fetchone()[0],
+                "balanced",
+            )
+            self.assertEqual(
+                backup.execute("SELECT name FROM batch_jobs WHERE job_id='job-full'").fetchone()[0],
+                "完整批量任务",
+            )
+
+    def test_restore_latest_backup_replaces_database_file(self):
+        settings_service.update_setting("model_mode", "before")
+        backup = settings_service.create_backup_file()
+        settings_service.update_setting("model_mode", "after")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("transient_only", "yes"))
+            db.commit()
+
+        result = settings_service.restore_latest_backup()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["restored_type"], "sqlite")
+        self.assertEqual(result["filename"], Path(backup["path"]).name)
+        self.assertTrue(Path(result["pre_restore_backup_path"]).exists())
+        with sqlite3.connect(self.db_path) as db:
+            self.assertEqual(
+                db.execute("SELECT value FROM settings WHERE key='model_mode'").fetchone()[0],
+                "before",
+            )
+            self.assertIsNone(db.execute("SELECT value FROM settings WHERE key='transient_only'").fetchone())
 
     def test_poll_notifications_sorts_recent_items(self):
         with sqlite3.connect(self.db_path) as db:

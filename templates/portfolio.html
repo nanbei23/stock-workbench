@@ -54,8 +54,12 @@
     </div>
     <div class="grid grid-4" style="margin-top:8px;">
       <div>
-        <div style="font-size:0.8rem;color:var(--text-secondary);">总盈亏</div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">持仓盈亏</div>
         <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="totalPnl">--</div>
+      </div>
+      <div>
+        <div style="font-size:0.8rem;color:var(--text-secondary);">历史盈亏</div>
+        <div style="font-size:1rem;font-weight:600;font-family:var(--font-mono);" id="historicalPnl">--</div>
       </div>
       <div>
         <div style="font-size:0.8rem;color:var(--text-secondary);">资金使用率</div>
@@ -88,8 +92,8 @@
   <div class="card holding-review-card">
     <div class="card-header portfolio-card-header">
       <div>
-        <div class="card-title">明日交易作战计划</div>
-        <div class="cash-source-line">基于当前真实仓位、可用资金、持仓盈亏、候选池和市场环境生成明日执行口径。</div>
+        <div class="card-title">每日 AI 决策报告</div>
+        <div class="cash-source-line">基于当前真实仓位、可用资金、持仓盈亏、候选池和市场环境生成次日交易决策口径。</div>
       </div>
       <button class="btn btn-sm btn-ghost" onclick="loadHoldingReviewSummary()">刷新</button>
     </div>
@@ -113,11 +117,11 @@
       </div>
     </div>
     <div id="holdingReviewSummary" class="holding-review-summary">
-      <div class="empty-state"><p>暂无明日交易作战计划。点击生成后可在报告库回看详情。</p></div>
+      <div class="empty-state"><p>暂无每日 AI 决策报告。点击生成后可在报告库回看详情。</p></div>
     </div>
     <div class="library-action-row" style="margin-top:10px;">
-      <button class="btn btn-sm btn-primary" onclick="runHoldingReview()">生成作战计划</button>
-      <a class="btn btn-sm" href="/reports?tab=holding-reviews">查看历史</a>
+      <button class="btn btn-sm btn-primary" onclick="runHoldingReview()">生成每日决策报告</button>
+      <a class="btn btn-sm" href="/reports?tab=daily-decision">查看历史</a>
     </div>
   </div>
 

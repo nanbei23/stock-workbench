@@ -10,9 +10,19 @@ let workerPoolRows = [];
 const INVESTMENT_STYLE_PRESETS = {
     conservative: {
         investment_max_single_position_pct: '10',
+        investment_max_sector_position_pct: '35',
+        investment_max_total_position_pct: '65',
+        investment_max_single_trade_loss_pct: '1.5',
+        investment_initial_entry_fraction: '0.25',
         investment_min_cash_pct: '20',
         investment_max_drawdown_pct: '6',
         investment_entry_preference: '右侧确认优先，要求趋势站稳、成交量温和放大、基本面和资金面同时确认。',
+        investment_entry_strategy_name: '稳健右侧确认',
+        investment_entry_required_conditions: '趋势站稳关键均线；基本面和资金面没有明显冲突。',
+        investment_entry_supporting_conditions: '成交量温和放大；行业环境稳定；报告置信度高于65%。',
+        investment_buy_veto_rules: '放量破位；高位急涨后追入；报告风险评分高于70；关键财务数据缺失。',
+        investment_position_sizing_discipline: '首仓不超过计划仓位的四分之一，单只股票不超过单票上限。',
+        investment_add_position_discipline: '只在趋势继续确认、回撤可控且不突破仓位上限时加仓。',
         investment_exit_discipline: '跌破关键支撑或基本面恶化时减仓，资金持续流出时退出；达到目标位分批止盈。',
         investment_allow_left_side: false,
         investment_allow_high_volatility: 'forbid',
@@ -20,29 +30,59 @@ const INVESTMENT_STYLE_PRESETS = {
     },
     balanced: {
         investment_max_single_position_pct: '15',
+        investment_max_sector_position_pct: '45',
+        investment_max_total_position_pct: '75',
+        investment_max_single_trade_loss_pct: '2',
+        investment_initial_entry_fraction: '0.333',
         investment_min_cash_pct: '5',
         investment_max_drawdown_pct: '12',
         investment_entry_preference: '右侧确认、趋势突破、资金流入、题材催化，机会成立时分批建仓。',
+        investment_entry_strategy_name: '右侧确认分批建仓',
+        investment_entry_required_conditions: '趋势突破或回踩不破；资金面没有持续流出。',
+        investment_entry_supporting_conditions: '站上MA10或MA20；板块同步走强；报告置信度高于60%。',
+        investment_buy_veto_rules: '涨停当日追入；换手异常放大；基本面核心假设被证伪；AI报告卖出置信度高于70%。',
+        investment_position_sizing_discipline: '分批建仓，首仓约三分之一，不突破单票、同板块和总仓位上限。',
+        investment_add_position_discipline: '第二、三批只在回踩确认、资金继续流入且未触发否决项时执行。',
         investment_exit_discipline: '逻辑失效、跌破关键位、硬止损、分批止盈。',
         investment_allow_left_side: false,
         investment_allow_high_volatility: 'cautious',
         investment_custom_notes: '平衡胜率和赔率，机会成立时分批建仓。'
     },
     aggressive: {
-        investment_max_single_position_pct: '40',
-        investment_min_cash_pct: '3',
-        investment_max_drawdown_pct: '15',
-        investment_entry_preference: '右侧突破优先，要求放量站上关键位、资金连续流入、板块或题材共振；回踩不破关键支撑后转强可加仓。',
+        investment_max_single_position_pct: '30',
+        investment_max_sector_position_pct: '50',
+        investment_max_total_position_pct: '85',
+        investment_max_single_trade_loss_pct: '3',
+        investment_initial_entry_fraction: '0.333',
+        investment_min_cash_pct: '5',
+        investment_max_drawdown_pct: '12',
+        investment_entry_preference: '突破后不追高，等待回踩5-8%不破、缩量确认、资金继续流入后分批试仓。',
+        investment_entry_strategy_name: '突破后回踩买入',
+        investment_entry_required_conditions: '突破关键阻力后回踩5-8%不破；回踩时缩量且量比低于0.8。',
+        investment_entry_supporting_conditions: '股价站上MA10或MA20；主力超大单连续2日净流入；PE低于40且最近一期营收增速大于10%；板块内3只以上同步走强。除必选条件外，至少满足1条重要或加分条件。',
+        investment_buy_veto_rules: '涨停当日追入；换手率高于8%；最近一期利润同比下滑超过20%；PE高于50且营收增速低于10%；AI报告卖出置信度高于70%；控股股东、大基金和外资同时减持。',
+        investment_position_sizing_discipline: '分三批建仓，首仓约三分之一；单只股票不超过30%；同板块不超过50%；总仓位不超过85%。',
+        investment_add_position_discipline: '第二、三批只在回踩确认、资金继续流入、未触发否决项且没有突破仓位上限时执行；禁止因为亏损扩大而无条件补仓。',
         investment_exit_discipline: '跌破买入触发位或关键支撑先减仓，放量破位清仓；题材逻辑失效、资金连续流出或报告核心假设被证伪时退出；上涨后按压力位和目标位分批止盈。',
         investment_allow_left_side: false,
         investment_allow_high_volatility: 'allow',
-        investment_custom_notes: '偏进攻，但不做无确认左侧交易；机会成立时允许集中到核心标的，必须保留明确止损和失效条件。'
+        investment_custom_notes: '涨停不追、腰斩不抄、亏损后不赌、盈利后不贪。等回踩买，分批建仓，单只不超30%，止损执行不犹豫。'
     },
     speculative: {
         investment_max_single_position_pct: '50',
+        investment_max_sector_position_pct: '60',
+        investment_max_total_position_pct: '95',
+        investment_max_single_trade_loss_pct: '4',
+        investment_initial_entry_fraction: '0.2',
         investment_min_cash_pct: '0',
         investment_max_drawdown_pct: '20',
         investment_entry_preference: '强题材启动、放量突破、资金快速流入、板块情绪升温；允许小仓位左侧试错。',
+        investment_entry_strategy_name: '高波动小仓试错',
+        investment_entry_required_conditions: '题材强度明确；流动性充足；止损位置明确。',
+        investment_entry_supporting_conditions: '板块涨停梯队完整；资金连续流入；情绪周期仍在上升段。',
+        investment_buy_veto_rules: '无法定义止损；流动性不足；监管或退市风险；报告核心事实缺失。',
+        investment_position_sizing_discipline: '小仓试错，失败快速退出，单只和总仓位不得突破设置上限。',
+        investment_add_position_discipline: '只在试错盈利、情绪延续且风险未放大时追加。',
         investment_exit_discipline: '触发硬止损立即退出，放量破位清仓；情绪退潮、资金转流出或题材证伪时退出。',
         investment_allow_left_side: true,
         investment_allow_high_volatility: 'allow',
@@ -589,10 +629,10 @@ async function exportData() {
         const disposition = resp.headers.get('Content-Disposition');
         a.download = disposition
             ? disposition.split('filename=')[1].replace(/"/g, '')
-            : `stock-workbench-backup-${new Date().toISOString().slice(0, 10)}.json`;
+            : `stock-workbench-db-backup-${new Date().toISOString().slice(0, 10)}.db`;
         a.click();
         URL.revokeObjectURL(url);
-        toast('success', '数据已导出');
+        toast('success', '数据库文件已导出');
     } catch (e) {
         toast('error', '导出失败: ' + e.message);
     }
@@ -650,6 +690,7 @@ async function loadBackupStatus() {
             <div><span>数据库版本</span><strong>${migrations.latest_applied || 0}/${migrations.latest_known || 0}</strong></div>
             <div><span>迁移状态</span><strong class="${pending.length ? 'down' : 'up'}">${pending.length ? `待迁移 ${pending.join(',')}` : '已最新'}</strong></div>
             <div><span>数据库大小</span><strong>${formatBytes(db.size_bytes || 0)}</strong></div>
+            <div><span>备份类型</span><strong>${db.backup_type === 'sqlite' ? 'SQLite完整镜像' : 'JSON兼容备份'}</strong></div>
             <div><span>最近备份</span><strong>${latest ? escapeHtml(latest.filename) : '暂无'}</strong></div>
         </div>`;
     } catch (e) {
@@ -1106,13 +1147,12 @@ async function createBackup() {
 }
 
 function restoreLatestBackup() {
-    showConfirm('恢复最近备份', '将把最近一次备份中的自选、持仓、条件单和设置导入当前数据库。建议先创建新备份。确定继续吗？', async () => {
+    showConfirm('恢复最近数据库备份', '将使用最近一次 SQLite 备份文件替换当前整个数据库。系统会先自动保留一份恢复前备份，但当前未入备份的数据会被回滚。确定继续吗？', async () => {
         try {
             const resp = await fetch(`${API_BASE}/settings/backup/restore-latest`, { method: 'POST' });
             const data = await resp.json();
             if (!resp.ok) throw new Error(data.detail || '恢复失败');
-            const imp = data.imported || {};
-            toast('success', `恢复完成: 自选${imp.watchlist || 0}/持仓${imp.portfolio || 0}/条件单${imp.orders || 0}/设置${imp.settings || 0}`);
+            toast('success', `数据库恢复完成: ${data.filename || '最近备份'}`);
             loadSettings();
             loadBackupStatus();
         } catch (e) {

@@ -1376,7 +1376,7 @@ async function cancelQueuedTask(taskId) {
 const BATCH_JOB_TYPE_LABELS = {
     data_prefetch: '七层数据',
     report_generation: '报告生成',
-    position_plan: '建仓建议'
+    position_plan: '组合研究'
 };
 
 const BATCH_STATUS_LABELS = {
@@ -1454,7 +1454,7 @@ async function createBatchResearchJob(type) {
         const labels = {
             data_prefetch: `为已选 ${codes.length} 只可交易股票创建七层数据预取任务？`,
             report_generation: `为已选 ${codes.length} 只可交易股票创建${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}快照报告生成任务？${batchOptions.forceReanalysis ? '将强制重新分析，最近已有报告也会重跑。' : '最近30天已有报告会自动跳过。'}`,
-            position_plan: `基于已选 ${codes.length} 只可交易股票的已有完整报告生成${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}组合级多角色建仓建议？`
+            position_plan: `基于已选 ${codes.length} 只可交易股票的已有完整报告生成${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}组合级多角色组合研究方案？`
         };
         const estimate = [
             labels[type] || '创建批量任务？',

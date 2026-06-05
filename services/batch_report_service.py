@@ -308,7 +308,7 @@ def _job_name(job_type: str) -> str:
     return {
         "data_prefetch": "七层数据预取",
         "report_generation": "AI报告生成",
-        "position_plan": "建仓建议生成",
+        "position_plan": "组合研究方案生成",
     }.get(job_type, "批量研究任务")
 
 
@@ -2930,13 +2930,13 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
             decision_market_context=market_context,
         )
     else:
-        mark_stage("生成建仓建议")
+        mark_stage("生成组合研究方案")
         plan = batch_research.build_position_plan(DB_PATH, stocks, top_n=int(payload.get("plan_top_n") or 10))
         plan["decision_market_snapshot"] = market_context
     plan["auto_holding_reports"] = auto_holding_reports
-    mark_stage("写出建仓建议文件")
+    mark_stage("写出组合研究方案文件")
     outputs = batch_research.write_position_plan(output_dir, plan)
-    mark_stage("写入建仓建议数据库")
+    mark_stage("写入组合研究方案数据库")
     persisted = position_plan_service.persist_position_plan(
         plan,
         db_path=DB_PATH,
@@ -2951,7 +2951,7 @@ async def _run_position_plan(job_id: str, items: list[dict[str, Any]], payload: 
             _update_item_id(item["id"], status="completed", report_id=report.get("report_id"), completed_at=_now_expr())
         else:
             _update_item_id(item["id"], status="waiting_snapshot", error="缺少分析报告", completed_at=_now_expr())
-    mark_stage("建仓建议完成")
+    mark_stage("组合研究方案完成")
     return {"plan": plan, "outputs": outputs, "position_plan": {"plan_id": persisted["plan_id"], "id": persisted["id"]}}
 
 
@@ -3266,7 +3266,7 @@ def _write_post_batch_artifacts(job_id: str, payload: dict[str, Any], counts: di
         "next_actions": [
             "查看批次质量评分",
             "重试失败股票",
-            "基于完整报告生成建仓计划",
+            "基于完整报告生成组合研究方案",
         ],
     }
     record_job_artifact(job_id, "summary_markdown", "批次摘要", path=str(summary_path), data={"counts": counts})

@@ -420,12 +420,12 @@ function renderPositionPlanPerformance(data = {}) {
         calibration_gap: null,
       })),
     ];
-    stageEl.innerHTML = renderStatRows(rows, '暂无建仓计划阶段样本');
+    stageEl.innerHTML = renderStatRows(rows, '暂无组合研究方案阶段样本');
   }
   const body = document.getElementById('positionPlanPerformanceBody');
   if (!body) return;
   if (!plans.length) {
-    body.innerHTML = '<tr><td colspan="15"><div class="shadow-empty">暂无已采纳的最终建仓计划。先在 AI报告库生成计划，并采纳为 AI 绩效基准。</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="15"><div class="shadow-empty">暂无已整份采纳的最终组合研究方案。先在 AI报告库生成方案，并整份采纳为 AI 绩效基准。</div></td></tr>';
     return;
   }
   body.innerHTML = plans.map(plan => `

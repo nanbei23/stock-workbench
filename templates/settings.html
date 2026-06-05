@@ -480,7 +480,7 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">科创板</div>
-          <div class="setting-hint">688/689 开头，未开权限时关闭，批量分析和建仓建议会默认排除</div>
+          <div class="setting-hint">688/689 开头，未开权限时关闭，批量分析和组合研究方案会默认排除</div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="set-trade_market_star">
@@ -798,6 +798,88 @@
         <div class="setting-label">异动实时分析</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_anomaly_realtime"><span class="toggle-slider"></span></label>
       </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">自动生成每日 AI 决策报告</div>
+          <div class="setting-hint">收盘后结合持仓、现金、最新报告和候选规则生成正式决策报告</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="set-daily_decision_auto_enabled"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">每日决策生成时间</div>
+          <div class="setting-hint">建议 15:20 或 16:00，避免收盘数据尚未稳定</div>
+        </div>
+        <div class="setting-control">
+          <input type="time" class="setting-input" id="set-daily_decision_auto_time" style="width: 180px;">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">每日决策账户</div>
+          <div class="setting-hint">默认读取 default 账户的真实持仓和可用资金</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-daily_decision_account_id" placeholder="default" style="width: 180px;">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">候选范围</div>
+          <div class="setting-hint">自动任务读取持久规则，不读取页面临时勾选</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-daily_decision_candidate_mode" style="width: 240px;">
+            <option value="holdings_only">仅持仓股</option>
+            <option value="fixed_group">持仓股 + 固定候选分组</option>
+            <option value="signal_filter">持仓股 + 上次报告信号筛选</option>
+            <option value="all_watchlist">持仓股 + 全部自选股</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">固定候选分组</div>
+          <div class="setting-hint">候选范围选择固定分组时使用，例如 每日决策候选</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-daily_decision_candidate_group" placeholder="每日决策候选" style="width: 240px;">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">信号筛选</div>
+          <div class="setting-hint">候选范围选择信号筛选时使用，逗号分隔</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-daily_decision_signal_filter" placeholder="STRONG_BUY,BUY,OVERWEIGHT" style="width: 320px;">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">包含观察池</div>
+        <label class="toggle"><input type="checkbox" id="set-daily_decision_include_observation_pool"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">强制补跑持仓报告</div>
+          <div class="setting-hint">生成每日决策前，先为当前持仓股创建补报告任务</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="set-daily_decision_force_refresh_holdings"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">强制补跑候选报告</div>
+          <div class="setting-hint">仅在候选范围命中股票时生效</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="set-daily_decision_force_refresh_candidates"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">补跑前刷新七层快照</div>
+          <div class="setting-hint">让补跑报告优先基于最新七层数据</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="set-daily_decision_refresh_snapshots"><span class="toggle-slider"></span></label>
+      </div>
     </div>
   </div>
 
@@ -851,7 +933,7 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">风格档位</div>
-          <div class="setting-hint">影响单股报告、批量报告和建仓建议的结论倾向</div>
+          <div class="setting-hint">影响单股报告、批量报告和组合研究方案的结论倾向</div>
         </div>
         <div class="setting-control">
           <select class="setting-select" id="set-investment_style_preset" onchange="maybeApplyInvestmentStylePreset(true)">
@@ -870,7 +952,7 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">投资风格单票上限</div>
-          <div class="setting-hint">建仓建议按此限制单只股票建议仓位，报告也会使用该约束</div>
+          <div class="setting-hint">组合研究方案按此限制单只股票建议仓位，报告也会使用该约束</div>
         </div>
         <div class="setting-control">
           <input type="number" class="setting-input" id="set-investment_max_single_position_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
@@ -879,12 +961,52 @@
       </div>
       <div class="setting-row">
         <div>
+          <div class="setting-label">同板块仓位上限</div>
+          <div class="setting-hint">组合研究方案用于限制同一主题或行业暴露</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_max_sector_position_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">总仓位上限</div>
+          <div class="setting-hint">每日 AI 决策报告和组合研究方案不得默认超过该总仓位</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_max_total_position_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
           <div class="setting-label">投资风格现金保留</div>
-          <div class="setting-hint">进攻型可以更低，但建仓建议会明确现金缓冲</div>
+          <div class="setting-hint">进攻型可以更低，但组合研究方案会明确现金缓冲</div>
         </div>
         <div class="setting-control">
           <input type="number" class="setting-input" id="set-investment_min_cash_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
           <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">单笔最大亏损</div>
+          <div class="setting-hint">报告需要把单一交易最大亏损作为硬约束</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_max_single_trade_loss_pct" step="0.001" min="0" max="100" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">%</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">首批建仓比例</div>
+          <div class="setting-hint">例如 0.333 表示首仓约三分之一</div>
+        </div>
+        <div class="setting-control">
+          <input type="number" class="setting-input" id="set-investment_initial_entry_fraction" step="0.001" min="0" max="1" oninput="markInvestmentProfileEdited(this)">
+          <span class="setting-unit">比例</span>
         </div>
       </div>
       <div class="setting-row">
@@ -904,6 +1026,61 @@
         </div>
         <div class="setting-control">
           <input type="text" class="setting-input" id="set-investment_entry_preference" style="width: 420px;" oninput="markInvestmentProfileEdited(this)">
+        </div>
+      </div>
+      <div class="setting-group-title" style="margin-top: 18px;">交易纪律手册</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">入场策略名称</div>
+          <div class="setting-hint">例如突破后回踩买入、右侧确认分批建仓</div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="setting-input" id="set-investment_entry_strategy_name" style="width: 420px;" oninput="markInvestmentProfileEdited(this)">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">入场必选条件</div>
+          <div class="setting-hint">没有满足这些条件时，报告和计划应默认等待</div>
+        </div>
+        <div class="setting-control">
+          <textarea class="setting-input" id="set-investment_entry_required_conditions" rows="3" style="width: 420px; resize: vertical;" oninput="markInvestmentProfileEdited(this)"></textarea>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">入场确认/加分条件</div>
+          <div class="setting-hint">用于决定是否从观察升级为试仓或加仓</div>
+        </div>
+        <div class="setting-control">
+          <textarea class="setting-input" id="set-investment_entry_supporting_conditions" rows="4" style="width: 420px; resize: vertical;" oninput="markInvestmentProfileEdited(this)"></textarea>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">买入否决项</div>
+          <div class="setting-hint">触发任一项时禁止新增买入或加仓</div>
+        </div>
+        <div class="setting-control">
+          <textarea class="setting-input" id="set-investment_buy_veto_rules" rows="4" style="width: 420px; resize: vertical;" oninput="markInvestmentProfileEdited(this)"></textarea>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">仓位执行纪律</div>
+          <div class="setting-hint">分批、单票、同板块、总仓位等执行口径</div>
+        </div>
+        <div class="setting-control">
+          <textarea class="setting-input" id="set-investment_position_sizing_discipline" rows="3" style="width: 420px; resize: vertical;" oninput="markInvestmentProfileEdited(this)"></textarea>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">加仓纪律</div>
+          <div class="setting-hint">避免亏损后无条件补仓或情绪化加仓</div>
+        </div>
+        <div class="setting-control">
+          <textarea class="setting-input" id="set-investment_add_position_discipline" rows="3" style="width: 420px; resize: vertical;" oninput="markInvestmentProfileEdited(this)"></textarea>
         </div>
       </div>
       <div class="setting-row">
@@ -1070,15 +1247,15 @@
     </div>
 
     <div class="setting-group">
-      <div class="setting-group-title">导入/导出</div>
+      <div class="setting-group-title">数据库备份/恢复</div>
       <div id="backupStatusPanel" class="backup-status-panel">
         <div class="empty-state"><p>正在读取数据库状态...</p></div>
       </div>
       <div class="data-actions">
-        <button class="btn-secondary" onclick="exportData()">导出全部数据</button>
-        <button class="btn-secondary" onclick="document.getElementById('importFile').click()">导入数据</button>
-        <button class="btn-secondary" onclick="createBackup()">一键备份</button>
-        <button class="btn-secondary" onclick="restoreLatestBackup()">恢复最近备份</button>
+        <button class="btn-secondary" onclick="exportData()">导出数据库文件</button>
+        <button class="btn-secondary" onclick="document.getElementById('importFile').click()">导入JSON数据</button>
+        <button class="btn-secondary" onclick="createBackup()">一键备份数据库</button>
+        <button class="btn-secondary" onclick="restoreLatestBackup()">恢复最近数据库备份</button>
         <input type="file" id="importFile" class="file-input" accept=".json" onchange="importData(this)">
       </div>
     </div>

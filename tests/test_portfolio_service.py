@@ -187,6 +187,61 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(position["weight_pct"], 10.891)
         self.assertEqual(position["unrealized_pnl"], 100.0)
 
+    async def test_portfolio_snapshot_keeps_holding_valid_when_quote_missing(self):
+        await portfolio_service.set_cash_balance("default", 100000, "现金")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, current_price, market_value, account_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("002156", "通富微电", 3100, 71.207, 0, 0, "default"),
+            )
+            db.commit()
+
+        with patch("services.portfolio_service.get_batch_quotes", new=AsyncMock(return_value={})):
+            portfolio = await portfolio_service.get_portfolio("default")
+
+        position = portfolio["positions"][0]
+        self.assertEqual(position["price"], 71.207)
+        self.assertEqual(position["market_value"], round(3100 * 71.207, 3))
+        self.assertEqual(position["valuation_source"], "cost_fallback")
+        self.assertEqual(portfolio["summary"]["market_value"], round(3100 * 71.207, 3))
+        self.assertGreater(position["weight_pct"], 0)
+
+    async def test_ensure_daily_pnl_snapshot_backfills_holding_calendar_from_history_kline(self):
+        await portfolio_service.set_cash_balance("default", 100000, "现金")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, current_price, market_value, account_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("002241", "歌尔股份", 1000, 26.006, 0, 0, "default"),
+            )
+            db.commit()
+
+        history = [
+            {"date": "2026-06-03", "close": 25.1},
+            {"date": "2026-06-04", "close": 25.5},
+        ]
+        with patch("services.portfolio_service.get_tencent_history_kline", return_value=history):
+            result = await portfolio_service.ensure_daily_pnl_snapshot("2026-06-04")
+
+        self.assertEqual(result["date"], "2026-06-04")
+        self.assertEqual(result["written"], 1)
+        self.assertEqual(result["total_pnl"], -506.0)
+        with sqlite3.connect(self.db_path) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute("SELECT code6, pnl, close_price, shares, total_pnl FROM daily_pnl WHERE date = ? ORDER BY code6", ("2026-06-04",)).fetchall()
+
+        self.assertEqual(rows[0]["code6"], "")
+        self.assertEqual(rows[0]["total_pnl"], -506.0)
+        self.assertEqual(rows[1]["code6"], "002241")
+        self.assertEqual(rows[1]["pnl"], -506.0)
+        self.assertEqual(rows[1]["close_price"], 25.5)
+        self.assertEqual(rows[1]["shares"], 1000.0)
+
     async def test_pending_position_not_found_raises_404(self):
         request = SimpleNamespace(
             code="000001",
@@ -466,6 +521,45 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ledger["entries"][0]["direction"], "trade_sell")
         self.assertEqual(ledger["entries"][0]["amount"], 438.736)
 
+    async def test_portfolio_overview_includes_realized_pnl_from_closed_positions(self):
+        await portfolio_service.set_cash_balance("default", 100000, "初始资金")
+        buy = SimpleNamespace(
+            code="002156",
+            name="通富微电",
+            direction="buy",
+            price=70.0,
+            shares=100,
+            commission=1.0,
+            stamp_tax=0,
+            transfer_fee=0.1,
+            notes="买入",
+            trade_time="2026-06-04 10:00:00",
+            account_id="default",
+        )
+        sell = SimpleNamespace(
+            code="002156",
+            name="通富微电",
+            direction="sell",
+            price=72.0,
+            shares=100,
+            commission=1.0,
+            stamp_tax=0.72,
+            transfer_fee=0.144,
+            notes="清仓",
+            trade_time="2026-06-05 10:00:00",
+            account_id="default",
+        )
+
+        await portfolio_service.add_trade(buy)
+        await portfolio_service.add_trade(sell)
+        overview = await portfolio_service.get_portfolio_overview("default")
+        portfolio = await portfolio_service.get_portfolio("default")
+
+        self.assertEqual(portfolio["count"], 0)
+        self.assertEqual(overview["realized_pnl"], 197.036)
+        self.assertEqual(overview["historical_pnl"], 197.036)
+        self.assertEqual(overview["total_pnl"], 197.036)
+
     async def test_delete_trade_reverses_cash_effect(self):
         await portfolio_service.set_cash_balance("default", 100000, "初始资金")
         request = SimpleNamespace(
@@ -697,6 +791,17 @@ class PortfolioApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["year"], 2026)
         get_pnl_calendar.assert_awaited_once_with(2026, 5, None)
+
+    def test_pnl_calendar_snapshot_route_uses_service_layer(self):
+        with patch(
+            "services.portfolio_service.ensure_daily_pnl_snapshot",
+            new=AsyncMock(return_value={"status": "ok", "date": "2026-06-04", "written": 2}),
+        ) as ensure_snapshot:
+            resp = self.client.post("/api/pnl/calendar/snapshot", json={"date": "2026-06-04", "account_id": "default"})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["written"], 2)
+        ensure_snapshot.assert_awaited_once_with("2026-06-04", "default")
 
     def test_watchlist_markdown_import_route_uses_service_layer(self):
         with patch(

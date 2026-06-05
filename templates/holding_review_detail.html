@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% set active = "reports" %}
-{% block title %}明日交易作战计划详情 — 炒股小牛马{% endblock %}
+{% block title %}每日 AI 决策报告详情 — 炒股小牛马{% endblock %}
 
 {% block content %}
 <div class="report-detail-page" data-review-id="{{ review_id }}">
   <div class="report-detail-header">
     <div>
-      <a class="btn btn-sm" href="/reports?tab=holding-reviews">返回报告库</a>
-      <h1 id="holdingReviewTitle">明日交易作战计划详情</h1>
+      <a class="btn btn-sm" href="/reports?tab=daily-decision">返回报告库</a>
+      <h1 id="holdingReviewTitle">每日 AI 决策报告详情</h1>
       <p id="holdingReviewMeta">正在加载...</p>
     </div>
     <div class="report-detail-actions">
@@ -55,7 +55,7 @@
   </section>
 
   <section class="card">
-    <div class="card-title">作战清单</div>
+    <div class="card-title">决策清单</div>
     <div id="holdingReviewBattlePlan" class="holding-review-battle-grid">正在加载...</div>
   </section>
 
@@ -74,7 +74,7 @@
   </section>
 
   <section class="card">
-    <div class="card-title">完整作战计划 Markdown</div>
+    <div class="card-title">完整每日 AI 决策报告 Markdown</div>
     <div class="preview-block" id="holdingReviewMarkdown">正在加载...</div>
   </section>
 </div>

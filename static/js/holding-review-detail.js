@@ -70,16 +70,16 @@
     const markdownLink = document.getElementById('holdingReviewMarkdownLink');
     try {
       const [review, items, flags] = await Promise.all([
-        requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}`),
-        requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}/items`),
-        requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}/flags`),
+        requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}`),
+        requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/items`),
+        requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/flags`),
       ]);
-      const planTitle = review.tomorrow_plan?.title || '持仓日更';
+      const planTitle = review.tomorrow_plan?.title || '每日 AI 决策报告';
       if (title) title.textContent = `${planTitle} ${review.date || ''}`;
       if (meta) {
         meta.textContent = `${review.status || '--'} · 持仓 ${review.holding_count || 0} 只 · 候选 ${review.candidate_count || 0} 只 · 触发 ${review.trigger_count || 0} 项`;
       }
-      if (markdownLink) markdownLink.href = `/api/holding-reviews/${encodeURIComponent(reviewId)}/markdown`;
+      if (markdownLink) markdownLink.href = `/api/daily-decision-reports/${encodeURIComponent(reviewId)}/markdown`;
       renderAsset(review.asset_snapshot || {});
       renderItems(items.items || []);
       renderFlags(flags.flags || []);
@@ -182,12 +182,12 @@
     const el = document.getElementById('holdingReviewBattlePlan');
     if (!el) return;
     if (!plan || Object.keys(plan).length === 0) {
-      el.innerHTML = '<div class="empty-row">暂无作战清单。</div>';
+      el.innerHTML = '<div class="empty-row">暂无决策清单。</div>';
       return;
     }
     const sections = [
       ['持仓管理建议', plan.holding_management, 'action_label'],
-      ['明日进攻候选', plan.offensive_candidates, 'condition'],
+      ['次日进攻候选', plan.offensive_candidates, 'condition'],
       ['禁止操作清单', plan.do_not_touch, 'reason'],
       ['触发条件', plan.trigger_conditions, 'condition'],
     ];

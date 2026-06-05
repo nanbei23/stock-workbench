@@ -34,6 +34,9 @@ ACTION_LABELS = {
     "candidate": "候选观察",
     "wait": "等待",
 }
+DAILY_DECISION_REPORT_TITLE = "每日 AI 决策报告"
+DAILY_DECISION_CANDIDATE_GROUP_DEFAULT = "每日决策候选"
+DAILY_DECISION_POSITIVE_SIGNAL_DEFAULTS = ("STRONG_BUY", "BUY", "OVERWEIGHT")
 
 
 def _dumps(value: Any) -> str:
@@ -71,7 +74,7 @@ def _waiting_markdown(review: dict[str, Any]) -> str:
     codes = ", ".join(refresh_job.get("codes") or []) or "无"
     return "\n".join(
         [
-            f"# 明日交易作战计划 {review['date']}",
+            f"# {DAILY_DECISION_REPORT_TITLE} {review['date']}",
             "",
             "## 状态",
             "",
@@ -79,7 +82,7 @@ def _waiting_markdown(review: dict[str, Any]) -> str:
             f"- 补报告任务: {refresh_job.get('job_id') or '--'}",
             f"- 补报告标的: {codes}",
             "",
-            "> 系统会先等待新报告写入数据库，再自动生成最终作战计划，避免使用旧报告做决策。",
+            f"> 系统会先等待新报告写入数据库，再自动生成最终{DAILY_DECISION_REPORT_TITLE}，避免使用旧报告做决策。",
         ]
     )
 
@@ -151,10 +154,11 @@ async def _watchlist_candidates(
     include_watchlist_candidates: bool,
     include_observation_pool: bool,
     candidate_codes: list[str] | None,
+    candidate_scope_label: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     clean_codes = [str(code).strip()[:6] for code in (candidate_codes or []) if str(code).strip()]
     if not clean_codes:
-        return [], "none"
+        return [], candidate_scope_label or "none"
     params: list[Any] = []
     where = []
     where.append(f"code IN ({','.join('?' for _ in clean_codes)})")
@@ -178,8 +182,81 @@ async def _watchlist_candidates(
     finally:
         await db.close()
     candidates = [dict(row) for row in rows if row["code"] not in holding_codes]
-    scope = "selected"
+    scope = candidate_scope_label or "selected"
     return candidates, scope
+
+
+def _truthy(value: Any, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _setting_value(settings: dict[str, Any], key: str, default: Any = "") -> Any:
+    value = settings.get(key)
+    return default if value is None or value == "" else value
+
+
+def _split_signal_filter(value: Any) -> set[str]:
+    raw = str(value or "").replace("，", ",")
+    signals = {part.strip().upper() for part in raw.split(",") if part.strip()}
+    return signals or set(DAILY_DECISION_POSITIVE_SIGNAL_DEFAULTS)
+
+
+async def _daily_decision_candidate_codes_from_settings(
+    settings: dict[str, Any],
+) -> tuple[list[str], str]:
+    """Resolve automatic daily-decision candidates from durable settings.
+
+    Scheduled jobs cannot depend on a transient checkbox selection in a browser
+    session. Candidate scope must come from persisted watchlist groups or rules.
+    """
+
+    mode = str(_setting_value(settings, "daily_decision_candidate_mode", "holdings_only")).strip() or "holdings_only"
+    include_observation_pool = _truthy(settings.get("daily_decision_include_observation_pool"), False)
+    params: list[Any] = []
+    where = []
+    if not include_observation_pool:
+        where.append("COALESCE(group_name, '默认') != '观察池'")
+    scope_label = "none"
+    if mode == "holdings_only":
+        return [], scope_label
+    if mode == "fixed_group":
+        group_name = str(_setting_value(settings, "daily_decision_candidate_group", DAILY_DECISION_CANDIDATE_GROUP_DEFAULT)).strip()
+        where.append("COALESCE(group_name, '默认') = ?")
+        params.append(group_name)
+        scope_label = f"fixed_group:{group_name}"
+    elif mode == "all_watchlist":
+        scope_label = "all_watchlist"
+    elif mode == "signal_filter":
+        scope_label = "signal_filter"
+    else:
+        return [], scope_label
+
+    sql_where = "WHERE " + " AND ".join(where) if where else ""
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            f"""
+            SELECT code, name, COALESCE(group_name, '默认') AS group_name,
+                   COALESCE(sort_order, 0) AS sort_order
+            FROM watchlist
+            {sql_where}
+            ORDER BY CASE WHEN COALESCE(group_name, '默认') = '观察池' THEN 1 ELSE 0 END,
+                     sort_order ASC, added_at ASC
+            """,
+            params,
+        )
+    finally:
+        await db.close()
+    codes = [str(row["code"])[:6] for row in rows if row["code"]]
+    if mode != "signal_filter" or not codes:
+        return codes, scope_label
+
+    allowed_signals = _split_signal_filter(settings.get("daily_decision_signal_filter"))
+    latest_reports = await _latest_report_map(codes)
+    filtered = [code for code in codes if str((latest_reports.get(code) or {}).get("signal") or "").upper() in allowed_signals]
+    return filtered, f"{scope_label}:{','.join(sorted(allowed_signals))}"
 
 
 def _report_is_today(report: dict[str, Any] | None, date_text: str) -> bool:
@@ -514,6 +591,15 @@ def _battle_plan(
         flags_by_code.setdefault(flag.get("code") or "", []).append(flag)
     max_single_pct = _float(investment_profile.get("max_single_position_pct"), 15.0)
     min_cash_pct = _float(investment_profile.get("min_cash_pct"), 5.0)
+    max_sector_pct = _float(investment_profile.get("max_sector_position_pct"), 50.0)
+    max_total_pct = _float(investment_profile.get("max_total_position_pct"), 85.0)
+    max_trade_loss_pct = _float(investment_profile.get("max_single_trade_loss_pct"), 3.0)
+    entry_strategy = investment_profile.get("entry_strategy_name") or "按投资风格画像执行"
+    required_conditions = investment_profile.get("entry_required_conditions") or investment_profile.get("entry_preference") or ""
+    supporting_conditions = investment_profile.get("entry_supporting_conditions") or ""
+    veto_rules = investment_profile.get("buy_veto_rules") or ""
+    sizing_discipline = investment_profile.get("position_sizing_discipline") or ""
+    add_discipline = investment_profile.get("add_position_discipline") or ""
     market_status = "偏强" if _float((market_context.get("breadth_summary") or {}).get("up_pct")) >= 55 else "分化或偏弱"
     holding_management = []
     do_not_touch = []
@@ -544,7 +630,7 @@ def _battle_plan(
             {
                 "code": item["code"],
                 "name": item["name"],
-                "condition": "若补报告后信号仍为减持/卖出，或跌破纪律线，优先降仓；若放量转强且风险解除，再恢复观察。",
+                "condition": f"若补报告后信号仍为减持/卖出，或触发否决项/卖出纪律，优先降仓；若重新满足入场策略“{entry_strategy}”且风险解除，再恢复观察。",
             }
         )
     offensive_candidates = []
@@ -557,11 +643,14 @@ def _battle_plan(
                 "name": item["name"],
                 "signal": signal or "--",
                 "eligible": bool(positive),
-                "condition": "只在市场环境不弱、放量突破或回踩确认后试仓；首仓不得突破单票仓位上限。",
+                "condition": f"按“{entry_strategy}”执行：先检查必选条件和否决项，满足后才允许试仓；首仓和加仓不得突破单票、同板块和总仓位上限。",
+                "required_conditions": required_conditions,
+                "supporting_conditions": supporting_conditions,
+                "veto_rules": veto_rules,
             }
         )
         if not positive:
-            do_not_touch.append({"code": item["code"], "name": item["name"], "reason": "候选股没有正向报告信号，不作为明日进攻标的。"})
+            do_not_touch.append({"code": item["code"], "name": item["name"], "reason": "候选股没有正向报告信号，不作为次日进攻标的。"})
     if _float(asset_snapshot.get("cash_pct")) < min_cash_pct:
         do_not_touch.append({"code": "CASH", "name": "现金约束", "reason": f"现金占比低于最低保留 {min_cash_pct:.3f}%，禁止新增进攻仓位。"})
     return {
@@ -569,7 +658,16 @@ def _battle_plan(
         "style_constraints": {
             "style": investment_profile.get("label") or "",
             "max_single_position_pct": max_single_pct,
+            "max_sector_position_pct": max_sector_pct,
+            "max_total_position_pct": max_total_pct,
             "min_cash_pct": min_cash_pct,
+            "max_single_trade_loss_pct": max_trade_loss_pct,
+            "entry_strategy_name": entry_strategy,
+            "required_conditions": required_conditions,
+            "supporting_conditions": supporting_conditions,
+            "veto_rules": veto_rules,
+            "position_sizing_discipline": sizing_discipline,
+            "add_position_discipline": add_discipline,
         },
         "holding_management": holding_management,
         "offensive_candidates": offensive_candidates,
@@ -600,7 +698,7 @@ def _role_discussion(
         f"现金占比 {cash_pct:.3f}%。"
     )
     if critical_count:
-        manager_view += f"先处理 {critical_count} 个高风险触发项，明日以风险收敛和仓位管理为主。"
+        manager_view += f"先处理 {critical_count} 个高风险触发项，次日以风险收敛和仓位管理为主。"
     elif positive_candidates:
         manager_view += f"候选池有 {positive_candidates} 个正向信号，可在持仓风险清理后作为替代观察。"
     else:
@@ -653,7 +751,7 @@ def _role_discussion(
         },
         {
             "role": "交易员/最终执行",
-            "stance": "明日动作",
+            "stance": "次日动作",
             "view": "；".join(trade_actions) + "。",
             "action_items": trade_actions,
         },
@@ -675,8 +773,9 @@ def _markdown(
     battle_plan = tomorrow_plan.get("battle_plan") or {}
     report_refresh = tomorrow_plan.get("report_refresh_job") or {}
     report_refresh_policy = tomorrow_plan.get("report_refresh_policy") or {}
+    position_plan_policy = tomorrow_plan.get("position_plan_reference_policy") or {}
     lines = [
-        f"# 明日交易作战计划 {review['date']}",
+        f"# {DAILY_DECISION_REPORT_TITLE} {review['date']}",
         "",
         "## 资产上下文",
         "",
@@ -689,13 +788,32 @@ def _markdown(
         "",
         "> 所有建议必须基于当前真实仓位和可用资金，不允许默认全仓建仓。",
         "",
+        "## 组合研究方案引用口径",
+        "",
+        f"- 默认模式: {position_plan_policy.get('default_mode') or 'disabled'}",
+        f"- 规则: {position_plan_policy.get('rule') or '默认不引用组合研究方案；每日 AI 决策报告以真实持仓、现金、成本、当日行情和交易纪律为准。'}",
+        f"- 说明: {position_plan_policy.get('note') or '组合研究方案只作为研究资产和复盘对照，不自动写交易、不覆盖当日决策。'}",
+        "",
         "## 用户投资风格",
         "",
         f"- 风格: {profile.get('label') or '--'} ({profile.get('preset') or '--'})",
         f"- 单票仓位上限: {profile.get('max_single_position_pct') or '--'}%",
+        f"- 同板块仓位上限: {profile.get('max_sector_position_pct') or '--'}%",
+        f"- 总仓位上限: {profile.get('max_total_position_pct') or '--'}%",
         f"- 最低现金保留: {profile.get('min_cash_pct') or '--'}%",
+        f"- 单笔最大亏损: {profile.get('max_single_trade_loss_pct') or '--'}%",
+        f"- 首批建仓比例: {profile.get('initial_entry_fraction') or '--'}",
         f"- 买入触发偏好: {profile.get('entry_preference') or '--'}",
         f"- 卖出纪律: {profile.get('exit_discipline') or '--'}",
+        "",
+        "## 交易纪律手册",
+        "",
+        f"- 入场策略: {profile.get('entry_strategy_name') or '--'}",
+        f"- 入场必选条件: {profile.get('entry_required_conditions') or '--'}",
+        f"- 入场确认/加分条件: {profile.get('entry_supporting_conditions') or '--'}",
+        f"- 买入否决项: {profile.get('buy_veto_rules') or '--'}",
+        f"- 仓位执行纪律: {profile.get('position_sizing_discipline') or '--'}",
+        f"- 加仓纪律: {profile.get('add_position_discipline') or '--'}",
         "",
         "## 大盘与板块环境",
         "",
@@ -769,10 +887,10 @@ def _markdown(
         for action in role.get("action_items") or []:
             lines.append(f"- {action}")
         lines.append("")
-    lines.extend(["", "## 作战清单", ""])
+    lines.extend(["", "## 决策清单", ""])
     sections = [
         ("持仓管理建议", "holding_management", "action_label"),
-        ("明日进攻候选", "offensive_candidates", "condition"),
+        ("次日进攻候选", "offensive_candidates", "condition"),
         ("禁止操作清单", "do_not_touch", "reason"),
         ("触发条件", "trigger_conditions", "condition"),
     ]
@@ -787,7 +905,7 @@ def _markdown(
     lines.extend(
         [
             "",
-            "## 明日建议口径",
+            "## 次日决策口径",
             "",
             "先处理持仓风险，再考虑自选候选股。现金、仓位、单股集中度是硬约束；自选股只作为替代候选或加仓候选，不自动转为交易。",
         ]
@@ -968,6 +1086,7 @@ async def run_daily_review(
     include_watchlist_candidates: bool = False,
     include_observation_pool: bool = False,
     candidate_codes: list[str] | None = None,
+    candidate_scope_label: str | None = None,
     force_refresh_holdings: bool = False,
     force_refresh_candidates: bool = False,
     refresh_snapshots_for_reports: bool = False,
@@ -987,6 +1106,7 @@ async def run_daily_review(
         include_watchlist_candidates=include_watchlist_candidates,
         include_observation_pool=include_observation_pool,
         candidate_codes=candidate_codes,
+        candidate_scope_label=candidate_scope_label,
     )
     candidate_codes_clean = [row["code"] for row in candidate_rows]
     all_codes = [position["code"] for position in positions] + candidate_codes_clean
@@ -1060,9 +1180,9 @@ async def run_daily_review(
         "wait_for_report_refresh": bool(wait_for_report_refresh),
         "plan_uses_refreshed_reports": plan_uses_refreshed_reports,
         "note": (
-            "已等待补报告任务完成，本次作战计划基于补跑后的最新入库报告和快照。"
+            f"已等待补报告任务完成，本次{DAILY_DECISION_REPORT_TITLE}基于补跑后的最新入库报告和快照。"
             if plan_uses_refreshed_reports
-            else "系统会先等待新报告写入数据库，再自动生成最终作战计划。"
+            else f"系统会先等待新报告写入数据库，再自动生成最终{DAILY_DECISION_REPORT_TITLE}。"
             if should_wait_for_reports
             else f"补报告任务创建失败：{report_refresh_job.get('error') or '未知错误'}"
             if report_refresh_failed
@@ -1097,8 +1217,15 @@ async def run_daily_review(
         "summary": f"{date_text} 持仓 {len(holdings)} 只，触发 {len(flags)} 项，其中高风险 {critical_count} 项；候选池 {len(candidates)} 只。",
     }
     review["tomorrow_plan"] = {
-        "title": "明日交易作战计划",
+        "title": DAILY_DECISION_REPORT_TITLE,
+        "report_type": "daily_ai_decision_report",
         "constraint": "所有建议必须基于当前真实仓位和可用资金，不允许默认全仓建仓。",
+        "position_plan_reference_policy": {
+            "default_mode": "disabled",
+            "label": "组合研究方案只作为低优先级研究参考",
+            "rule": "默认不引用组合研究方案；每日 AI 决策报告以真实持仓、现金、成本、当日行情、最新报告和交易纪律为准。",
+            "note": "如后续显式引入组合研究方案，也只能作为低优先级历史参考，不覆盖真实账户上下文，不自动写交易、不自动下单。",
+        },
         "role_discussion": role_discussion,
         "report_refresh_job": report_refresh_job,
         "report_refresh_policy": report_refresh_policy,
@@ -1115,6 +1242,7 @@ async def run_daily_review(
             "include_watchlist_candidates": include_watchlist_candidates,
             "include_observation_pool": include_observation_pool,
             "candidate_codes": candidate_codes or [],
+            "candidate_scope_label": candidate_scope_label,
         }
         if should_wait_for_reports
         else {},
@@ -1124,14 +1252,14 @@ async def run_daily_review(
         if should_wait_for_reports
         else "\n".join(
             [
-                f"# 明日交易作战计划 {review['date']}",
+                f"# {DAILY_DECISION_REPORT_TITLE} {review['date']}",
                 "",
                 "## 状态",
                 "",
                 "- 当前状态: 补报告任务创建失败",
                 f"- 错误: {review.get('error') or '--'}",
                 "",
-                "> 未生成最终作战计划。请修复补报告任务后重新生成，避免使用旧报告做决策。",
+                f"> 未生成最终{DAILY_DECISION_REPORT_TITLE}。请修复补报告任务后重新生成，避免使用旧报告做决策。",
             ]
         )
         if report_refresh_failed
@@ -1195,6 +1323,7 @@ async def finalize_waiting_reviews_for_batch_job(job_id: str) -> dict[str, Any]:
             include_watchlist_candidates=bool(pending_request.get("include_watchlist_candidates")),
             include_observation_pool=bool(pending_request.get("include_observation_pool")),
             candidate_codes=pending_request.get("candidate_codes") or [],
+            candidate_scope_label=pending_request.get("candidate_scope_label"),
             force_refresh_holdings=False,
             force_refresh_candidates=False,
             refresh_snapshots_for_reports=False,
@@ -1215,6 +1344,49 @@ async def finalize_waiting_reviews_for_batch_job(job_id: str) -> dict[str, Any]:
         )
         finalized += 1
     return {"job_id": clean_job_id, "finalized": finalized, "failed": failed, "pending": 0}
+
+
+async def review_exists_for_date(*, date_text: str, account_id: str = "default") -> bool:
+    db = await get_db()
+    try:
+        row = await (
+            await db.execute(
+                """
+                SELECT 1
+                FROM holding_daily_reviews
+                WHERE date = ? AND account_id = ? AND status != 'archived'
+                LIMIT 1
+                """,
+                (date_text, account_id or "default"),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+    return row is not None
+
+
+async def run_scheduled_daily_decision_report(
+    *,
+    account_id: str = "default",
+    date_text: str | None = None,
+) -> dict[str, Any]:
+    settings = await _settings_map()
+    candidate_codes, candidate_scope_label = await _daily_decision_candidate_codes_from_settings(settings)
+    force_refresh_holdings = _truthy(settings.get("daily_decision_force_refresh_holdings"), True)
+    force_refresh_candidates = _truthy(settings.get("daily_decision_force_refresh_candidates"), False)
+    refresh_snapshots = _truthy(settings.get("daily_decision_refresh_snapshots"), True)
+    include_observation_pool = _truthy(settings.get("daily_decision_include_observation_pool"), False)
+    return await run_daily_review(
+        account_id=account_id or str(_setting_value(settings, "daily_decision_account_id", "default")),
+        date_text=date_text,
+        include_watchlist_candidates=bool(candidate_codes),
+        include_observation_pool=include_observation_pool,
+        candidate_codes=candidate_codes,
+        candidate_scope_label=candidate_scope_label,
+        force_refresh_holdings=force_refresh_holdings,
+        force_refresh_candidates=bool(candidate_codes) and force_refresh_candidates,
+        refresh_snapshots_for_reports=refresh_snapshots,
+    )
 
 
 async def reconcile_waiting_reviews(limit: int = 20) -> dict[str, Any]:

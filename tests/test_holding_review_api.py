@@ -86,3 +86,27 @@ class HoldingReviewApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["review_id"], "hr-force")
+
+    def test_daily_decision_report_aliases_use_same_service_contract(self):
+        async def fake_run_daily_review(**kwargs):
+            self.assertEqual(kwargs["account_id"], "default")
+            return {"review_id": "ddr-1", "title": "每日 AI 决策报告"}
+
+        with patch("api.holding_review_api.holding_review_service.run_daily_review", new=AsyncMock(side_effect=fake_run_daily_review)):
+            run_response = self.client.post("/api/daily-decision-reports/run", json={"account_id": "default"})
+
+        self.assertEqual(run_response.status_code, 200)
+        self.assertEqual(run_response.json()["review_id"], "ddr-1")
+
+        with patch("api.holding_review_api.holding_review_service.list_reviews", new=AsyncMock(return_value={"reviews": []})) as list_reviews:
+            list_response = self.client.get("/api/daily-decision-reports?limit=20")
+
+        self.assertEqual(list_response.status_code, 200)
+        list_reviews.assert_awaited_once_with(limit=20, account_id=None)
+
+        review = {"review_id": "ddr-1", "tomorrow_plan_markdown": "# 每日 AI 决策报告"}
+        with patch("api.holding_review_api.holding_review_service.get_review", new=AsyncMock(return_value=review)):
+            markdown_response = self.client.get("/api/daily-decision-reports/ddr-1/markdown")
+
+        self.assertEqual(markdown_response.status_code, 200)
+        self.assertIn("每日 AI 决策报告", markdown_response.text)

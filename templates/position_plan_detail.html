@@ -1,19 +1,20 @@
 {% extends "base.html" %}
 {% set active = "reports" %}
 
-{% block title %}建仓计划详情 - 炒股小牛马{% endblock %}
+{% block title %}组合研究方案详情 - 炒股小牛马{% endblock %}
 
 {% block content %}
 <div class="position-plan-page" data-plan-id="{{ plan_id }}">
   <section class="position-plan-hero">
     <div>
       <a class="text-link" href="/reports">返回 AI 报告库</a>
-      <h1 id="planDetailTitle">建仓计划详情</h1>
-      <p id="planDetailSubtitle">正在读取完整建仓建议、角色讨论、来源报告和审计快照。</p>
+      <h1 id="planDetailTitle">组合研究方案详情</h1>
+      <p id="planDetailSubtitle">正在读取完整组合研究方案、角色讨论、来源报告和审计快照。</p>
     </div>
     <div class="position-plan-actions">
       <a class="btn btn-sm" id="planMarkdownLink" href="/api/position-plans/{{ plan_id }}/markdown" target="_blank">Markdown</a>
-      <button class="btn btn-sm btn-primary" id="planAdoptBtn" type="button">采纳为最终计划</button>
+      <button class="btn btn-sm btn-primary" id="planAdoptBtn" type="button">整份采纳为绩效基准</button>
+      <button class="btn btn-sm" id="planPartialAdoptBtn" type="button">部分采纳</button>
       <button class="btn btn-sm" id="planArchiveBtn" type="button">归档</button>
     </div>
   </section>
@@ -110,7 +111,7 @@
 
   <section class="position-plan-section" id="planAudit">
     <div class="section-heading">
-      <h2>现金、持仓与采纳快照</h2>
+      <h2>现金、持仓与确认快照</h2>
       <span>用于回溯当时决策约束</span>
     </div>
     <div class="position-plan-split three">
@@ -123,7 +124,7 @@
         <pre id="planPortfolioSnapshot" class="json-block">{}</pre>
       </article>
       <article>
-        <h3>采纳快照</h3>
+        <h3>确认快照</h3>
         <pre id="planConfirmedSnapshot" class="json-block">{}</pre>
       </article>
     </div>

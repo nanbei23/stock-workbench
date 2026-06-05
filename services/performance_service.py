@@ -393,7 +393,7 @@ async def position_plan_performance(limit: int = 100) -> dict[str, Any]:
         "by_model_strategy": _finalize_group_stats(by_model_strategy, label_key="model_strategy"),
         "by_context_strategy": _finalize_group_stats(by_context_strategy, label_key="context_strategy"),
         "horizons": list(HORIZON_DAYS),
-        "note": "组合级绩效只统计已采纳的最终建仓计划；优先使用 signal_tracking 闭环收益，如 daily_pnl 有收盘价，则补充 1/3/5/10/20 日后验收益和最大回撤。",
+        "note": "组合级绩效只统计已整份采纳的最终组合研究方案；部分采纳只作为复盘参考。优先使用 signal_tracking 闭环收益，如 daily_pnl 有收盘价，则补充 1/3/5/10/20 日后验收益和最大回撤。",
     }
 
 

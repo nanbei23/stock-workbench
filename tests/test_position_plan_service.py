@@ -88,12 +88,28 @@ class PositionPlanServiceTests(unittest.TestCase):
         self.assertEqual(detail["adoption_status"], "draft")
         self.assertIsNone(detail["confirmed_at"])
 
+    def test_persist_position_plan_uses_cost_fallback_for_zero_market_value_position(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE portfolio SET current_price = 0, market_value = 0, unrealized_pnl = 0, unrealized_pnl_pct = 0")
+            conn.commit()
+
+        saved = position_plan_service.persist_position_plan(
+            {"candidate_count": 0, "selected_count": 0, "recommendations": []},
+            db_path=self.db_path,
+            payload={"stage": "final", "title": "持仓快照兜底"},
+        )
+
+        snapshot = saved["portfolio_snapshot_json"]
+        self.assertEqual(snapshot["position_count"], 1)
+        self.assertEqual(snapshot["market_value"], round(100.123 * 10.123, 3))
+        self.assertEqual(snapshot["positions"][0]["valuation_source"], "cost_fallback")
+
     def test_adopt_final_position_plan_locks_snapshot_and_supersedes_previous(self):
         base_plan = {
             "candidate_count": 1,
             "selected_count": 1,
             "selected_report_ids": [10],
-            "summary": "最终建仓计划",
+            "summary": "最终组合研究方案",
             "recommendations": [
                 {
                     "code": "000001",
@@ -166,6 +182,33 @@ class PositionPlanServiceTests(unittest.TestCase):
             position_plan_service.abandon_position_plan(plan["plan_id"], db_path=self.db_path)
 
         self.assertIn("已采纳", str(ctx.exception))
+
+    def test_partially_adopt_final_position_plan_marks_reference_only(self):
+        plan = position_plan_service.persist_position_plan(
+            {
+                "candidate_count": 2,
+                "selected_count": 2,
+                "summary": "组合研究方案",
+                "recommendations": [
+                    {"code": "000001", "name": "平安银行", "action": "buy", "suggested_amount": 10000, "position_pct": 3},
+                    {"code": "000002", "name": "万科A", "action": "watch", "suggested_amount": 0, "position_pct": 0},
+                ],
+            },
+            db_path=self.db_path,
+            payload={"stage": "final", "title": "组合研究方案 A"},
+        )
+
+        adopted = position_plan_service.partially_adopt_position_plan(
+            plan["plan_id"],
+            db_path=self.db_path,
+            confirmed_by="user",
+        )
+        detail = position_plan_service.get_position_plan(plan["plan_id"], db_path=self.db_path)
+
+        self.assertEqual(adopted["adoption_status"], "partially_adopted")
+        self.assertEqual(detail["adoption_status"], "partially_adopted")
+        self.assertEqual(detail["status"], "active")
+        self.assertIn("reference_only", detail["confirmed_snapshot_json"]["decision_policy"])
 
     def test_list_data_snapshots_returns_validation_summary_without_full_payload(self):
         snapshot = {"market": {"quote": {"price": 10}}, "social": {}, "news": {}, "fundamentals": {}, "policy": {}, "hot_money": {}, "lockup": {}}

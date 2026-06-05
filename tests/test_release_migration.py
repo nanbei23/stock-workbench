@@ -153,6 +153,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
         api_source = (ROOT / "api" / "position_plan_api.py").read_text(encoding="utf-8")
         service_source = (ROOT / "services" / "position_plan_service.py").read_text(encoding="utf-8")
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
 
         self.assertIn("const staleWorkerStates = new Set(['stale', 'offline', 'disabled', 'not_started'])", js)
         self.assertIn("const activeWorkers = workers.filter(worker => !staleWorkerStates.has(worker.state))", js)
@@ -161,8 +162,27 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("陈旧/离线 Worker", js)
         self.assertIn("放弃", js)
         self.assertIn("abandonPositionPlan", js)
+        self.assertIn("组合研究方案", html)
+        self.assertIn("部分采纳", js)
+        self.assertIn("partiallyAdoptPositionPlan", js)
         self.assertIn("/position-plans/{plan_id}/abandon", api_source)
+        self.assertIn("/position-plans/{plan_id}/partial-adopt", api_source)
         self.assertIn("def abandon_position_plan", service_source)
+        self.assertIn("def partially_adopt_position_plan", service_source)
+
+    def test_position_plan_copy_is_research_asset_not_daily_instruction(self):
+        reports_js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        detail_html = (ROOT / "templates" / "position_plan_detail.html").read_text(encoding="utf-8")
+        detail_js = (ROOT / "static" / "js" / "position-plan-detail.js").read_text(encoding="utf-8")
+        batch_script = (ROOT / "scripts" / "batch_research.py").read_text(encoding="utf-8")
+        holding_service = (ROOT / "services" / "holding_review_service.py").read_text(encoding="utf-8")
+
+        self.assertIn("组合研究方案", reports_js)
+        self.assertIn("组合研究方案详情", detail_html)
+        self.assertIn("研究参考，不自动写交易", detail_js)
+        self.assertIn("组合研究方案只作为研究资产", batch_script)
+        self.assertIn("position_plan_reference_policy", holding_service)
+        self.assertIn("默认不引用组合研究方案", holding_service)
 
     def test_reports_preview_subviews_have_back_navigation(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -217,6 +237,9 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("当日涨跌幅", ai_js)
         self.assertIn("持仓盈亏日历", html)
         self.assertIn("本月持仓盈亏", html)
+        self.assertIn("历史盈亏", html)
+        self.assertIn("historicalPnl", html)
+        self.assertIn("historical_pnl", js)
         self.assertIn("持仓盈亏明细", js)
         self.assertIn("stock.js?v=2.9.20-pnl-pct", index_html)
         self.assertIn("ai.js?v=2.9.20-pnl-pct", ai_html)
@@ -240,12 +263,30 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("请先勾选“从自选股选择候选”并选择候选股，再补跑候选报告。", js)
         self.assertIn("刷新七层快照需要配合持仓或候选报告补跑使用。", js)
         self.assertIn("review.status === 'waiting_reports'", js)
-        self.assertIn("完成后自动生成作战计划", js)
+        self.assertIn("完成后自动生成每日 AI 决策报告", js)
         self.assertIn("finalize_waiting_reviews_for_batch_job", batch_service)
         self.assertIn("holding_review_finalized", batch_service)
         reports_js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
         self.assertIn("waiting_reports: '等待补报告'", reports_js)
         self.assertIn("report_refresh_failed: '补报告失败'", reports_js)
+
+    def test_daily_ai_decision_report_is_primary_reports_entry(self):
+        reports_js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        reports_html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+        portfolio_js = PORTFOLIO_JS.read_text(encoding="utf-8")
+        portfolio_html = PORTFOLIO_TEMPLATE.read_text(encoding="utf-8")
+        detail_html = (ROOT / "templates" / "holding_review_detail.html").read_text(encoding="utf-8")
+        detail_js = (ROOT / "static" / "js" / "holding-review-detail.js").read_text(encoding="utf-8")
+
+        self.assertIn("每日决策", reports_html)
+        self.assertIn("每日 AI 决策报告", reports_js)
+        self.assertIn("/api/daily-decision-reports?limit=100", reports_js)
+        self.assertIn("/daily-decision-reports/${encodedId}", reports_js)
+        self.assertIn("每日 AI 决策报告", portfolio_html)
+        self.assertIn("/api/daily-decision-reports/run", portfolio_js)
+        self.assertIn("/daily-decision-reports/${encodeURIComponent(review.review_id)}", portfolio_js)
+        self.assertIn("每日 AI 决策报告详情", detail_html)
+        self.assertIn("/api/daily-decision-reports/", detail_js)
 
     def test_reports_page_supports_grouped_collapsible_report_list(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -469,7 +510,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("window._lastKlineDebug", js)
         self.assertIn("renderCount: safeData.length", js)
         self.assertIn("container.__lwc_resize_observer = ro", js)
-        self.assertIn("static/js/chart.js?v=2.9.14-kline-resilience", html)
+        self.assertIn("static/js/chart.js?v=2.9.15-kline-resilience", html)
 
     def test_kline_chart_resilience_guards_are_present(self):
         chart_js = CHART_JS.read_text(encoding="utf-8")
@@ -513,7 +554,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("renderKlineMessage(container, 'K线图渲染异常'", chart_js)
         self.assertIn("container.__kline_render_meta", chart_js)
         self.assertIn("setDataSuccess", chart_js)
-        self.assertIn("static/js/chart.js?v=2.9.14-kline-resilience", html)
+        self.assertIn("static/js/chart.js?v=2.9.15-kline-resilience", html)
 
     def test_aurora_flow_theme_is_available_and_drives_chart_colors(self):
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
@@ -566,6 +607,17 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("setReportMarketFilter", reports_js)
         self.assertIn("filterByTradingMarket", reports_js)
 
+    def test_daily_decision_schedule_settings_are_exposed(self):
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("自动生成每日 AI 决策报告", settings_html)
+        self.assertIn("set-daily_decision_auto_enabled", settings_html)
+        self.assertIn("set-daily_decision_auto_time", settings_html)
+        self.assertIn("set-daily_decision_candidate_mode", settings_html)
+        self.assertIn("set-daily_decision_candidate_group", settings_html)
+        self.assertIn("set-daily_decision_signal_filter", settings_html)
+        self.assertIn("页面临时勾选", settings_html)
+
     def test_investment_profile_settings_and_report_detail_are_exposed(self):
         settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
         settings_js = SETTINGS_JS.read_text(encoding="utf-8")
@@ -575,18 +627,27 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("投资风格画像", settings_html)
         self.assertIn("investment_style_preset", settings_html)
         self.assertIn("investment_max_single_position_pct", settings_html)
+        self.assertIn("investment_max_sector_position_pct", settings_html)
+        self.assertIn("investment_max_total_position_pct", settings_html)
+        self.assertIn("investment_entry_required_conditions", settings_html)
+        self.assertIn("investment_buy_veto_rules", settings_html)
+        self.assertIn("交易纪律手册", settings_html)
         self.assertIn("investment_allow_left_side", settings_html)
         self.assertIn("套用当前风格模板", settings_html)
         self.assertIn("从交易历史推断", settings_html)
         self.assertIn("maybeApplyInvestmentStylePreset", settings_html)
         self.assertIn("inferInvestmentProfileFromTrades", settings_js)
         self.assertIn("INVESTMENT_STYLE_PRESETS", settings_js)
+        self.assertIn("突破后回踩买入", settings_js)
+        self.assertIn("investment_position_sizing_discipline", settings_js)
         self.assertIn("applyInvestmentStylePreset", settings_js)
         self.assertIn("markInvestmentProfileEdited", settings_js)
         self.assertIn("/settings/investment-profile/infer", settings_js)
         self.assertIn("reportInvestmentProfileBody", report_detail_html)
         self.assertIn("renderInvestmentProfile", report_detail_js)
         self.assertIn("风格匹配度", report_detail_js)
+        self.assertIn("交易纪律手册", report_detail_js)
+        self.assertIn("strategy_checklist", report_detail_js)
         self.assertIn("style_match", report_detail_js)
         self.assertIn("raw.investment_profile", report_detail_js)
 

@@ -114,7 +114,7 @@
     }
 
     function stageLabel(value) {
-        return { screening: '初筛', shortlist: '精选', final: '最终建仓' }[value] || value || '--';
+        return { screening: '初筛', shortlist: '精选', final: '最终组合研究' }[value] || value || '--';
     }
 
     function strategyLabel(value) {
@@ -161,7 +161,8 @@
     function adoptionLabel(value) {
         return {
             draft: '待确认',
-            adopted: '已采纳',
+            adopted: '整份采纳',
+            partially_adopted: '部分采纳',
             superseded: '已被替代',
             abandoned: '已放弃'
         }[value] || value || '待确认';
@@ -171,6 +172,7 @@
         return {
             draft: 'signal-hold',
             adopted: 'signal-buy',
+            partially_adopted: 'signal-hold',
             superseded: 'signal-sell',
             abandoned: 'signal-sell'
         }[value] || 'signal-hold';
@@ -308,16 +310,17 @@
     }
 
     function switchReportTab(tab) {
+        if (tab === 'daily-decision' || tab === 'daily-decisions') tab = 'holding-reviews';
         document.querySelectorAll('#reportLibraryTabs button').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
         document.querySelectorAll('.report-tab-panel').forEach(panel => panel.classList.toggle('active', panel.id === `tab-${tab}`));
         const title = document.getElementById('reportTabTitle');
         const hint = document.getElementById('reportTabHint');
         const meta = {
-            reports: ['报告列表', '筛选、比较、勾选完整单股报告，并生成组合级多角色建仓建议。'],
+            reports: ['报告列表', '筛选、比较、勾选完整单股报告，并生成组合级多角色组合研究方案。'],
             snapshots: ['数据快照', '查看七层数据底稿的完整性、批次、关联报告和快照详情。'],
-            plans: ['建仓计划', '长期保存、回看和对比多角色建仓建议。'],
-            'holding-reviews': ['作战计划', '回看每日持仓扫描、资产上下文、触发项和明日交易作战计划。'],
-            jobs: ['批量任务', '查看数据预取、报告生成和建仓计划任务进度。']
+            plans: ['组合研究方案', '长期保存、回看和对比多角色组合研究方案。'],
+            'holding-reviews': ['每日 AI 决策报告', '回看每日持仓扫描、资产上下文、触发项和次日交易决策。'],
+            jobs: ['批量任务', '查看数据预取、报告生成和组合研究方案任务进度。']
         }[tab] || ['报告列表', ''];
         if (title) title.textContent = meta[0];
         if (hint) hint.textContent = meta[1];
@@ -712,7 +715,7 @@
             body: JSON.stringify(payload)
         });
         closePositionPlanModal();
-        alert(`多角色建仓建议任务已创建：${resp.job_id}\n预计模型调用：${preflight.estimated_role_calls || '--'} 次`);
+        alert(`组合研究方案任务已创建：${resp.job_id}\n预计模型调用：${preflight.estimated_role_calls || '--'} 次`);
         jobsLoaded = false;
         plansLoaded = false;
         switchReportTab('jobs');
@@ -908,14 +911,15 @@
             const plans = data.plans || [];
             plansLoaded = true;
             if (!plans.length) {
-                tbody.innerHTML = '<tr><td colspan="9" class="library-empty-state">暂无建仓计划</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="library-empty-state">暂无组合研究方案</td></tr>';
                 return;
             }
             tbody.innerHTML = plans.map(plan => {
                 const modelConfig = plan.model_config_json || {};
                 const marketCaptured = plan.market_context_captured_at || plan.decision_market_snapshot_json?.captured_at || '';
                 const encodedPlanId = encodeURIComponent(plan.plan_id);
-                const canAdopt = plan.stage === 'final' && !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
+                const lockedStatuses = ['adopted', 'partially_adopted', 'abandoned'];
+                const canAdopt = plan.stage === 'final' && !lockedStatuses.includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
                 const canAbandon = !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
                 return `<tr class="${selectedPositionPlanId === plan.plan_id ? 'selected' : ''}" data-plan-id="${escapeAttr(plan.plan_id)}" onclick="previewPositionPlan('${encodedPlanId}')">
                     <td><strong>${escapeHtml(plan.title || plan.plan_id)}</strong><span>${escapeHtml(plan.plan_id)}</span></td>
@@ -931,7 +935,8 @@
                             <button class="btn btn-sm btn-primary" onclick="previewPositionPlan('${encodedPlanId}')">详情</button>
                             <a class="btn btn-sm" href="/position-plans/${encodedPlanId}">详情页</a>
                             <a class="btn btn-sm" href="/api/position-plans/${encodedPlanId}/markdown" target="_blank">Markdown</a>
-                            ${canAdopt ? `<button class="btn btn-sm" onclick="adoptPositionPlan('${encodedPlanId}')">采纳</button>` : ''}
+                            ${canAdopt ? `<button class="btn btn-sm" onclick="adoptPositionPlan('${encodedPlanId}')">整份采纳</button>` : ''}
+                            ${canAdopt ? `<button class="btn btn-sm" onclick="partiallyAdoptPositionPlan('${encodedPlanId}')">部分采纳</button>` : ''}
                             ${canAbandon ? `<button class="btn btn-sm" onclick="abandonPositionPlan('${encodedPlanId}')">放弃</button>` : ''}
                             <button class="btn btn-sm" onclick="archivePositionPlan('${encodedPlanId}')">归档</button>
                         </div>
@@ -957,12 +962,13 @@
         const meta = document.getElementById('reportPreviewMeta');
         const body = document.getElementById('reportPreview');
         if (meta) meta.textContent = planId;
-        if (body) body.innerHTML = '<div class="library-empty-state">加载建仓计划...</div>';
+        if (body) body.innerHTML = '<div class="library-empty-state">加载组合研究方案...</div>';
         try {
             const plan = await requestJson(`/api/position-plans/${encodeURIComponent(planId)}`);
             if (meta) meta.textContent = `${stageLabel(plan.stage)} ${plan.plan_id}`;
             const items = plan.items || [];
-            const canAdopt = plan.stage === 'final' && !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
+            const lockedStatuses = ['adopted', 'partially_adopted', 'abandoned'];
+            const canAdopt = plan.stage === 'final' && !lockedStatuses.includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
             const canAbandon = !['adopted', 'abandoned'].includes(plan.adoption_status) && plan.status !== 'abandoned' && plan.status !== 'archived';
             const marketSnapshot = plan.decision_market_snapshot_json || {};
             const marketRows = (marketSnapshot.summary || []).slice(0, 20).map(item => {
@@ -1006,12 +1012,13 @@
                 </div>
                 <h4>现金 / 持仓快照</h4>
                 <div class="preview-block">${formatJsonBlock({cash: plan.cash_snapshot_json, portfolio: plan.portfolio_snapshot_json})}</div>
-                <h4>采纳快照</h4>
+                <h4>确认快照</h4>
                 <div class="preview-block">${formatJsonBlock(plan.confirmed_snapshot_json)}</div>
                 <div class="preview-actions">
                     <a class="btn btn-sm btn-primary" href="/position-plans/${encodeURIComponent(planId)}">打开完整详情页</a>
                     <a class="btn btn-sm" href="/api/position-plans/${encodeURIComponent(planId)}/markdown" target="_blank">Markdown</a>
-                    ${canAdopt ? `<button class="btn btn-sm btn-primary" onclick="adoptPositionPlan('${encodeURIComponent(planId)}')">采纳为最终建仓计划</button>` : ''}
+                    ${canAdopt ? `<button class="btn btn-sm btn-primary" onclick="adoptPositionPlan('${encodeURIComponent(planId)}')">整份采纳为绩效基准</button>` : ''}
+                    ${canAdopt ? `<button class="btn btn-sm" onclick="partiallyAdoptPositionPlan('${encodeURIComponent(planId)}')">部分采纳</button>` : ''}
                     ${canAbandon ? `<button class="btn btn-sm" onclick="abandonPositionPlan('${encodeURIComponent(planId)}')">放弃</button>` : ''}
                     <button class="btn btn-sm" onclick="archivePositionPlan('${encodeURIComponent(planId)}')">归档</button>
                 </div>
@@ -1024,7 +1031,7 @@
 
     async function archivePositionPlan(encodedPlanId) {
         const planId = decodeURIComponent(encodedPlanId);
-        if (!confirm('确认归档这份建仓计划？')) return;
+        if (!confirm('确认归档这份组合研究方案？')) return;
         await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/archive`, { method: 'POST' });
         plansLoaded = false;
         await loadPositionPlans();
@@ -1032,8 +1039,17 @@
 
     async function adoptPositionPlan(encodedPlanId) {
         const planId = decodeURIComponent(encodedPlanId);
-        if (!confirm('确认采纳这份最终建仓计划作为 AI 绩效基准？这不会自动写交易或下单。')) return;
+        if (!confirm('确认整份采纳这份组合研究方案作为 AI 绩效基准？这不会自动写交易或下单。')) return;
         await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/adopt`, { method: 'POST' });
+        plansLoaded = false;
+        await loadPositionPlans();
+        await previewPositionPlan(encodeURIComponent(planId));
+    }
+
+    async function partiallyAdoptPositionPlan(encodedPlanId) {
+        const planId = decodeURIComponent(encodedPlanId);
+        if (!confirm('确认只部分采纳这份组合研究方案？这只作为研究参考和后续复盘，不覆盖正式绩效基准，也不会自动写交易或下单。')) return;
+        await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/partial-adopt`, { method: 'POST' });
         plansLoaded = false;
         await loadPositionPlans();
         await previewPositionPlan(encodeURIComponent(planId));
@@ -1041,7 +1057,7 @@
 
     async function abandonPositionPlan(encodedPlanId) {
         const planId = decodeURIComponent(encodedPlanId);
-        if (!confirm('确认放弃这份待确认建仓计划？放弃后不会作为 AI 绩效基准。')) return;
+        if (!confirm('确认放弃这份待确认组合研究方案？放弃后不会作为 AI 绩效基准。')) return;
         await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/abandon`, { method: 'POST' });
         plansLoaded = false;
         await loadPositionPlans();
@@ -1052,11 +1068,11 @@
         const tbody = document.getElementById('holdingReviewRows');
         if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">正在加载...</td></tr>';
         try {
-            const data = await requestJson('/api/holding-reviews?limit=100');
+            const data = await requestJson('/api/daily-decision-reports?limit=100');
             const reviews = data.reviews || [];
             holdingReviewsLoaded = true;
             if (!reviews.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">暂无明日交易作战计划</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="library-empty-state">暂无每日 AI 决策报告</td></tr>';
                 return;
             }
             tbody.innerHTML = reviews.map(review => {
@@ -1073,8 +1089,8 @@
                     <td onclick="event.stopPropagation()">
                         <div class="library-action-row">
                             <button class="btn btn-sm btn-primary" onclick="previewHoldingReview('${encodedId}')">预览</button>
-                            <a class="btn btn-sm" href="/holding-reviews/${encodedId}">详情页</a>
-                            <a class="btn btn-sm" href="/api/holding-reviews/${encodedId}/markdown" target="_blank">Markdown</a>
+                            <a class="btn btn-sm" href="/daily-decision-reports/${encodedId}">详情页</a>
+                            <a class="btn btn-sm" href="/api/daily-decision-reports/${encodedId}/markdown" target="_blank">Markdown</a>
                         </div>
                     </td>
                 </tr>`;
@@ -1089,12 +1105,12 @@
         const meta = document.getElementById('reportPreviewMeta');
         const body = document.getElementById('reportPreview');
         if (meta) meta.textContent = reviewId;
-        if (body) body.innerHTML = '<div class="library-empty-state">加载明日交易作战计划...</div>';
+        if (body) body.innerHTML = '<div class="library-empty-state">加载每日 AI 决策报告...</div>';
         try {
             const [review, items, flags] = await Promise.all([
-                requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}`),
-                requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}/items`),
-                requestJson(`/api/holding-reviews/${encodeURIComponent(reviewId)}/flags`)
+                requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}`),
+                requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/items`),
+                requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/flags`)
             ]);
             const asset = review.asset_snapshot || {};
             const holdingRows = (items.items || []).filter(item => item.item_type === 'holding').map(item => `<tr>
@@ -1117,7 +1133,7 @@
                 <span class="report-signal ${escapeHtml(statusClass(flag.severity === 'critical' ? 'failed' : flag.severity === 'warning' ? 'running' : 'completed'))}">${escapeHtml(flag.severity)}</span>
                 ${escapeHtml(flag.description || '')}
             </li>`).join('');
-            if (meta) meta.textContent = `${escapeHtml(review.tomorrow_plan?.title || '明日交易作战计划')} ${review.date || ''}`;
+            if (meta) meta.textContent = `${escapeHtml(review.tomorrow_plan?.title || '每日 AI 决策报告')} ${review.date || ''}`;
             if (body) body.innerHTML = `
                 <div class="preview-signal">
                     <span>${escapeHtml(statusLabel(review.status))}</span>
@@ -1140,11 +1156,11 @@
                 <div class="preview-block"><ul class="structured-list">${flagHtml || '<li>暂无异常触发项</li>'}</ul></div>
                 <h4>自选候选池</h4>
                 <div class="preview-block"><table class="report-library-table"><tbody>${candidateRows || '<tr><td>未加入候选池</td></tr>'}</tbody></table></div>
-                <h4>明日交易作战计划</h4>
+                <h4>每日 AI 决策报告</h4>
                 <div class="preview-block">${formatMarkdown(review.tomorrow_plan_markdown || '暂无')}</div>
                 <div class="preview-actions">
-                    <a class="btn btn-sm btn-primary" href="/holding-reviews/${encodeURIComponent(reviewId)}">打开完整详情页</a>
-                    <a class="btn btn-sm" href="/api/holding-reviews/${encodeURIComponent(reviewId)}/markdown" target="_blank">Markdown</a>
+                    <a class="btn btn-sm btn-primary" href="/daily-decision-reports/${encodeURIComponent(reviewId)}">打开完整详情页</a>
+                    <a class="btn btn-sm" href="/api/daily-decision-reports/${encodeURIComponent(reviewId)}/markdown" target="_blank">Markdown</a>
                 </div>
             `;
         } catch (err) {
@@ -1649,6 +1665,7 @@
     window.previewHoldingReview = previewHoldingReview;
     window.archivePositionPlan = archivePositionPlan;
     window.adoptPositionPlan = adoptPositionPlan;
+    window.partiallyAdoptPositionPlan = partiallyAdoptPositionPlan;
     window.abandonPositionPlan = abandonPositionPlan;
     window.toggleReportSelection = toggleReportSelection;
     window.toggleAllReports = toggleAllReports;

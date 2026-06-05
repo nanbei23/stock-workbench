@@ -1770,7 +1770,7 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("可用现金：253375.680", first_prompt)
         self.assertIn("平安银行", first_prompt)
         self.assertIn("1000.000", first_prompt)
-        self.assertIn("建仓建议必须是调仓建议，不允许默认全仓重建", first_prompt)
+        self.assertIn("组合研究方案必须是调仓研究建议，不允许默认全仓重建", first_prompt)
 
         with sqlite3.connect(self.db_path) as db:
             db.row_factory = sqlite3.Row

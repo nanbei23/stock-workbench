@@ -61,7 +61,7 @@
         {% set nav_current = '自选股' if request.url.path == '/' else
             '持仓' if request.url.path == '/portfolio' else
             'AI分析台' if request.url.path == '/ai' else
-            '报告库' if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') else
+            '报告库' if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') or request.url.path.startswith('/daily-decision-reports/') else
             '热点主线' if request.url.path == '/hotspots' else
             '对话台' if request.url.path == '/hermes' else
             'AI绩效' if request.url.path in ['/shadow', '/performance'] else
@@ -73,7 +73,7 @@
                 <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}" title="自选股"><span class="ui-glyph" data-icon="选"></span>自选股</a>
                 <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}" title="持仓"><span class="ui-glyph" data-icon="仓"></span>持仓</a>
                 <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}" title="AI分析台"><span class="ui-glyph" data-icon="析"></span>AI分析台</a>
-                <a href="/reports" class="tab-btn {% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') %}active{% endif %}" title="报告库"><span class="ui-glyph" data-icon="报"></span>报告库</a>
+                <a href="/reports" class="tab-btn {% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') or request.url.path.startswith('/daily-decision-reports/') %}active{% endif %}" title="报告库"><span class="ui-glyph" data-icon="报"></span>报告库</a>
                 <a href="/hotspots" class="tab-btn {% if request.url.path == '/hotspots' %}active{% endif %}" title="热点主线"><span class="ui-glyph" data-icon="热"></span>热点主线</a>
                 <a href="/hermes" class="tab-btn {% if request.url.path == '/hermes' %}active{% endif %}" title="对话台"><span class="ui-glyph" data-icon="聊"></span>对话台</a>
                 <a href="/shadow" class="tab-btn {% if request.url.path in ['/shadow', '/performance'] %}active{% endif %}" title="AI绩效"><span class="ui-glyph" data-icon="绩"></span>AI绩效</a>

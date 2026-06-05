@@ -91,6 +91,14 @@ async def page_holding_review_detail(request: Request, review_id: str):
         context={"review_id": review_id},
     )
 
+@app.get("/daily-decision-reports/{review_id}", response_class=HTMLResponse)
+async def page_daily_decision_report_detail(request: Request, review_id: str):
+    return templates.TemplateResponse(
+        request=request,
+        name="holding_review_detail.html",
+        context={"review_id": review_id},
+    )
+
 @app.get("/hotspots", response_class=HTMLResponse)
 async def page_hotspots(request: Request):
     return templates.TemplateResponse(request=request, name="hotspots.html")

@@ -139,7 +139,7 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             review = await holding_review_service.run_daily_review(account_id="default", date_text="2026-06-04", wait_for_report_refresh=False)
 
         plan = review["tomorrow_plan"]
-        self.assertEqual(plan["title"], "明日交易作战计划")
+        self.assertEqual(plan["title"], "每日 AI 决策报告")
         self.assertEqual(plan["report_refresh_job"]["job_id"], "re-补报告")
         self.assertEqual(plan["report_refresh_job"]["codes"], ["000001"])
         self.assertEqual(plan["investment_profile"]["preset"], "aggressive")
@@ -150,10 +150,14 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("offensive_candidates", plan["battle_plan"])
         self.assertIn("do_not_touch", plan["battle_plan"])
         self.assertIn("trigger_conditions", plan["battle_plan"])
-        self.assertIn("明日交易作战计划", review["tomorrow_plan_markdown"])
+        self.assertIn("每日 AI 决策报告", review["tomorrow_plan_markdown"])
         self.assertIn("用户投资风格", review["tomorrow_plan_markdown"])
+        self.assertIn("交易纪律手册", review["tomorrow_plan_markdown"])
+        self.assertIn("入场策略", review["tomorrow_plan_markdown"])
         self.assertIn("七层快照摘要", review["tomorrow_plan_markdown"])
         self.assertIn("大盘与板块环境", review["tomorrow_plan_markdown"])
+        self.assertIn("style_constraints", plan["battle_plan"])
+        self.assertIn("entry_strategy_name", plan["battle_plan"]["style_constraints"])
 
         saved_review = await holding_review_service.get_review(review["review_id"])
         self.assertEqual(saved_review["tomorrow_plan"]["report_refresh_job"]["job_id"], "re-补报告")
@@ -501,4 +505,69 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review["status"], "report_refresh_failed")
         self.assertIn("worker unavailable", review["error"])
         self.assertEqual(review["tomorrow_plan"]["battle_plan"], {})
-        self.assertIn("未生成最终作战计划", review["tomorrow_plan_markdown"])
+        self.assertIn("未生成最终每日 AI 决策报告", review["tomorrow_plan_markdown"])
+
+    async def test_scheduled_review_uses_persistent_candidate_group_without_page_selection(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("daily_decision_candidate_mode", "fixed_group"),
+                    ("daily_decision_candidate_group", "每日决策候选"),
+                    ("daily_decision_force_refresh_holdings", "false"),
+                    ("daily_decision_force_refresh_candidates", "false"),
+                    ("daily_decision_refresh_snapshots", "false"),
+                ],
+            )
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.executemany(
+                "INSERT INTO watchlist (code, name, group_name, sort_order) VALUES (?, ?, ?, ?)",
+                [
+                    ("000002", "万科A", "每日决策候选", 1),
+                    ("000003", "普通自选", "默认", 2),
+                ],
+            )
+            db.executemany(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    ("000001", "holding-today", "HOLD", 30, "2026-06-04 10:00:00"),
+                    ("000002", "candidate-today", "BUY", 25, "2026-06-04 10:00:00"),
+                ],
+            )
+            db.execute(
+                "INSERT INTO stock_data_snapshots (code, name, snapshot_json, validation_json, summary_json) VALUES (?, ?, ?, ?, ?)",
+                (
+                    "000001",
+                    "平安银行",
+                    json.dumps({"market": {"quote": {"price": 10.0}}}),
+                    json.dumps({"ok": True, "missing_layers": [], "empty_layers": [], "layer_errors": {}}),
+                    json.dumps({"total_bytes": 1024}),
+                ),
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(
+                return_value={
+                    "000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"},
+                    "000002": {"price": 20.0, "change_pct": 1.0, "name": "万科A"},
+                }
+            ),
+        ):
+            review = await holding_review_service.run_scheduled_daily_decision_report(date_text="2026-06-04")
+
+        self.assertEqual(review["candidate_count"], 1)
+        self.assertEqual(review["candidate_scope"], "fixed_group:每日决策候选")
+        self.assertEqual([item["code"] for item in review["candidate_context"]["items"]], ["000002"])
+        self.assertEqual(review["tomorrow_plan"]["pending_request"], {})

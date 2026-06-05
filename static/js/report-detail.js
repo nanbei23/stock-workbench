@@ -230,7 +230,11 @@
       ['画像版本', profile.version || '--'],
       ['风格档位', `${profile.label || '--'}${profile.preset ? `（${profile.preset}）` : ''}`],
       ['单票仓位上限', profile.max_single_position_pct ? `${profile.max_single_position_pct}%` : '--'],
+      ['同板块仓位上限', profile.max_sector_position_pct ? `${profile.max_sector_position_pct}%` : '--'],
+      ['总仓位上限', profile.max_total_position_pct ? `${profile.max_total_position_pct}%` : '--'],
       ['最低现金保留', profile.min_cash_pct ? `${profile.min_cash_pct}%` : '--'],
+      ['单笔最大亏损', profile.max_single_trade_loss_pct ? `${profile.max_single_trade_loss_pct}%` : '--'],
+      ['首批建仓比例', profile.initial_entry_fraction || '--'],
       ['可接受最大回撤', profile.max_drawdown_pct ? `${profile.max_drawdown_pct}%` : '--'],
       ['买入触发偏好', profile.entry_preference || '--'],
       ['卖出纪律', profile.exit_discipline || '--'],
@@ -248,7 +252,17 @@
           </div>
         `).join('')}
       </div>
+      <h3>交易纪律手册</h3>
+      ${structuredValue({
+        entry_strategy_name: profile.entry_strategy_name || '--',
+        entry_required_conditions: profile.entry_required_conditions || '--',
+        entry_supporting_conditions: profile.entry_supporting_conditions || '--',
+        buy_veto_rules: profile.buy_veto_rules || '--',
+        position_sizing_discipline: profile.position_sizing_discipline || '--',
+        add_position_discipline: profile.add_position_discipline || '--',
+      })}
       ${styleMatch && Object.keys(styleMatch).length ? `<h3>风格执行要求</h3>${structuredValue(styleMatch)}` : ''}
+      ${raw.strategy_checklist ? `<h3>报告纪律检查</h3>${structuredValue(raw.strategy_checklist)}` : ''}
       ${profile.custom_notes ? `<h3>自定义说明</h3><p>${escapeHtml(profile.custom_notes)}</p>` : ''}
       ${profile.inferred_summary ? `<h3>交易历史推断</h3><p>${escapeHtml(profile.inferred_summary)}</p>` : ''}
       ${profile.context ? `<h3>完整上下文</h3><pre>${escapeHtml(profile.context)}</pre>` : ''}

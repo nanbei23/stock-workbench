@@ -1,13 +1,15 @@
 """Portfolio business operations."""
 
+import asyncio
 import re
 import uuid
 import unicodedata
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import HTTPException
 
+from data.kline import get_tencent_history_kline
 from data.quote import get_batch_quotes
 from models.database import get_db
 from repositories import portfolio_repository as repo
@@ -42,10 +44,26 @@ def _daily_pnl_from_quote(quote: dict, shares) -> float:
 
 
 def _enrich_position(position: dict, quote: dict):
-    position["price"] = float(quote.get("price") or 0)
+    quote_price = float(quote.get("price") or 0)
+    stored_price = float(position.get("current_price") or 0)
+    avg_cost = float(position.get("avg_cost") or 0)
+    if quote_price:
+        price = quote_price
+        valuation_source = "realtime_quote"
+    elif stored_price:
+        price = stored_price
+        valuation_source = "stored_price"
+    elif avg_cost:
+        price = avg_cost
+        valuation_source = "cost_fallback"
+    else:
+        price = 0.0
+        valuation_source = "missing"
+    position["price"] = price
+    position["valuation_source"] = valuation_source
     position["prev_close"] = float(quote.get("prev_close") or 0)
     position["change_pct"] = float(quote.get("change_pct") or 0)
-    position["name"] = quote.get("name", position.get("name", ""))
+    position["name"] = quote.get("name") or position.get("name", "")
     position["market_value"] = round(position["price"] * float(position.get("total_shares") or 0), 3)
     position["unrealized_pnl"] = 0.0
     position["unrealized_pnl_pct"] = 0.0
@@ -64,9 +82,11 @@ def _summary_from_positions(positions: list[dict], cash_and_fees: dict) -> dict:
     total_cost = sum(float(position.get("avg_cost") or 0) * float(position.get("total_shares") or 0) for position in positions)
     total_daily_pnl = sum(float(position.get("daily_pnl") or 0) for position in positions)
     total_unrealized_pnl = sum(float(position.get("unrealized_pnl") or 0) for position in positions)
+    total_realized_pnl = float(cash_and_fees.get("realized_pnl") or 0)
     cash = float(cash_and_fees["cash"])
     total_assets = total_market_value + cash
     previous_market_value = total_market_value - total_daily_pnl
+    total_lifetime_pnl = total_realized_pnl + total_unrealized_pnl
     return {
         "total_assets": round(total_assets, 3),
         "market_value": round(total_market_value, 3),
@@ -77,18 +97,63 @@ def _summary_from_positions(positions: list[dict], cash_and_fees: dict) -> dict:
         "unrealized_pnl": round(total_unrealized_pnl, 3),
         "daily_pnl_pct": round(total_daily_pnl / previous_market_value * 100, 3) if previous_market_value else 0,
         "unrealized_pnl_pct": round(total_unrealized_pnl / total_cost * 100, 3) if total_cost else 0,
+        "realized_pnl": round(total_realized_pnl, 3),
+        "historical_pnl": round(total_realized_pnl, 3),
+        "total_pnl": round(total_lifetime_pnl, 3),
         "total_commission": round(cash_and_fees["total_commission"], 3),
         "total_stamp_tax": round(cash_and_fees["total_stamp_tax"], 3),
     }
+
+
+def _realized_pnl_from_trades(trades: list[dict]) -> float:
+    states = {}
+    realized = 0.0
+    sorted_trades = sorted(
+        trades or [],
+        key=lambda item: (
+            str(item.get("account_id") or "default"),
+            str(item.get("code") or ""),
+            str(item.get("trade_time") or ""),
+            int(item.get("id") or 0),
+        ),
+    )
+    for trade in sorted_trades:
+        account_id = str(trade.get("account_id") or "default")
+        code = str(trade.get("code") or "")
+        direction = str(trade.get("direction") or "").lower()
+        shares = float(trade.get("shares") or 0)
+        amount = float(trade.get("amount") or 0)
+        fees = (
+            float(trade.get("commission") or 0)
+            + float(trade.get("stamp_tax") or 0)
+            + float(trade.get("transfer_fee") or 0)
+        )
+        if not code or shares <= 0:
+            continue
+        state = states.setdefault((account_id, code), {"shares": 0.0, "cost": 0.0})
+        if direction == "buy":
+            state["shares"] += shares
+            state["cost"] += amount + fees
+        elif direction == "sell" and state["shares"] > 0:
+            matched_shares = min(shares, state["shares"])
+            avg_cost = state["cost"] / state["shares"] if state["shares"] else 0.0
+            sell_fee_ratio = matched_shares / shares if shares else 0.0
+            net_proceeds = amount * sell_fee_ratio - fees * sell_fee_ratio
+            realized += net_proceeds - avg_cost * matched_shares
+            state["shares"] = max(0.0, state["shares"] - matched_shares)
+            state["cost"] = avg_cost * state["shares"]
+    return round(realized, 3)
 
 
 async def _portfolio_snapshot(account_id=None):
     async def _load(db):
         positions = await repo.fetch_positions(db, account_id)
         cash_and_fees = await repo.fetch_cash_and_fees(db, account_id)
-        return positions, cash_and_fees
+        trades = await repo.fetch_trades(db, account_id=account_id)
+        return positions, cash_and_fees, trades
 
-    positions, cash_and_fees = await _with_db(_load)
+    positions, cash_and_fees, trades = await _with_db(_load)
+    cash_and_fees["realized_pnl"] = _realized_pnl_from_trades(trades)
     if positions:
         quotes = await get_batch_quotes([position["code"] for position in positions])
         for position in positions:
@@ -563,10 +628,151 @@ def _planned_total_cost(price, shares, explicit_total=None):
     return None
 
 
+def _parse_day(value=None) -> date:
+    if not value:
+        return datetime.now().date()
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD") from exc
+
+
+def _historical_close_for_day(code: str, day: date, rows: list[dict]) -> float:
+    target = day.isoformat()
+    eligible = []
+    for row in rows or []:
+        row_day = str(row.get("date") or "")[:10]
+        if not row_day:
+            continue
+        if row_day == target:
+            return float(row.get("close") or 0)
+        if row_day < target:
+            eligible.append(row)
+    if eligible:
+        return float(eligible[-1].get("close") or 0)
+    return 0.0
+
+
+async def ensure_daily_pnl_snapshot(day=None, account_id=None) -> dict:
+    """Persist holding PnL rows for a day so the PnL calendar is not empty."""
+    target_day = _parse_day(day)
+
+    async def _load(db):
+        positions = await repo.fetch_positions(db, account_id)
+        cash_and_fees = await repo.fetch_cash_and_fees(db, account_id)
+        return positions, cash_and_fees
+
+    positions, cash_and_fees = await _with_db(_load)
+    if not positions:
+        return {"status": "empty", "date": target_day.isoformat(), "written": 0, "items": []}
+
+    today = datetime.now().date()
+    codes = [position["code"] for position in positions]
+    quote_map = await get_batch_quotes(codes) if target_day >= today else {}
+    items = []
+
+    for position in positions:
+        code = str(position.get("code") or "")[:6]
+        shares = float(position.get("total_shares") or 0)
+        avg_cost = float(position.get("avg_cost") or 0)
+        if shares <= 0 or avg_cost <= 0:
+            continue
+
+        close_price = 0.0
+        source = "missing"
+        if target_day >= today:
+            quote = quote_map.get(code) or {}
+            close_price = float(quote.get("price") or 0)
+            source = "realtime_quote" if close_price else source
+        if not close_price:
+            rows = await asyncio.to_thread(get_tencent_history_kline, code, "day", 30)
+            close_price = _historical_close_for_day(code, target_day, rows)
+            source = "historical_kline" if close_price else source
+        if not close_price:
+            close_price = float(position.get("current_price") or 0) or avg_cost
+            source = "stored_or_cost_fallback"
+
+        pnl = round((close_price - avg_cost) * shares, 3)
+        items.append(
+            {
+                "code6": code,
+                "name": position.get("name") or code,
+                "pnl": pnl,
+                "close_price": round(close_price, 3),
+                "shares": round(shares, 3),
+                "source": source,
+            }
+        )
+
+    total_pnl = round(sum(item["pnl"] for item in items), 3)
+    market_value = round(sum(item["close_price"] * item["shares"] for item in items), 3)
+    cash = float(cash_and_fees.get("cash") or 0)
+    total_cost = round(sum((float(p.get("avg_cost") or 0) * float(p.get("total_shares") or 0)) for p in positions), 3)
+    total_assets = round(cash + market_value, 3)
+    total_pnl_pct = round(total_pnl / total_cost * 100, 3) if total_cost else 0.0
+
+    async def _write(db):
+        for item in items:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO daily_pnl (date, code6, pnl, close_price, shares)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (target_day.isoformat(), item["code6"], item["pnl"], item["close_price"], item["shares"]),
+            )
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO daily_pnl (
+                date, code6, total_assets, cash, market_value, realized_pnl,
+                unrealized_pnl, total_pnl, total_pnl_pct
+            ) VALUES (?, '', ?, ?, ?, 0, ?, ?, ?)
+            """,
+            (target_day.isoformat(), total_assets, cash, market_value, total_pnl, total_pnl, total_pnl_pct),
+        )
+        await db.commit()
+
+    await _with_db(_write)
+    return {
+        "status": "ok",
+        "date": target_day.isoformat(),
+        "written": len(items),
+        "total_pnl": total_pnl,
+        "total_pnl_pct": total_pnl_pct,
+        "items": items,
+    }
+
+
+async def _ensure_recent_pnl_snapshots_for_calendar(year: int, month: int):
+    today = datetime.now().date()
+    recent_days = [today - timedelta(days=1)]
+    if datetime.now().hour >= 15:
+        recent_days.append(today)
+    for day in recent_days:
+        if day.year == year and day.month == month:
+            async def _has_rows(db, target=day.isoformat()):
+                rows = await repo.fetch_daily_pnl_day(db, target)
+                return bool(rows)
+
+            try:
+                exists = await _with_db(_has_rows)
+                if not exists:
+                    await ensure_daily_pnl_snapshot(day)
+            except Exception:
+                # Calendar reads must remain available even if a backfill data source is temporarily down.
+                continue
+
+
 async def get_pnl_calendar(year=None, month=None, code=None):
     now = datetime.now()
     y = year or now.year
     m = month or now.month
+
+    if y == now.year and m == now.month:
+        await _ensure_recent_pnl_snapshots_for_calendar(y, m)
 
     async def _load(db):
         return await repo.fetch_daily_pnl(db, y, m, code)

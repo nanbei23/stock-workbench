@@ -45,6 +45,11 @@ async def adopt_position_plan(plan_id: str):
     return position_plan_service.adopt_position_plan(plan_id)
 
 
+@router.post("/position-plans/{plan_id}/partial-adopt")
+async def partially_adopt_position_plan(plan_id: str):
+    return position_plan_service.partially_adopt_position_plan(plan_id)
+
+
 @router.post("/position-plans/{plan_id}/abandon")
 async def abandon_position_plan(plan_id: str):
     return position_plan_service.abandon_position_plan(plan_id)

@@ -1,6 +1,7 @@
 """APScheduler 定时任务管理 — 注册所有定时任务"""
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -11,16 +12,19 @@ from scheduler.anomaly_checker import check_anomalies
 from scheduler.report_runner import run_scheduled_report
 from scheduler.signal_tracker import get_open_tracking_codes, update_prices
 from services import ai_report_service
+from services import holding_review_service
+from services import portfolio_service
 from services import settings_service
 
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _is_trading_hours():
     """判断当前是否在A股交易时间（粗略判断，用于间隔任务内部跳过）"""
-    now = datetime.now()
+    now = datetime.now(CN_TZ)
     weekday = now.weekday()
     if weekday >= 5:  # 周六日
         return False
@@ -60,10 +64,10 @@ async def anomaly_job():
 
 
 async def clear_anomaly_logs_job():
-    """每天23:59清除当天的异动日志"""
+    """每天清除历史异动日志，仅保留当天看盘记录。"""
     try:
-        count = await ai_report_service.clear_anomalies_for_date()
-        logger.info("🗑️ 已清除当天异动日志 %d 条", count)
+        count = await ai_report_service.clear_stale_anomalies()
+        logger.info("🗑️ 已清除历史异动日志 %d 条", count)
     except Exception as e:
         logger.error("清除异动日志失败: %s", e)
 
@@ -97,6 +101,50 @@ async def signal_tracking_job():
             logger.warning("未获取到任何行情数据")
     except Exception as e:
         logger.error("❌ 信号跟踪定时任务失败: %s", e)
+
+
+async def daily_pnl_snapshot_job():
+    """每日收盘后写入持仓盈亏日历快照。"""
+    try:
+        result = await portfolio_service.ensure_daily_pnl_snapshot()
+        logger.info("持仓盈亏快照写入完成: %s", result)
+    except Exception as e:
+        logger.error("持仓盈亏快照写入失败: %s", e)
+
+
+def _setting_value(key: str, default: str = "") -> str:
+    try:
+        value = settings_service.get_setting(key)["value"]
+        return default if value in (None, "") else str(value)
+    except Exception:
+        return default
+
+
+def _setting_enabled(key: str, default: bool = False) -> bool:
+    value = _setting_value(key, "true" if default else "false")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def daily_decision_report_job(now: datetime | None = None):
+    """Generate the daily AI decision report once at the configured time."""
+    now = now or datetime.now(CN_TZ)
+    if now.weekday() >= 5:
+        return
+    if not _setting_enabled("daily_decision_auto_enabled", False):
+        return
+    target_time = _setting_value("daily_decision_auto_time", "15:20").strip() or "15:20"
+    if now.strftime("%H:%M") != target_time:
+        return
+    account_id = _setting_value("daily_decision_account_id", "default").strip() or "default"
+    date_text = now.strftime("%Y-%m-%d")
+    if await holding_review_service.review_exists_for_date(date_text=date_text, account_id=account_id):
+        logger.info("每日 AI 决策报告已存在，跳过: %s %s", account_id, date_text)
+        return
+    try:
+        result = await holding_review_service.run_scheduled_daily_decision_report(account_id=account_id, date_text=date_text)
+        logger.info("每日 AI 决策报告调度完成: %s", result.get("review_id"))
+    except Exception as e:
+        logger.error("每日 AI 决策报告调度失败: %s", e)
 
 
 async def report_job(report_type: str):
@@ -173,6 +221,24 @@ def setup_scheduler():
         args=["review"],
         id="report_review",
         name="策略复盘",
+        replace_existing=True,
+    )
+
+    # ── 持仓盈亏日历快照：每日15:10（收盘后） ──
+    scheduler.add_job(
+        daily_pnl_snapshot_job,
+        trigger=CronTrigger(hour=15, minute=10, day_of_week='mon-fri'),
+        id="daily_pnl_snapshot",
+        name="持仓盈亏快照",
+        replace_existing=True,
+    )
+
+    # ── 每日 AI 决策报告：每分钟检查一次设置，到点后只生成一次 ──
+    scheduler.add_job(
+        daily_decision_report_job,
+        trigger=IntervalTrigger(minutes=1),
+        id="daily_decision_report_guard",
+        name="每日 AI 决策报告调度检查",
         replace_existing=True,
     )
 

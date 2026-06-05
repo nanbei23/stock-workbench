@@ -1,13 +1,13 @@
 """Settings business operations."""
 
 import json
+import shutil
+import sqlite3
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi import HTTPException
 
-from config import DB_PATH
 from models.database import MIGRATIONS
 from repositories import settings_repository as repo
 from services.investment_profile_service import DEFAULT_INVESTMENT_SETTINGS
@@ -41,6 +41,16 @@ DEFAULTS = {
     "schedule_pm_open": "true",
     "schedule_close_report": "true",
     "schedule_anomaly_realtime": "true",
+    "daily_decision_auto_enabled": "false",
+    "daily_decision_auto_time": "15:20",
+    "daily_decision_account_id": "default",
+    "daily_decision_force_refresh_holdings": "true",
+    "daily_decision_force_refresh_candidates": "false",
+    "daily_decision_refresh_snapshots": "true",
+    "daily_decision_candidate_mode": "holdings_only",
+    "daily_decision_candidate_group": "每日决策候选",
+    "daily_decision_signal_filter": "STRONG_BUY,BUY,OVERWEIGHT",
+    "daily_decision_include_observation_pool": "false",
     "notify_strategy_change": "true",
     "notify_order_trigger": "true",
     "notify_anomaly": "true",
@@ -227,9 +237,40 @@ def export_payload():
 
 
 def _backup_dir() -> Path:
-    path = Path(DB_PATH).resolve().parent / "backups"
+    path = _db_path().parent / "backups"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _db_path() -> Path:
+    return Path(repo.DB_PATH).resolve()
+
+
+def _backup_filename(prefix: str = "stock-workbench-db-backup") -> str:
+    return f"{prefix}-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.db"
+
+
+def _sqlite_integrity(path: Path) -> dict:
+    try:
+        with sqlite3.connect(str(path)) as conn:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            has_settings = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='settings'"
+            ).fetchone()[0]
+        ok = bool(row and row[0] == "ok" and has_settings)
+        return {
+            "ok": ok,
+            "integrity": row[0] if row else "missing",
+            "has_settings_table": bool(has_settings),
+        }
+    except sqlite3.DatabaseError as exc:
+        return {"ok": False, "integrity": str(exc), "has_settings_table": False}
+
+
+def _copy_sqlite_database(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(source)) as src, sqlite3.connect(str(target)) as dst:
+        src.backup(dst)
 
 
 def migration_status():
@@ -244,13 +285,14 @@ def migration_status():
         applied = [dict(row) for row in rows]
         latest_known = max((version for version, _, _ in MIGRATIONS), default=0)
         latest_applied = max((row["version"] for row in applied), default=0)
-        db_file = Path(DB_PATH)
-        backups = sorted(_backup_dir().glob("stock-workbench-backup-*.json"), reverse=True)
+        db_file = _db_path()
+        backups = sorted(_backup_dir().glob("stock-workbench-db-backup-*.db"), reverse=True)
         return {
             "database": {
                 "path": str(db_file),
                 "exists": db_file.exists(),
                 "size_bytes": db_file.stat().st_size if db_file.exists() else 0,
+                "backup_type": "sqlite",
             },
             "migrations": {
                 "latest_known": latest_known,
@@ -265,6 +307,7 @@ def migration_status():
                     "path": str(item),
                     "size_bytes": item.stat().st_size,
                     "created_at": datetime.fromtimestamp(item.stat().st_mtime).isoformat(),
+                    "backup_type": "sqlite",
                 }
                 for item in backups[:10]
             ],
@@ -274,33 +317,53 @@ def migration_status():
 
 
 def create_backup_file():
-    content, filename = export_payload()
+    db_file = _db_path()
+    if not db_file.exists():
+        raise HTTPException(404, "数据库文件不存在，无法备份")
+    filename = _backup_filename()
     target = _backup_dir() / filename
-    target.write_text(content, encoding="utf-8")
+    _copy_sqlite_database(db_file, target)
+    integrity = _sqlite_integrity(target)
+    if not integrity["ok"]:
+        target.unlink(missing_ok=True)
+        raise HTTPException(500, f"数据库备份校验失败: {integrity['integrity']}")
     return {
         "status": "ok",
+        "backup_type": "sqlite",
         "filename": filename,
         "path": str(target),
         "size_bytes": target.stat().st_size,
         "created_at": datetime.fromtimestamp(target.stat().st_mtime).isoformat(),
+        "source_path": str(db_file),
+        "integrity": integrity,
     }
 
 
 def restore_latest_backup():
-    backups = sorted(_backup_dir().glob("stock-workbench-backup-*.json"), reverse=True)
+    db_file = _db_path()
+    backups = sorted(_backup_dir().glob("stock-workbench-db-backup-*.db"), reverse=True)
     if not backups:
-        raise HTTPException(404, "没有可恢复的备份")
-    data = json.loads(backups[0].read_text(encoding="utf-8"))
-    payload = SimpleNamespace(
-        settings=data.get("settings"),
-        watchlist=data.get("watchlist"),
-        portfolio=data.get("portfolio"),
-        orders=data.get("orders"),
-    )
+        raise HTTPException(404, "没有可恢复的数据库备份")
+    source = backups[0]
+    integrity = _sqlite_integrity(source)
+    if not integrity["ok"]:
+        raise HTTPException(400, f"最近数据库备份校验失败: {integrity['integrity']}")
+    pre_restore_backup_path = ""
+    if db_file.exists():
+        pre_restore = _backup_dir() / _backup_filename("stock-workbench-db-pre-restore")
+        _copy_sqlite_database(db_file, pre_restore)
+        pre_restore_backup_path = str(pre_restore)
+    temp_restore = db_file.with_suffix(f"{db_file.suffix}.restore-tmp")
+    shutil.copy2(source, temp_restore)
+    shutil.move(str(temp_restore), str(db_file))
     return {
         "status": "ok",
-        "filename": backups[0].name,
-        "imported": repo.import_data(payload),
+        "restored_type": "sqlite",
+        "filename": source.name,
+        "path": str(source),
+        "database_path": str(db_file),
+        "pre_restore_backup_path": pre_restore_backup_path,
+        "integrity": integrity,
     }
 
 

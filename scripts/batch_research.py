@@ -645,6 +645,12 @@ def _snapshot_prompt(
   "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
+  "strategy_checklist": {{
+    "required": ["从投资风格画像的入场必选条件中逐条判断是否满足"],
+    "supporting": ["从投资风格画像的入场确认/加分条件中逐条判断是否满足"],
+    "veto": ["从投资风格画像的买入否决项中逐条判断是否触发"],
+    "sizing": "按投资风格画像的仓位执行纪律给出分批、单票、同板块和总仓位约束"
+  }},
   "market_report": "技术和价格行为分析",
   "sentiment_report": "情绪和社交舆情分析",
   "news_report": "新闻舆情分析",
@@ -754,6 +760,7 @@ def _snapshot_debate_prompt(
   "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
+  "strategy_checklist": {"required": [], "supporting": [], "veto": [], "sizing": ""},
   "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
   "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
 }
@@ -898,6 +905,7 @@ def _snapshot_tradingagents_prompt(
   "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
+  "strategy_checklist": {"required": [], "supporting": [], "veto": [], "sizing": ""},
   "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
   "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
 }
@@ -1128,6 +1136,7 @@ Lessons from prior decisions:
   "action_reason": "结合持仓成本、仓位、浮盈亏、可用资金后的账户动作理由",
   "confidence": 0.0,
   "risk_score": 0.0,
+  "strategy_checklist": {{"required": [], "supporting": [], "veto": [], "sizing": ""}},
   "trader_plan": "分批、触发、止损、失效条件；如果不建仓，说明等待条件",
   "final_decision": "最终裁决，必须明确给出信号、置信度、风险评分和理由"
 }}"""
@@ -1943,9 +1952,15 @@ def _portfolio_context(conn: sqlite3.Connection, *, cash: float) -> dict[str, An
     for row in rows:
         shares = _float_or_none(row["total_shares"]) or 0.0
         current_price = _float_or_none(row["current_price"]) or 0.0
+        avg_cost = _float_or_none(row["avg_cost"]) or 0.0
         row_market_value = _float_or_none(row["market_value"]) or 0.0
+        valuation_source = "stored" if row_market_value else "missing"
         if not row_market_value and current_price and shares:
             row_market_value = round(current_price * shares, 3)
+            valuation_source = "price_times_shares"
+        elif not row_market_value and avg_cost and shares:
+            row_market_value = round(avg_cost * shares, 3)
+            valuation_source = "cost_fallback"
         market_value += row_market_value
         positions.append(
             {
@@ -1953,13 +1968,14 @@ def _portfolio_context(conn: sqlite3.Connection, *, cash: float) -> dict[str, An
                 "name": row["name"] or row["code"],
                 "shares": round(shares, 3),
                 "available_shares": _float_or_none(row["available_shares"]) or 0.0,
-                "avg_cost": _float_or_none(row["avg_cost"]) or 0.0,
+                "avg_cost": avg_cost,
                 "current_price": current_price,
                 "market_value": round(row_market_value, 3),
                 "unrealized_pnl": _float_or_none(row["unrealized_pnl"]) or 0.0,
                 "unrealized_pnl_pct": _float_or_none(row["unrealized_pnl_pct"]) or 0.0,
                 "account_id": row["account_id"] or "default",
                 "updated_at": row["updated_at"],
+                "valuation_source": valuation_source,
             }
         )
     market_value = round(market_value, 3)
@@ -2066,7 +2082,7 @@ def _report_to_plan_item(stock: StockCandidate, row: sqlite3.Row | None) -> dict
             "group_name": stock.group_name,
             "action": "missing_report",
             "score": 0.0,
-            "reason": "缺少分析报告，暂不进入建仓建议",
+            "reason": "缺少分析报告，暂不进入组合研究方案",
         }
     signal = row["signal"] or "UNKNOWN"
     confidence = _float_or_none(row["confidence"]) or 0.0
@@ -2103,6 +2119,9 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
     items = [_report_to_plan_item(stock, reports.get(stock.code)) for stock in stocks]
     investment_profile = investment_profile_from_db(db_path)
     max_single_pct = _safe_num(investment_profile.get("max_single_position_pct"), 15.0) or 15.0
+    max_sector_pct = _safe_num(investment_profile.get("max_sector_position_pct"), 50.0) or 50.0
+    max_total_pct = _safe_num(investment_profile.get("max_total_position_pct"), 85.0) or 85.0
+    initial_entry_fraction = _safe_num(investment_profile.get("initial_entry_fraction"), 0.333) or 0.333
     _attach_current_positions(items, portfolio_context)
     available = [item for item in items if item.get("report_id")]
     missing = [item for item in items if item["action"] == "missing_report"]
@@ -2119,9 +2138,10 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
 
     score_sum = sum(max(item["score"], 1.0) for item in buyable) or 1.0
     max_single_amount = cash * max(0.0, max_single_pct) / 100 if cash > 0 else 0.0
+    initial_cap_amount = max_single_amount * max(0.0, min(initial_entry_fraction, 1.0))
     for item in buyable:
         raw_amount = cash * max(item["score"], 1.0) / score_sum
-        item["suggested_amount"] = round(min(raw_amount, max_single_amount), 3)
+        item["suggested_amount"] = round(min(raw_amount, initial_cap_amount), 3)
         item["position_pct"] = round(item["suggested_amount"] / cash * 100, 3) if cash else 0.0
     for item in watchers:
         item["suggested_amount"] = 0.0
@@ -2143,8 +2163,9 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
         "investment_profile": investment_profile,
         "recommendations": recommendations,
         "notes": [
-            "建仓建议只基于已入库 AI 分析报告生成，不自动写入交易流水或条件单。",
-            f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，用于空仓后的分批建仓参考。",
+            "组合研究方案只作为研究资产，基于已入库 AI 分析报告生成，不自动写入交易流水或条件单。",
+            f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，同板块不超过 {max_sector_pct:.3f}%，总仓位不超过 {max_total_pct:.3f}%。",
+            f"初始试仓按当前投资风格首批比例 {initial_entry_fraction:.3f} 生成，后续加仓必须重新满足交易纪律手册。",
         ],
     }
 
@@ -2154,7 +2175,7 @@ POSITION_PLAN_ROLES = [
     ("risk_manager", "风控经理", "从回撤、集中度、行业/风格拥挤和现金缓冲角度审查方案。"),
     ("trader", "交易员", "把研究结论转成可执行的分批、触发、止损和失效条件。"),
     ("skeptic", "反方审查", "主动寻找报告中的弱证据、冲突信号和可能被高估的确定性。"),
-    ("chair", "最终裁决", "综合前面角色观点，输出最终 JSON 建仓建议。"),
+    ("chair", "最终裁决", "综合前面角色观点，输出最终 JSON 组合研究方案。"),
 ]
 
 
@@ -2456,7 +2477,7 @@ def _position_portfolio_context_block(context: dict[str, Any] | None) -> str:
         f"- 总资产：{_safe_num(context.get('total_assets'), 0.0) or 0.0:.3f}",
         f"- 当前仓位：{_safe_num(context.get('invested_pct'), 0.0) or 0.0:.3f}%",
         f"- 现金比例：{_safe_num(context.get('cash_pct'), 0.0) or 0.0:.3f}%",
-        "- 约束：建仓建议必须是调仓建议，不允许默认全仓重建；suggested_amount 只代表新增买入金额，不包含已有持仓市值。",
+        "- 约束：组合研究方案必须是调仓研究建议，不允许默认全仓重建；suggested_amount 只代表新增买入金额，不包含已有持仓市值。",
     ]
     positions = context.get("positions") or []
     if not positions:
@@ -2508,12 +2529,13 @@ def _position_discussion_prompt(
 {
   "summary": "组合层面的最终结论",
   "actions": [
-    {"code": "000001", "action": "buy|watch|avoid|sell", "suggested_amount": 0.0, "position_pct": 0.0, "reason": "理由", "entry_plan": "分批/触发/失效条件"}
+    {"code": "000001", "action": "buy|watch|avoid|sell", "suggested_amount": 0.0, "position_pct": 0.0, "reason": "理由", "entry_plan": "分批/触发/失效条件", "strategy_check": "交易纪律手册满足/不满足情况"}
   ],
-  "risk_controls": ["组合级风险约束"]
+  "risk_controls": ["组合级风险约束"],
+  "strategy_checklist": {"required": [], "supporting": [], "veto": [], "sizing": ""}
 }
 """
-    return f"""你正在参加 A 股组合建仓委员会。当前角色：{role_name}。
+    return f"""你正在参加 A 股组合研究委员会。当前角色：{role_name}。
 角色目标：{role_goal}
 
 约束：
@@ -2521,10 +2543,11 @@ def _position_discussion_prompt(
 - 不允许自行联网，不允许编造报告没有提供的数据。
 - 当前可用现金：{cash:.3f}
 - 最多给出 {top_n} 只买入候选。
-- 建仓建议不写库、不下单，只生成研究建议。
+- 组合研究方案只作为研究资产，不写交易流水、不下单。
 - 金额和百分比保留三位小数。
-- 建仓建议必须结合当前仓位和可用资金，输出调仓建议；不能把当前组合当作空仓，也不能默认全仓买入。
+- 组合研究方案必须结合当前仓位和可用资金，输出调仓研究建议；不能把当前组合当作空仓，也不能默认全仓买入。
 - 如果实时行情/K线与旧报告判断冲突，优先把它作为执行时点校准：可降低仓位、延后建仓或改为观察，但不能改写旧报告事实。
+- 必须按投资风格画像里的交易纪律手册逐条判断：入场必选条件、确认/加分条件、买入否决项、仓位执行纪律。
 {final_instruction}
 
 {investment_profile_context}
@@ -2543,11 +2566,11 @@ def _position_discussion_prompt(
 
 async def _call_position_plan_role_llm(role: dict[str, str], prompt: str, config: dict[str, str], *, timeout_seconds: int) -> str:
     if not config.get("base_url"):
-        raise RuntimeError("AI 引擎 Base URL 未配置，无法生成多角色建仓建议")
+        raise RuntimeError("AI 引擎 Base URL 未配置，无法生成组合研究方案")
     if not config.get("api_key"):
-        raise RuntimeError("AI 引擎 API Key 未配置，无法生成多角色建仓建议")
+        raise RuntimeError("AI 引擎 API Key 未配置，无法生成组合研究方案")
     if not config.get("model"):
-        raise RuntimeError("AI 引擎模型未配置，无法生成多角色建仓建议")
+        raise RuntimeError("AI 引擎模型未配置，无法生成组合研究方案")
     async with httpx.AsyncClient(timeout=max(30, timeout_seconds)) as client:
         resp = await client.post(
             _chat_completions_url(config["base_url"]),
@@ -2555,7 +2578,7 @@ async def _call_position_plan_role_llm(role: dict[str, str], prompt: str, config
             json={
                 "model": config["model"],
                 "messages": [
-                    {"role": "system", "content": f"你是{role['role_name']}，参与组合级多角色建仓讨论。"},
+                    {"role": "system", "content": f"你是{role['role_name']}，参与组合级多角色组合研究讨论。"},
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.25 if role["role_key"] != "chair" else 0.15,
@@ -2563,7 +2586,7 @@ async def _call_position_plan_role_llm(role: dict[str, str], prompt: str, config
             },
         )
     if resp.status_code >= 400:
-        raise RuntimeError(f"多角色建仓建议模型请求失败 HTTP {resp.status_code}: {resp.text[:240]}")
+        raise RuntimeError(f"组合研究方案模型请求失败 HTTP {resp.status_code}: {resp.text[:240]}")
     data = resp.json()
     return data["choices"][0]["message"]["content"]
 
@@ -2718,7 +2741,7 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         "investment_profile": investment_profile,
         "recommendations": buyable + watchers,
         "notes": [
-            "建仓建议只基于已勾选并入库的 AI 分析报告生成，不自动写入交易流水或条件单。",
+            "组合研究方案只作为研究资产，基于已勾选并入库的 AI 分析报告生成，不自动写入交易流水或条件单。",
             f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，用于空仓后的分批建仓参考。",
         ],
     }
@@ -2741,7 +2764,7 @@ async def build_multi_role_position_plan(
         cash = _cash_balance(conn)
     rows = _load_position_reports(db_path, stocks, report_ids)
     if not rows:
-        raise RuntimeError("缺少可用于多角色建仓建议的完整报告")
+        raise RuntimeError("缺少可用于组合研究方案的完整报告")
     deterministic_plan = _build_position_plan_from_report_rows(db_path, rows, top_n=top_n)
     investment_profile = investment_profile_from_db(db_path)
     deterministic_plan["investment_profile"] = investment_profile
@@ -2799,9 +2822,9 @@ async def build_multi_role_position_plan(
         "role_discussion": role_discussion,
         "recommendations": recommendations,
         "notes": [
-            "建仓建议由组合经理、风控经理、交易员、反方审查和最终裁决多角色顺序讨论生成。",
-            "上下文包含已勾选并入库的完整 AI 报告内容，以及生成建仓建议当下采集的实时行情/K线快照。",
-            "建仓建议不自动写入交易流水或条件单。",
+            "组合研究方案由组合经理、风控经理、交易员、反方审查和最终裁决多角色顺序讨论生成。",
+            "上下文包含已勾选并入库的完整 AI 报告内容，以及生成组合研究方案当下采集的实时行情/K线快照。",
+            "组合研究方案只作为研究资产，不自动写入交易流水或条件单。",
         ],
     }
 
@@ -2814,7 +2837,7 @@ def write_position_plan(output_dir: Path, plan: dict[str, Any]) -> dict[str, str
     md_path = output_dir / f"{prefix}_{stamp}.md"
     json_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     lines = [
-        "# 批量建仓建议",
+        "# 组合研究方案",
         "",
         f"- 可用现金：{plan['cash']:.3f}",
         f"- 候选股票：{plan['candidate_count']}",
@@ -3097,7 +3120,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--analysis-concurrency", type=int, default=1, help="snapshot 模式下并发生成报告数")
     parser.add_argument("--snapshot-model-tier", default="deep", choices=["quick", "deep"], help="snapshot 模式使用快速或深度模型")
     parser.add_argument("--refresh-snapshots", action="store_true", help="snapshot 分析前强制重新拉取七层快照")
-    parser.add_argument("--plan-top-n", type=int, default=10, help="建仓建议最多给多少只买入候选")
+    parser.add_argument("--plan-top-n", type=int, default=10, help="组合研究方案最多给多少只买入候选")
     parser.add_argument("--data-only", action="store_true", help="只拉行情和生成候选报告，不提交 AI")
     parser.add_argument("--apply", action="store_true", help="实际提交 AI 任务；不传默认 dry-run")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data" / "batch_research")

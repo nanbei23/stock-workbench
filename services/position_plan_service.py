@@ -77,8 +77,30 @@ def _portfolio_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         ORDER BY account_id, market_value DESC, code
         """
     ).fetchall()
-    positions = [dict(row) for row in rows]
-    market_value = sum(_float(row.get("market_value")) for row in positions)
+    positions = []
+    market_value = 0.0
+    for row in rows:
+        position = dict(row)
+        shares = _float(position.get("total_shares"))
+        current_price = _float(position.get("current_price"))
+        avg_cost = _float(position.get("avg_cost"))
+        stored_value = _float(position.get("market_value"))
+        if stored_value:
+            value = stored_value
+            valuation_source = "stored"
+        elif current_price and shares:
+            value = round(current_price * shares, 3)
+            valuation_source = "price_times_shares"
+        elif avg_cost and shares:
+            value = round(avg_cost * shares, 3)
+            valuation_source = "cost_fallback"
+        else:
+            value = 0.0
+            valuation_source = "missing"
+        position["market_value"] = value
+        position["valuation_source"] = valuation_source
+        positions.append(position)
+        market_value += value
     return {
         "positions": positions,
         "position_count": len(positions),
@@ -174,7 +196,7 @@ def persist_position_plan(
             """,
             (
                 plan_id,
-                payload.get("title") or f"{stage} 建仓建议 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                payload.get("title") or f"{stage} 组合研究方案 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
                 payload.get("status") or "active",
                 stage,
                 payload.get("parent_plan_id") or None,
@@ -233,19 +255,25 @@ def _confirmed_snapshot(conn: sqlite3.Connection, plan_id: str) -> dict[str, Any
     }
 
 
+def _ensure_final_actionable_plan(plan: dict[str, Any], action_label: str) -> None:
+    if plan.get("status") == "archived":
+        raise HTTPException(400, f"已归档组合研究方案不能{action_label}")
+    if plan.get("stage") != "final":
+        raise HTTPException(400, f"只有最终建仓/最终组合研究阶段的组合研究方案可以{action_label}")
+
+
 def adopt_position_plan(plan_id: str, *, db_path: Path | None = None, confirmed_by: str = "user") -> dict[str, Any]:
     """Mark one final-stage plan as the active formal plan used by AI performance."""
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
         if not row:
-            raise HTTPException(404, "建仓建议不存在")
+            raise HTTPException(404, "组合研究方案不存在")
         plan = _row_to_plan(row)
-        if plan.get("status") == "archived":
-            raise HTTPException(400, "已归档建仓计划不能采纳")
-        if plan.get("stage") != "final":
-            raise HTTPException(400, "只有最终建仓阶段的计划可以采纳为正式 AI 绩效基准")
+        _ensure_final_actionable_plan(plan, "整份采纳为正式 AI 绩效基准")
         confirmed_at = datetime.now().isoformat(timespec="seconds")
         snapshot = _confirmed_snapshot(conn, plan_id)
+        snapshot["decision_policy"] = "formal_performance_baseline_full_adoption"
+        snapshot["note"] = "整份采纳后才进入 AI 绩效基准；仍不自动写交易、不自动下单。"
         conn.execute(
             """
             UPDATE position_plans
@@ -275,15 +303,48 @@ def adopt_position_plan(plan_id: str, *, db_path: Path | None = None, confirmed_
     return _row_to_plan(saved)
 
 
+def partially_adopt_position_plan(plan_id: str, *, db_path: Path | None = None, confirmed_by: str = "user") -> dict[str, Any]:
+    """Mark a final-stage plan as partially referenced without making it the formal baseline."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "组合研究方案不存在")
+        plan = _row_to_plan(row)
+        _ensure_final_actionable_plan(plan, "部分采纳")
+        if plan.get("adoption_status") == "adopted":
+            raise HTTPException(400, "已整份采纳的组合研究方案不能改为部分采纳")
+        if plan.get("adoption_status") == "abandoned" or plan.get("status") == "abandoned":
+            raise HTTPException(400, "已放弃的组合研究方案不能部分采纳")
+        confirmed_at = datetime.now().isoformat(timespec="seconds")
+        snapshot = _confirmed_snapshot(conn, plan_id)
+        snapshot["decision_policy"] = "reference_only_partial_adoption"
+        snapshot["note"] = "部分采纳只作为研究参考和后续复盘，不覆盖正式绩效基准，不自动写交易、不自动下单。"
+        conn.execute(
+            """
+            UPDATE position_plans
+            SET adoption_status = 'partially_adopted',
+                confirmed_at = ?,
+                confirmed_by = ?,
+                confirmed_snapshot_json = ?,
+                updated_at = datetime('now')
+            WHERE plan_id = ?
+            """,
+            (confirmed_at, confirmed_by, _dumps(snapshot), plan_id),
+        )
+        conn.commit()
+        saved = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+    return _row_to_plan(saved)
+
+
 def abandon_position_plan(plan_id: str, *, db_path: Path | None = None) -> dict[str, Any]:
     """Mark a non-adopted plan as abandoned so it is no longer actionable."""
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
         if not row:
-            raise HTTPException(404, "建仓建议不存在")
+            raise HTTPException(404, "组合研究方案不存在")
         plan = _row_to_plan(row)
         if plan.get("adoption_status") == "adopted":
-            raise HTTPException(400, "已采纳建仓计划不能放弃")
+            raise HTTPException(400, "已采纳的组合研究方案不能放弃")
         if plan.get("adoption_status") == "abandoned" or plan.get("status") == "abandoned":
             return plan
         conn.execute(
@@ -329,7 +390,7 @@ def get_position_plan(plan_id: str, *, db_path: Path | None = None) -> dict[str,
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
         if not row:
-            raise HTTPException(404, "建仓建议不存在")
+            raise HTTPException(404, "组合研究方案不存在")
         items = conn.execute(
             "SELECT * FROM position_plan_items WHERE plan_id = ? ORDER BY id ASC",
             (plan_id,),
@@ -347,7 +408,7 @@ def archive_position_plan(plan_id: str, *, db_path: Path | None = None) -> dict[
         )
         conn.commit()
     if cursor.rowcount == 0:
-        raise HTTPException(404, "建仓建议不存在")
+        raise HTTPException(404, "组合研究方案不存在")
     return {"status": "ok", "plan_id": plan_id}
 
 

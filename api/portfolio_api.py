@@ -91,6 +91,11 @@ class CashBalanceRequest(BaseModel):
     notes: str = ""
 
 
+class PnlSnapshotRequest(BaseModel):
+    date: Optional[str] = None
+    account_id: Optional[str] = None
+
+
 # ── Watchlist ─────────────────────────────────────────────
 @router.get("/watchlist")
 async def get_watchlist():
@@ -317,6 +322,18 @@ async def get_pnl_calendar(year: int = Query(None), month: int = Query(None), co
         return await portfolio_service.get_pnl_calendar(year, month, code)
     except Exception as e:
         logger.error("get_pnl_calendar error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/pnl/calendar/snapshot")
+async def create_pnl_calendar_snapshot(req: PnlSnapshotRequest):
+    """手动补写某日持仓盈亏日历快照。"""
+    try:
+        return await portfolio_service.ensure_daily_pnl_snapshot(req.date, req.account_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("create_pnl_calendar_snapshot error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

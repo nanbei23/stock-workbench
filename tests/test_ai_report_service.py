@@ -111,6 +111,31 @@ class AiReportServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mem_result["count"], 1)
         self.assertEqual(mem_result["anomalies"][0]["message"], "memory")
 
+    async def test_get_anomalies_deduplicates_same_stock_type_for_today(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                """
+                INSERT INTO anomaly_logs (code, name, anomaly_type, description, severity, created_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now', ?))
+                """,
+                [
+                    ("002463", "沪电股份", "跌幅异动", "旧重复", "warning", "-2 minutes"),
+                    ("002463", "沪电股份", "跌幅异动", "新重复", "warning", "-1 minutes"),
+                ],
+            )
+            db.commit()
+
+        result = await ai_report_service.get_anomalies(limit=10, code="002463", memory_log=[])
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["anomalies"][0]["message"], "新重复")
+        with sqlite3.connect(self.db_path) as db:
+            count = db.execute(
+                "SELECT COUNT(*) FROM anomaly_logs WHERE code = ? AND anomaly_type = ?",
+                ("002463", "跌幅异动"),
+            ).fetchone()[0]
+        self.assertEqual(count, 1)
+
     async def test_clear_anomalies_for_date_deletes_only_target_day(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute(
@@ -135,6 +160,32 @@ class AiReportServiceTests(unittest.IsolatedAsyncioTestCase):
         with sqlite3.connect(self.db_path) as db:
             rows = db.execute("SELECT code FROM anomaly_logs ORDER BY code").fetchall()
         self.assertEqual([row[0] for row in rows], ["000002", "600519"])
+
+    async def test_clear_stale_anomalies_keeps_today_and_deletes_older_days(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO anomaly_logs (code, name, anomaly_type, description, severity, created_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now', '-1 day'))
+                """,
+                ("000001", "平安银行", "price_drop", "昨日异动", "warning"),
+            )
+            db.execute(
+                """
+                INSERT INTO anomaly_logs (code, name, anomaly_type, description, severity, created_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("000002", "万科A", "price_surge", "今日异动", "warning"),
+            )
+            db.commit()
+
+        deleted = await ai_report_service.clear_stale_anomalies()
+
+        self.assertEqual(deleted, 1)
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute("SELECT code FROM anomaly_logs ORDER BY code").fetchall()
+        self.assertIn(("000002",), rows)
+        self.assertNotIn(("000001",), rows)
 
     async def test_quality_summary_groups_by_model_and_signal(self):
         result = await ai_report_service.get_quality_summary(limit=10)

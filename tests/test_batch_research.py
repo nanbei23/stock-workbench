@@ -137,6 +137,7 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("用户投资风格：进攻型", prompt)
         self.assertIn("单票上限 40%", prompt)
+        self.assertIn("strategy_checklist", prompt)
         self.assertIn("最终裁决必须输出 JSON 对象", prompt)
 
     def test_snapshot_prompts_include_holding_context(self):
@@ -772,7 +773,43 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan["recommendations"][0]["current_position"]["unrealized_pnl_pct"], 10.0)
         self.assertLessEqual(plan["recommendations"][0]["suggested_amount"], 253375.68 * 0.15)
         self.assertGreater(plan["recommendations"][0]["suggested_amount"], 0)
+        self.assertIn("首批比例", plan["notes"][1] + plan["notes"][2])
         self.assertEqual(plan["recommendations"][1]["action"], "watch")
+
+    def test_build_position_plan_keeps_zero_market_value_holding_as_valid_position(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('cash_balance_default', '100000')")
+            conn.execute(
+                """
+                INSERT INTO portfolio
+                    (code, name, total_shares, available_shares, avg_cost, current_price, market_value, unrealized_pnl, unrealized_pnl_pct)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("002156", "通富微电", 3100, 3100, 71.207, 0, 0, 0, 0),
+            )
+            conn.execute(
+                """
+                INSERT INTO analysis_reports
+                    (code, task_id, signal, confidence, risk_score, final_decision, trader_plan, created_at)
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("002156", "report-held", "HOLD", 0.62, 45.0, "持仓观察", "不加仓",),
+            )
+            conn.commit()
+
+        plan = batch_research.build_position_plan(
+            self.db_path,
+            [batch_research.StockCandidate("002156", "通富微电", "默认", 1)],
+            top_n=5,
+        )
+
+        position = plan["portfolio_context"]["positions"][0]
+        self.assertEqual(plan["portfolio_context"]["position_count"], 1)
+        self.assertEqual(position["market_value"], round(3100 * 71.207, 3))
+        self.assertEqual(position["valuation_source"], "cost_fallback")
+        self.assertEqual(plan["recommendations"][0]["current_position"]["shares"], 3100)
+        self.assertEqual(plan["recommendations"][0]["current_position"]["market_value"], round(3100 * 71.207, 3))
 
 
 if __name__ == "__main__":

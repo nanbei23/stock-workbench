@@ -4,14 +4,16 @@
   const stageLabels = {
     screening: '初筛',
     shortlist: '精选',
-    final: '最终建仓',
+    final: '最终组合研究',
   };
   const adoptionLabels = {
     draft: '待确认',
-    adopted: '已采纳',
+    adopted: '整份采纳',
+    partially_adopted: '部分采纳',
     superseded: '已被替代',
     archived: '已归档',
   };
+  const RESEARCH_ASSET_NOTE = '研究参考，不自动写交易';
   const strategyLabels = {
     auto: '自动',
     full_text: '完整原文',
@@ -20,6 +22,18 @@
     single: '单模型',
     dual: '双模型',
     per_role: '按角色配置',
+  };
+  const actionLabels = {
+    buy: '买入',
+    add: '加仓',
+    overweight: '增持',
+    hold: '持有',
+    watch: '观察',
+    avoid: '回避',
+    reduce: '减仓',
+    underweight: '减持',
+    sell: '卖出',
+    take_profit: '止盈',
   };
 
   document.addEventListener('DOMContentLoaded', loadPositionPlanDetail);
@@ -96,7 +110,7 @@
     const market = plan.decision_market_snapshot_json || {};
     const values = [
       [stageLabels[plan.stage] || plan.stage || '--', '阶段'],
-      [adoptionLabels[plan.adoption_status] || plan.adoption_status || '--', '采纳状态'],
+      [adoptionLabels[plan.adoption_status] || plan.adoption_status || '--', '确认状态'],
       [`${Number(plan.candidate_count || 0)} / ${Number(plan.selected_count || 0)}`, '候选 / 入选'],
       [`${money(cash.total_cash || 0)} 元`, '现金快照'],
       [`${money(portfolio.market_value || 0)} 元`, '持仓市值'],
@@ -112,7 +126,7 @@
       const sourceId = item.source_report_id || item.report_id || '';
       return `<tr>
         <td><strong>${escapeHtml(item.name || item.code)}</strong><span>${escapeHtml(item.code)}</span></td>
-        <td>${escapeHtml(item.action || '--')}</td>
+        <td>${escapeHtml(actionLabels[String(item.action || '').toLowerCase()] || item.action || '--')}</td>
         <td>${money(item.suggested_amount)}</td>
         <td>${pct(item.position_pct)}</td>
         <td>${money(item.suggested_shares)}</td>
@@ -178,14 +192,20 @@
     if (!id) return;
     try {
       const plan = await requestJson(`/api/position-plans/${encodeURIComponent(id)}`);
-      document.title = `${plan.title || plan.plan_id} - 建仓计划详情`;
+      document.title = `${plan.title || plan.plan_id} - 组合研究方案详情`;
       setText('planDetailTitle', plan.title || plan.plan_id);
-      setText('planDetailSubtitle', `${plan.plan_id} · ${stageLabels[plan.stage] || plan.stage || '--'} · ${time(plan.created_at)} · 任务 ${plan.batch_job_id || '--'}`);
+      setText('planDetailSubtitle', `${plan.plan_id} · ${RESEARCH_ASSET_NOTE} · ${stageLabels[plan.stage] || plan.stage || '--'} · ${time(plan.created_at)} · 任务 ${plan.batch_job_id || '--'}`);
       document.getElementById('planMarkdownLink')?.setAttribute('href', `/api/position-plans/${encodeURIComponent(id)}/markdown`);
+      const lockedStatuses = ['adopted', 'partially_adopted', 'abandoned'];
       const adoptBtn = document.getElementById('planAdoptBtn');
       if (adoptBtn) {
-        adoptBtn.style.display = plan.stage === 'final' && plan.adoption_status !== 'adopted' ? '' : 'none';
+        adoptBtn.style.display = plan.stage === 'final' && !lockedStatuses.includes(plan.adoption_status) ? '' : 'none';
         adoptBtn.onclick = () => adoptPlan(id);
+      }
+      const partialAdoptBtn = document.getElementById('planPartialAdoptBtn');
+      if (partialAdoptBtn) {
+        partialAdoptBtn.style.display = plan.stage === 'final' && !lockedStatuses.includes(plan.adoption_status) ? '' : 'none';
+        partialAdoptBtn.onclick = () => partiallyAdoptPlan(id);
       }
       const archiveBtn = document.getElementById('planArchiveBtn');
       if (archiveBtn) archiveBtn.onclick = () => archivePlan(id);
@@ -196,20 +216,26 @@
       renderSources(plan);
       renderAudit(plan);
     } catch (err) {
-      setText('planDetailTitle', '建仓计划加载失败');
+      setText('planDetailTitle', '组合研究方案加载失败');
       setHtml('planDetailSubtitle', escapeHtml(err.message));
       setHtml('planItemRows', `<tr><td colspan="9" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`);
     }
   }
 
   async function adoptPlan(id) {
-    if (!confirm('确认采纳这份最终建仓计划作为 AI 绩效基准？这不会自动写交易或下单。')) return;
+    if (!confirm('确认整份采纳这份组合研究方案作为 AI 绩效基准？这不会自动写交易或下单。')) return;
     await requestJson(`/api/position-plans/${encodeURIComponent(id)}/adopt`, { method: 'POST' });
     await loadPositionPlanDetail();
   }
 
+  async function partiallyAdoptPlan(id) {
+    if (!confirm('确认只部分采纳这份组合研究方案？这只作为研究参考和后续复盘，不覆盖正式绩效基准，也不会自动写交易或下单。')) return;
+    await requestJson(`/api/position-plans/${encodeURIComponent(id)}/partial-adopt`, { method: 'POST' });
+    await loadPositionPlanDetail();
+  }
+
   async function archivePlan(id) {
-    if (!confirm('确认归档这份建仓计划？')) return;
+    if (!confirm('确认归档这份组合研究方案？')) return;
     await requestJson(`/api/position-plans/${encodeURIComponent(id)}/archive`, { method: 'POST' });
     await loadPositionPlanDetail();
   }

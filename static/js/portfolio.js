@@ -214,6 +214,13 @@ async function loadOverview() {
     pnlEl.textContent = formatMoney(data.unrealized_pnl) + ' (' + formatPct(data.unrealized_pnl_pct) + ')';
     pnlEl.className = 'pnl-value ' + priceClass(data.unrealized_pnl);
 
+    const historicalPnlEl = document.getElementById('historicalPnl');
+    if (historicalPnlEl) {
+      const historicalPnl = data.historical_pnl || data.realized_pnl || 0;
+      historicalPnlEl.textContent = formatMoney(historicalPnl);
+      historicalPnlEl.className = 'pnl-value ' + priceClass(historicalPnl);
+    }
+
     // 当日涨跌幅
     const dailyPnlEl = document.getElementById('dailyPnl');
     if (dailyPnlEl) {
@@ -307,6 +314,7 @@ async function loadAccountDashboard() {
       <div><span>持仓市值</span><strong>${formatMoney(combined.market_value || 0)}</strong></div>
       <div><span>当日涨跌幅</span><strong class="${priceClass(combined.daily_pnl || 0)}">${formatPct(combined.daily_pnl_pct || 0)}</strong></div>
       <div><span>浮动盈亏</span><strong class="${priceClass(combined.unrealized_pnl || 0)}">${formatMoney(combined.unrealized_pnl || 0)}</strong></div>
+      <div><span>历史盈亏</span><strong class="${priceClass(combined.historical_pnl || combined.realized_pnl || 0)}">${formatMoney(combined.historical_pnl || combined.realized_pnl || 0)}</strong></div>
     </div>`;
     const rows = accounts.length ? accounts.map(a => {
       const isActive = a.id === active;
@@ -316,10 +324,10 @@ async function loadAccountDashboard() {
         <span>${formatMoney(a.total_assets || 0)}</span>
         <span>${a.position_count || 0}只</span>
         <span>${weight}%</span>
-        <strong class="${priceClass(a.unrealized_pnl || 0)}">${formatMoney(a.unrealized_pnl || 0)}</strong>
+        <strong class="${priceClass(a.unrealized_pnl || 0)}">${formatMoney(a.unrealized_pnl || 0)}<small> / 历史 ${formatMoney(a.historical_pnl || a.realized_pnl || 0)}</small></strong>
       </button>`;
     }).join('') : '<div class="empty-state"><p>暂无账户数据</p></div>';
-    el.innerHTML = `${combinedRow}<div class="account-dashboard-head"><span>账户</span><span>总资产</span><span>持仓</span><span>市值占比</span><span>浮动盈亏</span></div>${rows}`;
+    el.innerHTML = `${combinedRow}<div class="account-dashboard-head"><span>账户</span><span>总资产</span><span>持仓</span><span>市值占比</span><span>浮动/历史盈亏</span></div>${rows}`;
   } catch (e) {
     console.error('loadAccountDashboard error:', e);
     el.innerHTML = '<div class="empty-state"><p>账户看板加载失败</p></div>';
@@ -341,10 +349,10 @@ async function loadHoldingReviewSummary() {
   const el = document.getElementById('holdingReviewSummary');
   if (!el) return;
   try {
-    const data = await portfolioGet(withAccount('/api/holding-reviews?limit=1'));
+    const data = await portfolioGet(withAccount('/api/daily-decision-reports?limit=1'));
     const review = (data.reviews || [])[0];
     if (!review) {
-      el.innerHTML = '<div class="empty-state"><p>暂无明日交易作战计划。点击生成后可在报告库回看详情。</p></div>';
+      el.innerHTML = '<div class="empty-state"><p>暂无每日 AI 决策报告。点击生成后可在报告库回看详情。</p></div>';
       return;
     }
     const asset = review.asset_snapshot || {};
@@ -358,11 +366,11 @@ async function loadHoldingReviewSummary() {
     </div>
     <div class="holding-review-text">${esc(review.summary || '')}</div>
     <div class="library-action-row" style="margin-top:8px;">
-      <a class="btn btn-sm btn-primary" href="/holding-reviews/${encodeURIComponent(review.review_id)}">打开详情</a>
-      <a class="btn btn-sm" href="/api/holding-reviews/${encodeURIComponent(review.review_id)}/markdown">Markdown</a>
+      <a class="btn btn-sm btn-primary" href="/daily-decision-reports/${encodeURIComponent(review.review_id)}">打开详情</a>
+      <a class="btn btn-sm" href="/api/daily-decision-reports/${encodeURIComponent(review.review_id)}/markdown">Markdown</a>
     </div>`;
   } catch (e) {
-    el.innerHTML = `<div class="empty-state"><p>作战计划加载失败：${esc(e.message)}</p></div>`;
+    el.innerHTML = `<div class="empty-state"><p>每日 AI 决策报告加载失败：${esc(e.message)}</p></div>`;
   }
 }
 
@@ -510,9 +518,9 @@ async function runHoldingReview() {
     return;
   }
   const el = document.getElementById('holdingReviewSummary');
-  if (el) el.innerHTML = '<div class="empty-state"><p>正在生成明日交易作战计划...</p></div>';
+  if (el) el.innerHTML = '<div class="empty-state"><p>正在生成每日 AI 决策报告...</p></div>';
   try {
-    const review = await portfolioPost('/api/holding-reviews/run', {
+    const review = await portfolioPost('/api/daily-decision-reports/run', {
       account_id: selectedAccountId(),
       include_watchlist_candidates: candidateCodes.length > 0,
       include_observation_pool: includePool,
@@ -523,13 +531,13 @@ async function runHoldingReview() {
     });
     await loadHoldingReviewSummary();
     if (review.status === 'waiting_reports') {
-      showToast(`已进入补报告队列：${(review.rerun_report_codes || []).length}只，完成后自动生成作战计划`, 'success');
+      showToast(`已进入补报告队列：${(review.rerun_report_codes || []).length}只，完成后自动生成每日 AI 决策报告`, 'success');
     } else {
-      showToast(`作战计划已生成：持仓${review.holding_count || 0}只，触发${review.trigger_count || 0}项`, 'success');
+      showToast(`每日 AI 决策报告已生成：持仓${review.holding_count || 0}只，触发${review.trigger_count || 0}项`, 'success');
     }
   } catch (e) {
     if (el) el.innerHTML = `<div class="empty-state"><p>生成失败：${esc(e.message)}</p></div>`;
-    showToast('作战计划生成失败: ' + e.message, 'error');
+    showToast('每日 AI 决策报告生成失败: ' + e.message, 'error');
   }
 }
 

@@ -13,7 +13,7 @@ class PositionPlanDetailPageTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertIn('data-plan-id="pp-test"', resp.text)
-        self.assertIn("建仓计划详情", resp.text)
+        self.assertIn("组合研究方案详情", resp.text)
         self.assertIn("/static/js/position-plan-detail.js", resp.text)
 
 

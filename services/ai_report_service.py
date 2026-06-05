@@ -2,7 +2,8 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
@@ -10,6 +11,7 @@ from models.database import get_db
 from repositories import ai_report_repository as repo
 
 logger = logging.getLogger(__name__)
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _loads(value):
@@ -24,6 +26,23 @@ def _loads(value):
 def _name_from_raw(raw_state):
     raw = _loads(raw_state)
     return raw.get("name", "") if isinstance(raw, dict) else ""
+
+
+def _to_china_iso(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace(" ", "T"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(CN_TZ).isoformat(timespec="seconds")
+
+
+def _china_today() -> str:
+    return datetime.now(CN_TZ).strftime("%Y-%m-%d")
 
 
 async def list_reports(code=None, signal=None, limit=20, depth=None, model_mode=None):
@@ -91,7 +110,7 @@ def _format_anomaly(row):
         "anomaly_type": row["anomaly_type"],
         "message": row.get("description") or "",
         "level": row.get("severity") or "info",
-        "time": row["created_at"],
+        "time": _to_china_iso(row["created_at"]),
         "change_pct": 0,
         "price": 0,
     }
@@ -106,10 +125,11 @@ def _memory_anomalies(memory_log, limit: int, code: str | None):
 
 
 async def get_anomalies(limit: int, code: str | None, memory_log):
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _china_today()
     try:
         db = await get_db()
         try:
+            await repo.dedupe_anomalies_for_date(db, today)
             rows = await repo.list_anomalies(db, today=today, limit=limit, code=code)
         finally:
             await db.close()
@@ -122,10 +142,21 @@ async def get_anomalies(limit: int, code: str | None, memory_log):
 
 
 async def clear_anomalies_for_date(day: str | None = None) -> int:
-    target_day = day or datetime.now().strftime("%Y-%m-%d")
+    target_day = day or _china_today()
     db = await get_db()
     try:
         return await repo.delete_anomalies_for_date(db, target_day)
+    finally:
+        await db.close()
+
+
+async def clear_stale_anomalies(today: str | None = None) -> int:
+    target_day = today or _china_today()
+    db = await get_db()
+    try:
+        stale_count = await repo.delete_anomalies_before_date(db, target_day)
+        duplicate_count = await repo.dedupe_anomalies_for_date(db, target_day)
+        return stale_count + duplicate_count
     finally:
         await db.close()
 

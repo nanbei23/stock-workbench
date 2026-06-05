@@ -72,7 +72,7 @@
             <span>份完整报告</span>
         </div>
         <div class="library-actions">
-            <button class="btn btn-primary" onclick="createPlanFromReportLibrary()">生成多角色建仓建议</button>
+            <button class="btn btn-primary" onclick="createPlanFromReportLibrary()">生成组合研究方案</button>
             <div class="library-action-row">
                 <button class="btn" onclick="exportReportLibrary('markdown')">导出 Markdown</button>
                 <button class="btn" onclick="exportReportLibrary('json')">导出 JSON</button>
@@ -84,13 +84,13 @@
         <div class="library-toolbar">
             <div>
                 <h3 id="reportTabTitle">报告列表</h3>
-                <p id="reportTabHint">批量报告完成后在这里筛选、比较、勾选，并生成组合级多角色建仓建议。</p>
+                <p id="reportTabHint">批量报告完成后在这里筛选、比较、勾选，并生成组合级多角色组合研究方案。</p>
             </div>
             <div class="library-tabs" id="reportLibraryTabs">
                 <button class="active" data-tab="reports" onclick="switchReportTab('reports')">报告</button>
                 <button data-tab="snapshots" onclick="switchReportTab('snapshots')">数据快照</button>
-                <button data-tab="plans" onclick="switchReportTab('plans')">建仓计划</button>
-                <button data-tab="holding-reviews" onclick="switchReportTab('holding-reviews')">作战计划</button>
+                <button data-tab="plans" onclick="switchReportTab('plans')">组合研究</button>
+                <button data-tab="holding-reviews" onclick="switchReportTab('holding-reviews')">每日决策</button>
                 <button data-tab="jobs" onclick="switchReportTab('jobs')">批量任务</button>
             </div>
         </div>
@@ -226,7 +226,7 @@
 
 <div class="modal-overlay" id="positionPlanModal">
     <div class="modal-box" style="max-width:560px;">
-        <div class="modal-title">生成建仓建议</div>
+        <div class="modal-title">生成组合研究方案</div>
         <div class="modal-body">
             <label class="library-filter">
                 <span>标题</span>
@@ -237,7 +237,7 @@
                 <select id="planStageInput" class="form-input">
                     <option value="screening">初筛</option>
                     <option value="shortlist">精选</option>
-                    <option value="final" selected>最终建仓</option>
+                    <option value="final" selected>最终组合研究</option>
                 </select>
             </label>
             <label class="library-filter">
