@@ -6,18 +6,19 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from models import database
-from scheduler import ai_engine, anomaly_checker, conditional_order_checker, report_runner
+from repositories import settings_repository
+from scheduler import ai_engine, anomaly_checker, jobs, report_runner
 
 
-class SchedulerDbPathTests(unittest.TestCase):
+class SchedulerDbPathTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmp.name) / "workbench.db"
         self.original_paths = {
             ai_engine: ai_engine.DB_PATH,
             anomaly_checker: anomaly_checker.DB_PATH,
-            conditional_order_checker: conditional_order_checker.DB_PATH,
             report_runner: report_runner.DB_PATH,
+            settings_repository: settings_repository.DB_PATH,
         }
         self.original_env = {
             key: os.environ.get(key)
@@ -25,8 +26,8 @@ class SchedulerDbPathTests(unittest.TestCase):
         }
         ai_engine.DB_PATH = self.db_path
         anomaly_checker.DB_PATH = self.db_path
-        conditional_order_checker.DB_PATH = self.db_path
         report_runner.DB_PATH = self.db_path
+        settings_repository.DB_PATH = self.db_path
         with sqlite3.connect(self.db_path) as db:
             db.executescript(database.SCHEMA)
 
@@ -118,59 +119,66 @@ class SchedulerDbPathTests(unittest.TestCase):
         self.assertEqual(os.environ["DEEPSEEK_API_BASE"], "https://api.example.com/v1")
         self.assertEqual(os.environ["OPENAI_API_BASE"], "https://api.example.com/v1")
 
-
-class ConditionalOrderCheckerTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.tmp.name) / "workbench.db"
-        self.original_path = conditional_order_checker.DB_PATH
-        conditional_order_checker.DB_PATH = self.db_path
+    def test_ai_engine_maps_output_language_setting(self):
         with sqlite3.connect(self.db_path) as db:
-            db.executescript(database.SCHEMA)
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("output_language", "en"))
+            db.commit()
 
-    def tearDown(self):
-        conditional_order_checker.DB_PATH = self.original_path
-        self.tmp.cleanup()
+        config = ai_engine.apply_llm_config_to_ta_config({})
 
-    async def test_expires_and_triggers_orders_on_configured_database_path(self):
+        self.assertEqual(config["output_language"], "English")
+
+    async def test_anomaly_job_respects_realtime_schedule_switch(self):
         with sqlite3.connect(self.db_path) as db:
-            db.execute(
-                """
-                INSERT INTO conditional_orders
-                    (code, name, condition_type, target_price, action, status, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("000001", "平安银行", "price_gte", 10.0, "alert", "pending", "2000-01-01 00:00:00"),
-            )
-            db.execute(
-                """
-                INSERT INTO conditional_orders
-                    (code, name, condition_type, target_price, action, status, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("600519", "贵州茅台", "price_gte", 100.0, "alert", "pending", None),
+            db.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("anomaly_monitor_enabled", "true"),
+                    ("schedule_anomaly_realtime", "false"),
+                ],
             )
             db.commit()
 
-        conditional_order_checker._expire_old_orders()
+        with patch("scheduler.jobs._is_trading_hours", return_value=True), patch(
+            "scheduler.jobs.check_anomalies", new=AsyncMock(return_value=[])
+        ) as check_anomalies:
+            await jobs.anomaly_job()
+
+        check_anomalies.assert_not_awaited()
+
+    async def test_anomaly_checker_uses_configured_thresholds(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO watchlist (code, name) VALUES (?, ?)", ("000001", "平安银行"))
+            db.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("change_threshold", "3"),
+                    ("volume_threshold", "2"),
+                    ("northbound_threshold", "5"),
+                ],
+            )
+            db.commit()
+
         with patch(
             "data.quote.get_batch_quotes",
-            new=AsyncMock(return_value={"600519": {"price": 101.0, "change_pct": 1.0}}),
+            new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 4.0, "volume": 1000}}),
+        ), patch("data.signal.get_northbound", new=AsyncMock(return_value={"sh_net": 60000, "sz_net": 0})), patch(
+            "scheduler.anomaly_checker._get_recent_avg_volume", return_value=400
         ):
-            triggered = await conditional_order_checker._check_conditional_orders()
+            anomalies = await anomaly_checker._check_anomalies()
 
-        self.assertEqual([order["code"] for order in triggered], ["600519"])
-        with sqlite3.connect(self.db_path) as db:
-            rows = {
-                row[0]: row[1:]
-                for row in db.execute(
-                    "SELECT code, status, triggered_at FROM conditional_orders ORDER BY code"
-                ).fetchall()
-            }
+        types = {item["type"] for item in anomalies}
+        self.assertIn("涨幅异动", types)
+        self.assertIn("volume_spike", types)
+        self.assertIn("northbound_active", types)
 
-        self.assertEqual(rows["000001"][0], "expired")
-        self.assertEqual(rows["600519"][0], "triggered")
-        self.assertIsNotNone(rows["600519"][1])
+
+class ConditionalOrderDownlineRemovalTests(unittest.TestCase):
+    def test_scheduler_no_longer_registers_conditional_order_job(self):
+        source = Path(jobs.__file__).read_text(encoding="utf-8")
+
+        self.assertNotIn("conditional_order_checker", source)
+        self.assertNotIn("条件单检查", source)
 
 
 if __name__ == "__main__":

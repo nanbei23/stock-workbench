@@ -166,32 +166,19 @@ class AiAnalysisApiTests(unittest.TestCase):
         self.assertEqual(resp.json()["task_id"], "abc123")
         start_analysis.assert_awaited_once()
 
-    def test_generate_cond_order_route_uses_portfolio_service(self):
-        with patch(
-            "services.portfolio_service.create_conditional_order",
-            new=AsyncMock(return_value={"status": "ok", "id": 123}),
-        ) as create_order:
-            resp = self.client.post(
-                "/api/ai/generate-cond-order",
-                json={
-                    "code": "000001",
-                    "name": "平安银行",
-                    "action": "buy",
-                    "price": 10.5,
-                    "shares": 100,
-                    "condition_type": "price_lte",
-                },
-            )
+    def test_generate_cond_order_route_is_removed(self):
+        resp = self.client.post(
+            "/api/ai/generate-cond-order",
+            json={
+                "code": "000001",
+                "name": "平安银行",
+                "action": "buy",
+                "price": 10.5,
+                "shares": 100,
+            },
+        )
 
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertTrue(body["success"])
-        self.assertEqual(body["id"], 123)
-        create_order.assert_awaited_once()
-        req = create_order.await_args.args[0]
-        self.assertEqual(req.code, "000001")
-        self.assertEqual(req.target_price, 10.5)
-        self.assertEqual(req.condition_type, "price_lte")
+        self.assertEqual(resp.status_code, 404)
 
     def test_gbrain_save_route_accepts_json_body(self):
         with patch(

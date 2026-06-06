@@ -45,11 +45,19 @@ def _china_today() -> str:
     return datetime.now(CN_TZ).strftime("%Y-%m-%d")
 
 
-async def list_reports(code=None, signal=None, limit=20, depth=None, model_mode=None):
+async def list_reports(code=None, signal=None, limit=20, depth=None, model_mode=None, login_user_id: str = "admin"):
     db = await get_db()
     try:
-        rows = await repo.list_reports(db, code=code, signal=signal, limit=max(1, min(limit, 500)), depth=depth, model_mode=model_mode)
-        names = await repo.watchlist_name_map(db)
+        rows = await repo.list_reports(
+            db,
+            code=code,
+            signal=signal,
+            limit=max(1, min(limit, 500)),
+            depth=depth,
+            model_mode=model_mode,
+            login_user_id=login_user_id,
+        )
+        names = await repo.watchlist_name_map(db, login_user_id)
     finally:
         await db.close()
 
@@ -69,10 +77,10 @@ async def list_reports(code=None, signal=None, limit=20, depth=None, model_mode=
     return {"count": len(reports), "reports": reports}
 
 
-async def get_report(report_id: int):
+async def get_report(report_id: int, login_user_id: str | None = None):
     db = await get_db()
     try:
-        report = await repo.get_report(db, report_id)
+        report = await repo.get_report(db, report_id, login_user_id)
         if not report:
             raise HTTPException(status_code=404, detail="报告不存在")
 

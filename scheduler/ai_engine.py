@@ -79,9 +79,10 @@ def apply_llm_config_to_ta_config(config: dict) -> dict:
     cfg = get_llm_config()
     endpoint = (cfg.get("custom_endpoint") or "").strip()
     provider = _tradingagents_provider(cfg.get("llm_provider", "deepseek"), endpoint)
+    language = (cfg.get("output_language") or "zh").strip().lower()
     config["llm_provider"] = provider
     config["backend_url"] = endpoint or None
-    config["output_language"] = "Chinese"
+    config["output_language"] = "English" if language == "en" else "Chinese"
     config["max_debate_rounds"] = int(cfg.get("debate_rounds", "1"))
     config["max_risk_discuss_rounds"] = int(cfg.get("risk_rounds", "1"))
 

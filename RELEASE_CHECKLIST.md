@@ -22,7 +22,7 @@ npm ci
 ```bash
 python -m compileall app.py api models repositories scheduler services schemas scripts tests
 python -m unittest discover tests
-python -m py_compile scripts/init_from_files.py scripts/batch_research.py scripts/clear_report_data.py
+python -m py_compile scripts/init_from_files.py scripts/batch_research.py scripts/clear_report_data.py scripts/migrate_to_3_0.py
 node --check static/js/hermes.js
 node --check static/js/shadow.js
 node --check static/js/ai-task-client.js static/js/ai.js static/js/reports.js
@@ -40,13 +40,14 @@ Open these pages on `http://127.0.0.1:8000`:
 
 - [ ] `/` loads the watchlist workspace.
 - [ ] `/portfolio` loads accounts and positions.
-- [ ] `/ai` loads the AI task center and the non-blocking batch research panel.
-- [ ] `/reports` loads the report library, filters, report preview, export actions, and position-plan action.
+- [ ] `/ai` loads the smart-watch workspace, single-stock analysis controls, recent report signals, and account action context.
+- [ ] `/reports` loads the AI research center, stock picker, report filters, report preview, export actions, worker status, retry/resume controls, and position-plan action.
 - [ ] `/hotspots` loads hotspot themes and research progress.
 - [ ] `/hermes` loads the Hermes console, history, draft panel, and audit panel.
 - [ ] `/shadow` loads AI performance, signal validation, shadow portfolio, execution deviation, and model calibration.
 - [ ] `/ops` loads operations center diagnostics.
 - [ ] `/settings` loads model-provider, migration, and backup settings.
+- [ ] `/self-evolution` loads memory snapshots, rules, attributions, and semantic search.
 
 Check these APIs:
 
@@ -67,6 +68,8 @@ Check release scripts:
 - [ ] `.venv312/bin/python scripts/init_from_files.py --help`
 - [ ] `.venv312/bin/python scripts/batch_research.py --help`
 - [ ] `.venv312/bin/python scripts/clear_report_data.py --help`
+- [ ] `.venv312/bin/python scripts/migrate_to_3_0.py --help`
+- [ ] `.venv312/bin/python scripts/migrate_to_3_0.py --db-path <copy-of-prod.db>` creates a backup and verifies 3.0 schema without data loss.
 - [ ] `.venv312/bin/python scripts/init_from_files.py --watchlist <file> --trades <file> --cash <cash> --reset` dry-run does not write the database.
 - [ ] `.venv312/bin/python scripts/clear_report_data.py` dry-run reports counts without deleting rows.
 - [ ] `.venv312/bin/python scripts/batch_research.py --group 默认 --top-n 5` dry-run does not submit AI tasks.
@@ -88,6 +91,6 @@ Check release scripts:
 
 ```bash
 git add .
-git commit -m "Release v2.8.1"
-git tag v2.8.1
+git commit -m "Release v3.0.0"
+git tag v3.0.0
 ```

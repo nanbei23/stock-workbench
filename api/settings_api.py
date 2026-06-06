@@ -2,13 +2,15 @@
 路由顺序: 具体路径 MUST 在 {key} 参数路由之前，否则会被吞掉。
 """
 import os
+import tempfile
 import httpx
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, Any
 
-from services import investment_profile_service, settings_service
+from services import investment_profile_service, settings_service, model_provider_resolver
 
 router = APIRouter(tags=["设置"])
 
@@ -30,12 +32,18 @@ class VerificationTestRequest(BaseModel):
     endpoint: str = ""
     api_key: str = ""
     model: str = ""
+    provider_id: str = ""
+
+
+class LLMTestRequest(BaseModel):
+    provider_id: str = ""
+    model: str = ""
+    model_tier: str = "quick"
 
 
 class ImportData(BaseModel):
     watchlist: Optional[list] = None
     portfolio: Optional[list] = None
-    orders: Optional[list] = None
     settings: Optional[dict] = None
 
 
@@ -88,9 +96,19 @@ async def complete_onboarding():
 # ── 测试API连接 ──
 
 @router.post("/settings/test-llm")
-async def test_api_connection():
+async def test_api_connection(req: LLMTestRequest | None = None):
     """测试DeepSeek API连接"""
-    cfg = settings_service.llm_test_config()
+    if req and req.provider_id:
+        provider = model_provider_resolver.provider_by_id(req.provider_id)
+        if not provider:
+            return {"status": "error", "message": "模型配置不存在"}
+        cfg = {
+            "api_key": provider.get("api_key") or "",
+            "endpoint": provider.get("base_url") or "",
+            "model": provider.get("quick_model") or provider.get("default_model") or provider.get("deep_model") or "",
+        }
+    else:
+        cfg = settings_service.llm_test_config()
     key = cfg["api_key"] or os.environ.get("DEEPSEEK_API_KEY", "")
     url = cfg["endpoint"] or "https://api.deepseek.com"
     mdl = cfg["model"]
@@ -118,10 +136,18 @@ async def test_api_connection():
 @router.post("/settings/test-verification")
 async def test_verification_connection(req: VerificationTestRequest | None = None):
     """测试旁观者核对模型API连接"""
-    cfg = settings_service.verification_test_config()
-    model = (req.model if req else "") or cfg["model"]
-    endpoint = (req.endpoint if req else "") or cfg["endpoint"]
-    api_key = (req.api_key if req else "") or cfg["api_key"]
+    if req and req.provider_id:
+        provider = model_provider_resolver.provider_by_id(req.provider_id)
+        if not provider:
+            return {"status": "error", "message": "模型配置不存在"}
+        model = provider.get("default_model") or provider.get("deep_model") or provider.get("quick_model") or ""
+        endpoint = provider.get("base_url") or ""
+        api_key = provider.get("api_key") or ""
+    else:
+        cfg = settings_service.verification_test_config()
+        model = (req.model if req else "") or cfg["model"]
+        endpoint = (req.endpoint if req else "") or cfg["endpoint"]
+        api_key = (req.api_key if req else "") or cfg["api_key"]
 
     if not api_key:
         return {"status": "error", "message": "API密钥未配置"}
@@ -191,6 +217,25 @@ async def restore_latest_backup():
     return settings_service.restore_latest_backup()
 
 
+@router.post("/settings/backup/restore-upload")
+async def restore_uploaded_backup(file: UploadFile = File(...)):
+    """上传 SQLite 数据库文件并恢复为当前数据库"""
+    if not file.filename:
+        raise HTTPException(400, "请选择要恢复的数据库文件")
+    suffix = Path(file.filename).suffix or ".db"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_path = Path(tmp.name)
+            while chunk := await file.read(1024 * 1024):
+                tmp.write(chunk)
+        return settings_service.restore_uploaded_database_file(temp_path, original_filename=file.filename)
+    finally:
+        await file.close()
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
+
+
 # ── 清空全部数据 ──
 
 @router.post("/settings/clear-all")
@@ -203,7 +248,7 @@ async def clear_all_data():
 
 @router.get("/notifications")
 async def poll_notifications():
-    """轮询通知（条件单触发/分析完成/策略变化/异动）"""
+    """轮询通知（分析完成/策略变化/异动）"""
     return settings_service.poll_notifications()
 
 

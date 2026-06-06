@@ -34,6 +34,9 @@ class ModelProviderPayload(BaseModel):
     deep_model: str | None = ""
     default_model: str | None = ""
     context_length: str | int | None = ""
+    embedding_model: str | None = ""
+    embedding_dimensions: int | None = 1536
+    usage: list[str] | None = None
     apply_to: str | None = None
 
 
@@ -55,13 +58,6 @@ class WorkerPoolConfigPayload(BaseModel):
     workers: list[WorkerPoolWorkerPayload] = []
 
 
-class BacktestPayload(BaseModel):
-    code: str
-    condition_type: str = "price_lte"
-    target_price: float
-    days: int = 90
-
-
 class TemplatePayload(BaseModel):
     name: str | None = None
 
@@ -74,6 +70,11 @@ async def list_model_providers():
 @router.post("/model-providers")
 async def save_model_provider(payload: ModelProviderPayload):
     return enhancement_service.save_model_provider(payload.model_dump())
+
+
+@router.put("/model-providers/{provider_id}")
+async def update_model_provider(provider_id: str, payload: ModelProviderPayload):
+    return enhancement_service.update_model_provider(provider_id, payload.model_dump())
 
 
 @router.delete("/model-providers/{provider_id}")
@@ -114,11 +115,6 @@ async def report_versions(code: str, limit: int = Query(default=20, ge=1, le=100
 @router.get("/ai/report-compare")
 async def compare_reports(left_id: int, right_id: int):
     return await enhancement_service.compare_reports(left_id, right_id)
-
-
-@router.post("/ai/conditional-order/backtest")
-async def condition_backtest(payload: BacktestPayload):
-    return await enhancement_service.condition_backtest(payload.model_dump())
 
 
 @router.get("/portfolio/risk-exposure")

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any
 
+import httpx
 from fastapi import HTTPException
 
 from data.market import get_market_sentiment
@@ -22,10 +24,12 @@ from scheduler.ai_engine import get_index_quotes
 from services import portfolio_service
 from services import batch_report_service
 from services import investment_profile_service
+from services import model_provider_resolver
 
 
 POSITIVE_SIGNALS = {"STRONG_BUY", "BUY", "OVERWEIGHT"}
 NEGATIVE_SIGNALS = {"UNDERWEIGHT", "SELL", "STRONG_SELL"}
+SIGNAL_ORDER = ("STRONG_BUY", "BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL", "STRONG_SELL")
 ACTION_LABELS = {
     "hold": "持有观察",
     "review": "需要复核",
@@ -34,6 +38,40 @@ ACTION_LABELS = {
     "candidate": "候选观察",
     "wait": "等待",
 }
+DAILY_DECISION_ACTION_LABELS = {
+    "hold": "持有",
+    "reduce": "减仓",
+    "sell": "卖出",
+    "add": "加仓",
+    "forbid_buy": "禁止买入",
+    "watch": "观察",
+}
+DAILY_DECISION_STATUS_LABELS = {
+    "executed": "已执行",
+    "not_executed": "未执行",
+    "ignored": "忽略",
+    "watching": "观察中",
+}
+DAILY_DECISION_ROLES = [
+    {
+        "key": "trader",
+        "role": "交易员",
+        "stance": "执行动作",
+        "focus": "把持仓、候选、最新报告和交易纪律转成可执行的次日动作。",
+    },
+    {
+        "key": "risk_manager",
+        "role": "风控",
+        "stance": "风险约束",
+        "focus": "检查是否触发止损、仓位上限、买入否决项、信息缺失和单票集中风险。",
+    },
+    {
+        "key": "portfolio_manager",
+        "role": "组合经理",
+        "stance": "最终裁决",
+        "focus": "综合交易员和风控意见，给出账户级最终动作，不默认全仓重建。",
+    },
+]
 DAILY_DECISION_REPORT_TITLE = "每日 AI 决策报告"
 DAILY_DECISION_CANDIDATE_GROUP_DEFAULT = "每日决策候选"
 DAILY_DECISION_POSITIVE_SIGNAL_DEFAULTS = ("STRONG_BUY", "BUY", "OVERWEIGHT")
@@ -54,11 +92,86 @@ def _loads(value: Any, fallback: Any):
         return fallback
 
 
+def _extract_json_object(text: str) -> dict[str, Any]:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return {}
+    try:
+        parsed = json.loads(stripped)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"\{.*\}", stripped, flags=re.S)
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
 def _float(value: Any, default: float = 0.0) -> float:
     try:
         return round(float(value or 0), 3)
     except (TypeError, ValueError):
         return default
+
+
+def _daily_decision_llm_config(settings: dict[str, Any]) -> dict[str, str]:
+    config = model_provider_resolver.resolve_ai_config(settings, model_tier="deep")
+    return {
+        "base_url": str(config.get("base_url") or "").rstrip("/"),
+        "api_key": str(config.get("api_key") or ""),
+        "model": str(config.get("model") or ""),
+    }
+
+
+def _normalize_daily_action(value: Any, default: str = "watch") -> str:
+    text = str(value or "").strip().lower()
+    mapping = {
+        "hold": "hold",
+        "持有": "hold",
+        "持有观察": "hold",
+        "h": "hold",
+        "reduce": "reduce",
+        "underweight": "reduce",
+        "减仓": "reduce",
+        "减持": "reduce",
+        "sell": "sell",
+        "strong_sell": "sell",
+        "卖出": "sell",
+        "清仓": "sell",
+        "add": "add",
+        "buy": "add",
+        "overweight": "add",
+        "加仓": "add",
+        "买入": "add",
+        "增持": "add",
+        "forbid_buy": "forbid_buy",
+        "avoid": "forbid_buy",
+        "no_buy": "forbid_buy",
+        "禁止买入": "forbid_buy",
+        "回避": "forbid_buy",
+        "watch": "watch",
+        "observe": "watch",
+        "观察": "watch",
+        "观望": "watch",
+    }
+    return mapping.get(text, default if default in DAILY_DECISION_ACTION_LABELS else "watch")
+
+
+def _action_from_hint(action_hint: str | None, item_type: str = "holding") -> str:
+    hint = str(action_hint or "").strip().lower()
+    if hint == "reduce":
+        return "reduce"
+    if hint == "take_profit":
+        return "reduce"
+    if hint == "hold":
+        return "hold"
+    if hint == "candidate" and item_type == "candidate":
+        return "watch"
+    return "watch"
 
 
 def _date_today() -> str:
@@ -82,7 +195,7 @@ def _waiting_markdown(review: dict[str, Any]) -> str:
             f"- 补报告任务: {refresh_job.get('job_id') or '--'}",
             f"- 补报告标的: {codes}",
             "",
-            f"> 系统会先等待新报告写入数据库，再自动生成最终{DAILY_DECISION_REPORT_TITLE}，避免使用旧报告做决策。",
+            f"> 补报告完成后将自动生成最终{DAILY_DECISION_REPORT_TITLE}，无需手动重新点击生成。",
         ]
     )
 
@@ -113,12 +226,12 @@ def _asset_snapshot(summary: dict[str, Any], account_id: str) -> dict[str, Any]:
     }
 
 
-async def _latest_report_map(codes: list[str]) -> dict[str, dict[str, Any]]:
+async def _latest_report_map(codes: list[str], login_user_id: str = "admin") -> dict[str, dict[str, Any]]:
     if not codes:
         return {}
     db = await get_db()
     try:
-        return await portfolio_repository.fetch_latest_report_map(db, codes)
+        return await portfolio_repository.fetch_latest_report_map(db, codes, login_user_id=login_user_id or "admin")
     finally:
         await db.close()
 
@@ -154,17 +267,23 @@ async def _watchlist_candidates(
     include_watchlist_candidates: bool,
     include_observation_pool: bool,
     candidate_codes: list[str] | None,
+    candidate_signal_filters: list[str] | None = None,
     candidate_scope_label: str | None = None,
+    login_user_id: str = "admin",
 ) -> tuple[list[dict[str, Any]], str]:
     clean_codes = [str(code).strip()[:6] for code in (candidate_codes or []) if str(code).strip()]
-    if not clean_codes:
+    signal_filters = _clean_signal_filters(candidate_signal_filters)
+    if not clean_codes and not signal_filters:
         return [], candidate_scope_label or "none"
     params: list[Any] = []
     where = []
-    where.append(f"code IN ({','.join('?' for _ in clean_codes)})")
-    params.extend(clean_codes)
+    if clean_codes:
+        where.append(f"code IN ({','.join('?' for _ in clean_codes)})")
+        params.extend(clean_codes)
     if include_watchlist_candidates and not include_observation_pool:
         where.append("COALESCE(group_name, '默认') != '观察池'")
+    where.append("COALESCE(login_user_id, 'admin') = ?")
+    params.append(login_user_id or "admin")
     sql_where = "WHERE " + " AND ".join(where) if where else ""
     db = await get_db()
     try:
@@ -182,7 +301,15 @@ async def _watchlist_candidates(
     finally:
         await db.close()
     candidates = [dict(row) for row in rows if row["code"] not in holding_codes]
-    scope = candidate_scope_label or "selected"
+    if signal_filters:
+        latest_reports = await _latest_report_map([row["code"] for row in candidates], login_user_id=login_user_id)
+        allowed = set(signal_filters)
+        candidates = [
+            row
+            for row in candidates
+            if str((latest_reports.get(row["code"]) or {}).get("signal") or "").upper() in allowed
+        ]
+    scope = candidate_scope_label or (f"signal_filter:{','.join(signal_filters)}" if signal_filters else "selected")
     return candidates, scope
 
 
@@ -203,8 +330,21 @@ def _split_signal_filter(value: Any) -> set[str]:
     return signals or set(DAILY_DECISION_POSITIVE_SIGNAL_DEFAULTS)
 
 
+def _clean_signal_filters(values: list[str] | None) -> list[str]:
+    allowed = set(SIGNAL_ORDER)
+    seen: set[str] = set()
+    clean: list[str] = []
+    for value in values or []:
+        signal = str(value or "").strip().upper()
+        if signal in allowed and signal not in seen:
+            seen.add(signal)
+            clean.append(signal)
+    return clean
+
+
 async def _daily_decision_candidate_codes_from_settings(
     settings: dict[str, Any],
+    login_user_id: str = "admin",
 ) -> tuple[list[str], str]:
     """Resolve automatic daily-decision candidates from durable settings.
 
@@ -218,6 +358,8 @@ async def _daily_decision_candidate_codes_from_settings(
     where = []
     if not include_observation_pool:
         where.append("COALESCE(group_name, '默认') != '观察池'")
+    where.append("COALESCE(login_user_id, 'admin') = ?")
+    params.append(login_user_id or "admin")
     scope_label = "none"
     if mode == "holdings_only":
         return [], scope_label
@@ -254,7 +396,7 @@ async def _daily_decision_candidate_codes_from_settings(
         return codes, scope_label
 
     allowed_signals = _split_signal_filter(settings.get("daily_decision_signal_filter"))
-    latest_reports = await _latest_report_map(codes)
+    latest_reports = await _latest_report_map(codes, login_user_id=login_user_id)
     filtered = [code for code in codes if str((latest_reports.get(code) or {}).get("signal") or "").upper() in allowed_signals]
     return filtered, f"{scope_label}:{','.join(sorted(allowed_signals))}"
 
@@ -578,6 +720,204 @@ async def _create_report_refresh_job(codes: list[str], *, date_text: str, refres
         return {"status": "failed", "codes": clean_codes, "error": str(exc)}
 
 
+def _daily_decision_prompt(
+    *,
+    role: dict[str, str],
+    prior_roles: list[dict[str, Any]],
+    holdings: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    flags: list[dict[str, Any]],
+    asset_snapshot: dict[str, Any],
+    investment_profile: dict[str, Any],
+    market_context: dict[str, Any],
+    layer_context: dict[str, Any],
+    battle_plan: dict[str, Any],
+) -> str:
+    context = {
+        "role": role,
+        "asset_snapshot": asset_snapshot,
+        "holdings": holdings,
+        "candidates": candidates,
+        "flags": flags,
+        "investment_profile": investment_profile,
+        "market_context": market_context,
+        "layer_context": layer_context,
+        "rule_based_baseline": battle_plan,
+        "prior_role_outputs": prior_roles,
+    }
+    return "\n".join(
+        [
+            f"你是炒股小牛马的每日 AI 决策报告角色：{role['role']}。",
+            role["focus"],
+            "",
+            "目标：基于真实账户、当前持仓、可用资金、最新报告、七层快照、候选池和交易纪律，输出次日账户级动作。",
+            "动作只能从以下值选择：hold, reduce, sell, add, forbid_buy, watch。",
+            "执行状态不要自行判断，系统默认写入 not_executed。",
+            "不要默认全仓建仓；已有持仓必须结合成本、仓位、浮盈亏和现金约束。",
+            "交易员先给动作，风控可以否决或降级，组合经理给最终裁决。",
+            "",
+            "请只返回 JSON 对象，不要输出 Markdown。JSON 格式：",
+            '{"role":"交易员/风控/组合经理","stance":"...","view":"...","action_items":["..."],"actions":[{"code":"000001","action":"hold|reduce|sell|add|forbid_buy|watch","reason":"...","target_position_pct":0,"suggested_amount":0}],"risk_controls":["..."]}',
+            "",
+            "上下文如下：",
+            _dumps(context),
+        ]
+    )
+
+
+async def _call_daily_decision_role_llm(role: dict[str, str], prompt: str, config: dict[str, str], *, timeout_seconds: int = 600) -> dict[str, Any]:
+    if not config.get("base_url") or not config.get("api_key") or not config.get("model"):
+        raise RuntimeError("AI 引擎未配置，无法调用每日决策 LLM")
+    async with httpx.AsyncClient(timeout=max(30, timeout_seconds)) as client:
+        response = await client.post(
+            f"{config['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {config['api_key']}", "Content-Type": "application/json"},
+            json={
+                "model": config["model"],
+                "messages": [
+                    {"role": "system", "content": "你是严格的 A 股账户级交易决策助手，只返回可解析 JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+    content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    parsed = _extract_json_object(content)
+    if not parsed:
+        raise RuntimeError("每日决策 LLM 未返回可解析 JSON")
+    return parsed
+
+
+def _normalize_role_result(role: dict[str, str], raw: dict[str, Any]) -> dict[str, Any]:
+    actions = raw.get("actions") if isinstance(raw.get("actions"), list) else []
+    normalized_actions = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        code = str(action.get("code") or "").strip()[:6]
+        if not code:
+            continue
+        normalized_actions.append(
+            {
+                "code": code,
+                "action": _normalize_daily_action(action.get("action")),
+                "reason": str(action.get("reason") or action.get("rationale") or "").strip(),
+                "target_position_pct": _float(action.get("target_position_pct")),
+                "suggested_amount": _float(action.get("suggested_amount")),
+            }
+        )
+    action_items = raw.get("action_items") if isinstance(raw.get("action_items"), list) else []
+    risk_controls = raw.get("risk_controls") if isinstance(raw.get("risk_controls"), list) else []
+    return {
+        "role": role["role"],
+        "role_key": role["key"],
+        "stance": str(raw.get("stance") or role["stance"]),
+        "view": str(raw.get("view") or raw.get("summary") or ""),
+        "action_items": [str(item) for item in action_items],
+        "actions": normalized_actions,
+        "risk_controls": [str(item) for item in risk_controls],
+    }
+
+
+def _apply_structured_daily_actions(
+    holdings: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    role_discussion: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    final_actions = {}
+    for role in reversed(role_discussion):
+        for action in role.get("actions") or []:
+            final_actions.setdefault(action.get("code"), action)
+        if final_actions:
+            break
+    structured_actions = []
+    for item in holdings + candidates:
+        code = item.get("code") or ""
+        proposed = final_actions.get(code) or {}
+        action = _normalize_daily_action(
+            proposed.get("action"),
+            default=_action_from_hint(item.get("action_hint"), item.get("item_type") or "holding"),
+        )
+        reason = str(proposed.get("reason") or item.get("reason") or DAILY_DECISION_ACTION_LABELS.get(action) or "").strip()
+        target_position_pct = _float(proposed.get("target_position_pct"), _float(item.get("position_pct")))
+        suggested_amount = _float(proposed.get("suggested_amount"))
+        item["decision_action"] = action
+        item["decision_status"] = "not_executed"
+        item["decision_reason"] = reason
+        item["target_position_pct"] = target_position_pct
+        item["suggested_amount"] = suggested_amount
+        item["decision_meta"] = {
+            "source": "llm_role_discussion" if proposed else "rule_fallback",
+            "action_label": DAILY_DECISION_ACTION_LABELS.get(action, action),
+        }
+        structured_actions.append(
+            {
+                "item_type": item.get("item_type"),
+                "code": code,
+                "name": item.get("name"),
+                "action": action,
+                "action_label": DAILY_DECISION_ACTION_LABELS.get(action, action),
+                "status": item["decision_status"],
+                "status_label": DAILY_DECISION_STATUS_LABELS[item["decision_status"]],
+                "reason": reason,
+                "target_position_pct": target_position_pct,
+                "suggested_amount": suggested_amount,
+            }
+        )
+    return structured_actions
+
+
+async def _daily_decision_role_discussion(
+    *,
+    settings: dict[str, Any],
+    asset_snapshot: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    flags: list[dict[str, Any]],
+    investment_profile: dict[str, Any],
+    market_context: dict[str, Any],
+    layer_context: dict[str, Any],
+    battle_plan: dict[str, Any],
+) -> tuple[list[dict[str, Any]], str]:
+    config = _daily_decision_llm_config(settings)
+    if not all(config.values()):
+        return _fallback_role_discussion(asset_snapshot, holdings, candidates, flags, []), "fallback_no_llm_config"
+    role_results: list[dict[str, Any]] = []
+    try:
+        for role in DAILY_DECISION_ROLES:
+            prompt = _daily_decision_prompt(
+                role=role,
+                prior_roles=role_results,
+                holdings=holdings,
+                candidates=candidates,
+                flags=flags,
+                asset_snapshot=asset_snapshot,
+                investment_profile=investment_profile,
+                market_context=market_context,
+                layer_context=layer_context,
+                battle_plan=battle_plan,
+            )
+            raw = await _call_daily_decision_role_llm(role, prompt, config)
+            role_results.append(_normalize_role_result(role, raw))
+        return role_results, "llm"
+    except Exception as exc:  # noqa: BLE001 - daily review should still have a durable conservative fallback
+        fallback = _fallback_role_discussion(asset_snapshot, holdings, candidates, flags, [])
+        fallback.append(
+            {
+                "role": "系统",
+                "role_key": "system_fallback",
+                "stance": "LLM 调用失败兜底",
+                "view": f"每日决策 LLM 调用失败，已回退规则口径：{exc}",
+                "action_items": ["优先人工复核后再执行"],
+                "actions": [],
+                "risk_controls": ["LLM 未完成时不扩大仓位"],
+            }
+        )
+        return fallback, "fallback_llm_error"
+
+
 def _battle_plan(
     holdings: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
@@ -676,7 +1016,7 @@ def _battle_plan(
     }
 
 
-def _role_discussion(
+def _fallback_role_discussion(
     asset_snapshot: dict[str, Any],
     holdings: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
@@ -732,28 +1072,37 @@ def _role_discussion(
 
     return [
         {
-            "role": "持仓经理",
-            "stance": "组合优先",
+            "role": "交易员",
+            "role_key": "trader",
+            "stance": "执行动作",
             "view": manager_view,
             "action_items": [
                 "先看真实仓位和可用资金，再讨论候选股",
                 "持仓风险未处理前，不把候选池当作默认买入清单",
             ],
+            "actions": [],
+            "risk_controls": [],
         },
         {
-            "role": "风控经理",
+            "role": "风控",
+            "role_key": "risk_manager",
             "stance": "风险约束",
             "view": risk_view,
             "action_items": [
                 "高风险触发项优先于进攻动作",
                 "缺少当日报告或七层快照时，先补数据再扩大决策",
             ],
+            "actions": [],
+            "risk_controls": ["信息缺失或信号冲突时不扩大仓位"],
         },
         {
-            "role": "交易员/最终执行",
-            "stance": "次日动作",
+            "role": "组合经理",
+            "role_key": "portfolio_manager",
+            "stance": "最终裁决",
             "view": "；".join(trade_actions) + "。",
             "action_items": trade_actions,
+            "actions": [],
+            "risk_controls": [],
         },
     ]
 
@@ -849,9 +1198,31 @@ def _markdown(
             f"- 任务: {report_refresh.get('job_id') or '--'}",
             f"- 口径: {report_refresh_policy.get('note') or '本次计划基于生成时已入库的数据。'}",
             "",
+            "## 结构化动作",
+            "",
+            "| 股票 | 类型 | 动作 | 状态 | 目标仓位 | 建议金额 | 理由 |",
+            "|---|---|---|---|---:|---:|---|",
+        ]
+    )
+    structured_actions = tomorrow_plan.get("structured_actions") or []
+    if structured_actions:
+        for action in structured_actions:
+            lines.append(
+                f"| {action.get('name') or action.get('code')} {action.get('code') or ''} | "
+                f"{'持仓' if action.get('item_type') == 'holding' else '候选'} | "
+                f"{DAILY_DECISION_ACTION_LABELS.get(action.get('action'), action.get('action') or '--')} | "
+                f"{DAILY_DECISION_STATUS_LABELS.get(action.get('status'), action.get('status') or '--')} | "
+                f"{_float(action.get('target_position_pct')):.3f}% | {_float(action.get('suggested_amount')):.3f} | "
+                f"{action.get('reason') or '--'} |"
+            )
+    else:
+        lines.append("| 无 | -- | -- | -- | 0.000% | 0.000 | 暂无结构化动作 |")
+    lines.extend(
+        [
+            "",
             "## 当前持仓",
             "",
-            "| 股票 | 仓位 | 成本 | 现价 | 涨跌幅 | 持仓盈亏 | 动作提示 |",
+            "| 股票 | 仓位 | 成本 | 现价 | 涨跌幅 | 持仓盈亏 | 每日决策动作 |",
             "|---|---:|---:|---:|---:|---:|---|",
         ]
     )
@@ -860,7 +1231,7 @@ def _markdown(
             lines.append(
                 f"| {item['name']} {item['code']} | {item['position_pct']:.3f}% | {item['avg_cost']:.3f} | "
                 f"{item['price']:.3f} | {item['change_pct']:.3f}% | {item['holding_pnl']:.3f} | "
-                f"{ACTION_LABELS.get(item['action_hint'], item['action_hint'])} |"
+                f"{DAILY_DECISION_ACTION_LABELS.get(item.get('decision_action'), ACTION_LABELS.get(item['action_hint'], item['action_hint']))} |"
             )
     else:
         lines.append("| 无持仓 | 0.000% | 0.000 | 0.000 | 0.000% | 0.000 | 空仓 |")
@@ -1021,8 +1392,9 @@ async def _persist_review(
                     shares, avg_cost, price, change_pct, market_value, position_pct,
                     holding_pnl, holding_pnl_pct, latest_signal, latest_risk_score,
                     latest_report_id, latest_report_created_at, needs_report,
-                    action_hint, reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    action_hint, decision_action, decision_status, decision_reason,
+                    target_position_pct, suggested_amount, decision_meta_json, reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     review["review_id"],
@@ -1046,6 +1418,12 @@ async def _persist_review(
                     item.get("latest_report_created_at"),
                     item.get("needs_report") or 0,
                     item.get("action_hint"),
+                    item.get("decision_action") or _action_from_hint(item.get("action_hint"), item.get("item_type") or "holding"),
+                    item.get("decision_status") or "not_executed",
+                    item.get("decision_reason") or item.get("reason") or "",
+                    item.get("target_position_pct") or 0,
+                    item.get("suggested_amount") or 0,
+                    _dumps(item.get("decision_meta") or {}),
                     item.get("reason"),
                 ),
             )
@@ -1082,14 +1460,16 @@ async def _persist_review(
 async def run_daily_review(
     *,
     account_id: str = "default",
+    login_user_id: str = "admin",
     date_text: str | None = None,
     include_watchlist_candidates: bool = False,
     include_observation_pool: bool = False,
     candidate_codes: list[str] | None = None,
+    candidate_signal_filters: list[str] | None = None,
     candidate_scope_label: str | None = None,
-    force_refresh_holdings: bool = False,
+    force_refresh_holdings: bool = True,
     force_refresh_candidates: bool = False,
-    refresh_snapshots_for_reports: bool = False,
+    refresh_snapshots_for_reports: bool = True,
     wait_for_report_refresh: bool = True,
     review_id: str | None = None,
     replace_existing: bool = False,
@@ -1106,11 +1486,13 @@ async def run_daily_review(
         include_watchlist_candidates=include_watchlist_candidates,
         include_observation_pool=include_observation_pool,
         candidate_codes=candidate_codes,
+        candidate_signal_filters=candidate_signal_filters,
         candidate_scope_label=candidate_scope_label,
+        login_user_id=login_user_id,
     )
     candidate_codes_clean = [row["code"] for row in candidate_rows]
     all_codes = [position["code"] for position in positions] + candidate_codes_clean
-    latest_reports = await _latest_report_map(all_codes)
+    latest_reports = await _latest_report_map(all_codes, login_user_id=login_user_id)
     latest_snapshots = await _latest_snapshot_map(all_codes)
     candidate_quotes = await portfolio_service.get_batch_quotes(candidate_codes_clean) if candidate_codes_clean else {}
 
@@ -1179,10 +1561,12 @@ async def run_daily_review(
         "refresh_snapshots": bool(refresh_snapshots_for_reports),
         "wait_for_report_refresh": bool(wait_for_report_refresh),
         "plan_uses_refreshed_reports": plan_uses_refreshed_reports,
+        "plan_deferred_until_manual_run": False,
+        "auto_finalize_after_refresh": bool(should_wait_for_reports),
         "note": (
             f"已等待补报告任务完成，本次{DAILY_DECISION_REPORT_TITLE}基于补跑后的最新入库报告和快照。"
             if plan_uses_refreshed_reports
-            else f"系统会先等待新报告写入数据库，再自动生成最终{DAILY_DECISION_REPORT_TITLE}。"
+            else f"补报告任务已创建，本次先保存等待记录；补报告完成后将自动生成最终{DAILY_DECISION_REPORT_TITLE}。"
             if should_wait_for_reports
             else f"补报告任务创建失败：{report_refresh_job.get('error') or '未知错误'}"
             if report_refresh_failed
@@ -1192,7 +1576,22 @@ async def run_daily_review(
     plan_rerun_codes = [] if skip_report_refresh_job else rerun_report_codes
     defer_final_plan = should_wait_for_reports or report_refresh_failed
     battle_plan = {} if defer_final_plan else _battle_plan(holdings, candidates, flags, asset_snapshot, investment_profile, market_context)
-    role_discussion = [] if defer_final_plan else _role_discussion(asset_snapshot, holdings, candidates, flags, plan_rerun_codes)
+    role_discussion: list[dict[str, Any]] = []
+    structured_actions: list[dict[str, Any]] = []
+    llm_mode = "deferred" if defer_final_plan else ""
+    if not defer_final_plan:
+        role_discussion, llm_mode = await _daily_decision_role_discussion(
+            settings=settings,
+            asset_snapshot=asset_snapshot,
+            holdings=holdings,
+            candidates=candidates,
+            flags=flags,
+            investment_profile=investment_profile,
+            market_context=market_context,
+            layer_context=layer_context,
+            battle_plan=battle_plan,
+        )
+        structured_actions = _apply_structured_daily_actions(holdings, candidates, role_discussion)
 
     review = {
         "review_id": review_id,
@@ -1214,7 +1613,13 @@ async def run_daily_review(
         "report_refresh_policy": report_refresh_policy,
         "batch_job_id": report_refresh_job.get("job_id") if report_refresh_job.get("status") == "created" else (completed_report_refresh_job or {}).get("job_id"),
         "error": report_refresh_job.get("error") if report_refresh_failed else "",
-        "summary": f"{date_text} 持仓 {len(holdings)} 只，触发 {len(flags)} 项，其中高风险 {critical_count} 项；候选池 {len(candidates)} 只。",
+        "summary": (
+            f"{date_text} 等待补报告完成，补报告标的 {len(rerun_report_codes)} 只；完成后将自动生成最终{DAILY_DECISION_REPORT_TITLE}。"
+            if should_wait_for_reports
+            else f"{date_text} 补报告任务创建失败，未生成最终{DAILY_DECISION_REPORT_TITLE}。"
+            if report_refresh_failed
+            else f"{date_text} 持仓 {len(holdings)} 只，触发 {len(flags)} 项，其中高风险 {critical_count} 项；候选池 {len(candidates)} 只。"
+        ),
     }
     review["tomorrow_plan"] = {
         "title": DAILY_DECISION_REPORT_TITLE,
@@ -1227,6 +1632,10 @@ async def run_daily_review(
             "note": "如后续显式引入组合研究方案，也只能作为低优先级历史参考，不覆盖真实账户上下文，不自动写交易、不自动下单。",
         },
         "role_discussion": role_discussion,
+        "role_model_mode": llm_mode,
+        "structured_actions": structured_actions,
+        "allowed_actions": DAILY_DECISION_ACTION_LABELS,
+        "allowed_statuses": DAILY_DECISION_STATUS_LABELS,
         "report_refresh_job": report_refresh_job,
         "report_refresh_policy": report_refresh_policy,
         "investment_profile": investment_profile,
@@ -1238,10 +1647,12 @@ async def run_daily_review(
         "candidate_count": len(candidates),
         "pending_request": {
             "account_id": account_id,
+            "login_user_id": login_user_id or "admin",
             "date_text": date_text,
             "include_watchlist_candidates": include_watchlist_candidates,
             "include_observation_pool": include_observation_pool,
             "candidate_codes": candidate_codes or [],
+            "candidate_signal_filters": _clean_signal_filters(candidate_signal_filters),
             "candidate_scope_label": candidate_scope_label,
         }
         if should_wait_for_reports
@@ -1319,10 +1730,12 @@ async def finalize_waiting_reviews_for_batch_job(job_id: str) -> dict[str, Any]:
         pending_request = (review.get("tomorrow_plan") or {}).get("pending_request") or {}
         await run_daily_review(
             account_id=pending_request.get("account_id") or review["account_id"],
+            login_user_id=pending_request.get("login_user_id") or "admin",
             date_text=pending_request.get("date_text") or review["date"],
             include_watchlist_candidates=bool(pending_request.get("include_watchlist_candidates")),
             include_observation_pool=bool(pending_request.get("include_observation_pool")),
             candidate_codes=pending_request.get("candidate_codes") or [],
+            candidate_signal_filters=pending_request.get("candidate_signal_filters") or [],
             candidate_scope_label=pending_request.get("candidate_scope_label"),
             force_refresh_holdings=False,
             force_refresh_candidates=False,
@@ -1368,24 +1781,27 @@ async def review_exists_for_date(*, date_text: str, account_id: str = "default")
 async def run_scheduled_daily_decision_report(
     *,
     account_id: str = "default",
+    login_user_id: str = "admin",
     date_text: str | None = None,
 ) -> dict[str, Any]:
     settings = await _settings_map()
-    candidate_codes, candidate_scope_label = await _daily_decision_candidate_codes_from_settings(settings)
-    force_refresh_holdings = _truthy(settings.get("daily_decision_force_refresh_holdings"), True)
+    candidate_codes, candidate_scope_label = await _daily_decision_candidate_codes_from_settings(
+        settings,
+        login_user_id=login_user_id,
+    )
     force_refresh_candidates = _truthy(settings.get("daily_decision_force_refresh_candidates"), False)
-    refresh_snapshots = _truthy(settings.get("daily_decision_refresh_snapshots"), True)
     include_observation_pool = _truthy(settings.get("daily_decision_include_observation_pool"), False)
     return await run_daily_review(
         account_id=account_id or str(_setting_value(settings, "daily_decision_account_id", "default")),
+        login_user_id=login_user_id,
         date_text=date_text,
         include_watchlist_candidates=bool(candidate_codes),
         include_observation_pool=include_observation_pool,
         candidate_codes=candidate_codes,
         candidate_scope_label=candidate_scope_label,
-        force_refresh_holdings=force_refresh_holdings,
+        force_refresh_holdings=True,
         force_refresh_candidates=bool(candidate_codes) and force_refresh_candidates,
-        refresh_snapshots_for_reports=refresh_snapshots,
+        refresh_snapshots_for_reports=True,
     )
 
 
@@ -1481,6 +1897,35 @@ async def get_review_items(review_id: str) -> dict[str, Any]:
     finally:
         await db.close()
     return {"count": len(rows), "items": [dict(row) for row in rows]}
+
+
+async def update_review_item_decision_status(review_id: str, item_id: int, status: str) -> dict[str, Any]:
+    clean_status = str(status or "").strip()
+    if clean_status not in DAILY_DECISION_STATUS_LABELS:
+        raise HTTPException(400, "每日建议状态无效")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            UPDATE holding_review_items
+            SET decision_status = ?,
+                decision_updated_at = datetime('now')
+            WHERE review_id = ? AND id = ?
+            """,
+            (clean_status, review_id, int(item_id)),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(404, "每日建议明细不存在")
+        row = await (
+            await db.execute(
+                "SELECT * FROM holding_review_items WHERE review_id = ? AND id = ?",
+                (review_id, int(item_id)),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+    return dict(row)
 
 
 async def get_review_flags(review_id: str) -> dict[str, Any]:

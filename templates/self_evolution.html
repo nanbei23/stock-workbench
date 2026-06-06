@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI自我进化画像</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .evolution-page{max-width:1360px;margin:0 auto;padding:20px;color:var(--text-primary,#1f2937);}
+    .evolution-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px;}
+    .evolution-title h1{margin:0 0 6px;font-size:24px;letter-spacing:0;}
+    .evolution-title p{margin:0;color:var(--text-secondary,#64748b);font-size:14px;}
+    .evolution-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .evolution-button{border:1px solid rgba(15,23,42,.14);background:#fff;color:#172033;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:14px;}
+    .evolution-button.primary{background:#1f6feb;color:#fff;border-color:#1f6feb;}
+    .evolution-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px;}
+    .evolution-card{background:#fff;border:1px solid rgba(15,23,42,.1);border-radius:8px;padding:14px;box-shadow:0 1px 2px rgba(15,23,42,.04);}
+    .evolution-card span{display:block;color:#64748b;font-size:12px;margin-bottom:6px;}
+    .evolution-card strong{font-size:24px;line-height:1.2;}
+    .evolution-section{background:#fff;border:1px solid rgba(15,23,42,.1);border-radius:8px;margin-bottom:12px;padding:14px;}
+    .evolution-section header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;}
+    .evolution-section h2{font-size:16px;margin:0;letter-spacing:0;}
+    .evolution-table-wrap{overflow:auto;border:1px solid rgba(15,23,42,.08);border-radius:6px;}
+    .evolution-table{width:100%;border-collapse:collapse;min-width:760px;font-size:13px;}
+    .evolution-table th,.evolution-table td{padding:9px 10px;border-bottom:1px solid rgba(15,23,42,.08);text-align:left;vertical-align:top;}
+    .evolution-table th{background:#f8fafc;color:#475569;font-weight:600;}
+    .evolution-rule{border-left:3px solid #1f6feb;background:#f8fafc;padding:10px 12px;margin-bottom:8px;border-radius:4px;}
+    .evolution-rule small{display:block;color:#64748b;margin-top:4px;}
+    .evolution-search{display:flex;gap:8px;align-items:center;}
+    .evolution-search input{min-width:300px;border:1px solid rgba(15,23,42,.16);border-radius:6px;padding:8px 10px;font-size:14px;}
+    .muted{color:#64748b;}
+    .loss{color:#b42318;}
+    .win{color:#067647;}
+    @media (max-width:900px){
+      .evolution-header{display:block;}
+      .evolution-actions{margin-top:12px;}
+      .evolution-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+      .evolution-search{display:block;}
+      .evolution-search input{min-width:0;width:100%;margin-bottom:8px;}
+    }
+  </style>
+</head>
+<body>
+  <main class="evolution-page">
+    <section class="evolution-header">
+      <div class="evolution-title">
+        <h1>AI自我进化画像</h1>
+        <p>研究信号、账户动作、交易记忆、真实盈亏四层闭环评分</p>
+      </div>
+      <div class="evolution-actions">
+        <button class="evolution-button" onclick="loadSelfEvolution()">刷新</button>
+        <button class="evolution-button primary" onclick="runSelfEvolution()">运行进化</button>
+      </div>
+    </section>
+
+    <section class="evolution-grid">
+      <div class="evolution-card"><span>系统评分</span><strong id="selfEvolutionScore">--</strong></div>
+      <div class="evolution-card"><span>信号样本</span><strong id="selfEvolutionSignals">--</strong></div>
+      <div class="evolution-card"><span>交易记忆</span><strong id="selfEvolutionMemories">--</strong></div>
+      <div class="evolution-card"><span>真实闭环</span><strong id="selfEvolutionTrades">--</strong></div>
+    </section>
+
+    <section class="evolution-section">
+      <header>
+        <h2>进化规则</h2>
+        <span class="muted" id="selfEvolutionSnapshotId">--</span>
+      </header>
+      <div id="selfEvolutionRules"><div class="muted">正在读取进化规则...</div></div>
+    </section>
+
+    <section class="evolution-section">
+      <header>
+        <h2>推荐后验归因</h2>
+        <span class="muted">AI推荐与真实/跟踪结果对齐</span>
+      </header>
+      <div class="evolution-table-wrap">
+        <table class="evolution-table">
+          <thead><tr><th>代码</th><th>名称</th><th>结果</th><th>真实盈亏</th><th>跟踪收益</th><th>来源报告</th><th>交易/记忆</th></tr></thead>
+          <tbody id="selfEvolutionAttributions"><tr><td colspan="7" class="muted">正在读取归因...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="evolution-section">
+      <header>
+        <h2>语义相似复盘</h2>
+        <div class="evolution-search">
+          <input id="selfEvolutionSearchInput" value="涨停追入 高估值 仓位过重" placeholder="输入交易场景">
+          <button class="evolution-button" onclick="searchSelfEvolutionMemory()">检索</button>
+        </div>
+      </header>
+      <div class="evolution-table-wrap">
+        <table class="evolution-table">
+          <thead><tr><th>代码</th><th>名称</th><th>匹配分</th><th>匹配词</th><th>复盘摘要</th></tr></thead>
+          <tbody id="selfEvolutionSearchResults"><tr><td colspan="5" class="muted">输入场景后检索相似复盘</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/static/js/self-evolution.js?v=3.1.0"></script>
+</body>
+</html>

@@ -318,7 +318,7 @@ def run_trading_agents(task_id: str, code: str, trade_date: str,
         config["deep_think_temperature"] = 0.1
         config["quick_think_temperature"] = 0.1
         # 在所有分析师prompt前追加数据准确性约束
-        investment_profile = investment_profile_from_db()
+        investment_profile = investment_profile_from_db(code=code, report_text=f"{task.name} {gbrain_context}")
         accuracy_prefix = (
             "【强制规则】你必须严格基于提供的实际数据进行分析。"
             "禁止编造任何数字（价格、PE、ROE、涨跌幅、成交量等）。"
@@ -789,7 +789,7 @@ def _save_report_to_db(task: AnalysisTask):
 
         raw_state = dict(task.result or {})
         try:
-            investment_profile = investment_profile_from_db()
+            investment_profile = investment_profile_from_db(code=task.code, report_text=task.name)
             raw_state["investment_profile"] = investment_profile
             raw_state["style_match"] = style_match_assessment(result, investment_profile)
         except Exception as e:
@@ -802,8 +802,8 @@ def _save_report_to_db(task: AnalysisTask):
              policy_report, hot_money_report, lockup_report,
              investment_debate, risk_debate, final_decision, trader_plan,
              raw_state, duration_seconds, market_snapshot, fact_check, bystander_verify,
-             depth, model_mode)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             depth, model_mode, login_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             task.task_id,
             task.code,
@@ -828,6 +828,7 @@ def _save_report_to_db(task: AnalysisTask):
             None,  # bystander_verify 后续自动填充
             depth,
             model_mode,
+            getattr(task, "login_user_id", None) or "admin",
         ))
         db.commit()
         report_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]

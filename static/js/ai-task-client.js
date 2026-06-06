@@ -88,9 +88,6 @@
         saveToGbrain(payload) {
             return post('/api/ai/gbrain/save', payload || {});
         },
-        generateConditionalOrder(payload) {
-            return post('/api/ai/generate-cond-order', payload || {});
-        },
         tasks(params) {
             const query = params ? `?${new URLSearchParams(params).toString()}` : '';
             return get(`/api/ai/tasks${query}`);
@@ -100,12 +97,6 @@
         },
         cancelFromCenter(taskId) {
             return post(`/api/ai/tasks/${encode(taskId)}/cancel`);
-        },
-        conditionalOrderDraft(payload) {
-            return post('/api/ai/conditional-order/draft', payload || {});
-        },
-        confirmConditionalOrderDraft(payload) {
-            return post('/api/ai/conditional-order/confirm', payload || {});
         }
     };
 })(window);

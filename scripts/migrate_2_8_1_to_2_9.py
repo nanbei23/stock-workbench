@@ -96,6 +96,25 @@ REQUIRED_COLUMNS: dict[str, set[str]] = {
         "suggested_shares",
         "source_report_id",
     },
+    "report_selection_sets": {
+        "selection_id",
+        "source_page",
+        "source_label",
+        "codes_json",
+        "filters_json",
+        "login_user_id",
+        "expires_at",
+    },
+    "watchlist": {
+        "code",
+        "name",
+        "login_user_id",
+    },
+    "analysis_reports": {
+        "code",
+        "signal",
+        "login_user_id",
+    },
 }
 
 

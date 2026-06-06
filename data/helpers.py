@@ -3,6 +3,7 @@
 aiohttp 异步 HTTP，零第三方封装（除 mootdx TCP）
 """
 import asyncio
+import atexit
 import json
 import logging
 import re
@@ -36,12 +37,18 @@ TENCENT_BATCH_URL = "https://qt.gtimg.cn/q="
 
 # aiohttp 全局 session
 _session: Optional[aiohttp.ClientSession] = None
+_session_loop: Optional[asyncio.AbstractEventLoop] = None
 _TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 
 async def get_session() -> aiohttp.ClientSession:
     """获取或创建全局 aiohttp session（惰性初始化，强制IPv4避免macOS IPv6问题）。"""
-    global _session
+    global _session, _session_loop
+    current_loop = asyncio.get_running_loop()
+    if _session is not None and not _session.closed and _session_loop is not current_loop:
+        await _session.close()
+        _session = None
+        _session_loop = None
     if _session is None or _session.closed:
         connector = aiohttp.TCPConnector(family=socket.AF_INET)
         _session = aiohttp.ClientSession(
@@ -49,15 +56,29 @@ async def get_session() -> aiohttp.ClientSession:
             headers=HEADERS,
             connector=connector,
         )
+        _session_loop = current_loop
     return _session
 
 
 async def close_session():
     """关闭全局 session（应用关闭时调用）。"""
-    global _session
+    global _session, _session_loop
     if _session and not _session.closed:
         await _session.close()
+        await asyncio.sleep(0.25)
         _session = None
+        _session_loop = None
+
+
+def _close_session_at_exit():
+    if _session and not _session.closed:
+        try:
+            asyncio.run(close_session())
+        except RuntimeError:
+            pass
+
+
+atexit.register(_close_session_at_exit)
 
 
 # ── 市场前缀 ──────────────────────────────────────────────

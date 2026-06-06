@@ -1,7 +1,13 @@
 """SQLite数据库初始化 — 9张表"""
 import aiosqlite
+import hashlib
 from pathlib import Path
 from config import DB_PATH
+
+DEFAULT_LOGIN_USER_ID = "admin"
+LEGACY_LOGIN_USER_ID = "local_owner"
+DEFAULT_LOGIN_USERNAME = "admin"
+DEFAULT_LOGIN_PASSWORD = "123456"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -17,8 +23,47 @@ CREATE TABLE IF NOT EXISTS accounts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS login_users (
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT DEFAULT '',
+    display_name TEXT,
+    role TEXT DEFAULT 'owner',
+    status TEXT DEFAULT 'active',
+    default_securities_account_id TEXT DEFAULT 'default',
+    must_change_credentials INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS login_sessions (
+    session_id TEXT PRIMARY KEY,
+    login_user_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT,
+    last_seen_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(login_user_id) REFERENCES login_users(id)
+);
+
+CREATE TABLE IF NOT EXISTS securities_accounts (
+    id TEXT PRIMARY KEY,
+    login_user_id TEXT NOT NULL DEFAULT 'admin',
+    name TEXT NOT NULL,
+    broker TEXT DEFAULT '',
+    account_no_mask TEXT DEFAULT '',
+    is_default INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    notes TEXT DEFAULT '',
+    display_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(login_user_id) REFERENCES login_users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_securities_accounts_owner
+    ON securities_accounts(login_user_id, status, display_order, created_at);
+
 CREATE TABLE IF NOT EXISTS watchlist (
-    code TEXT PRIMARY KEY,
+    code TEXT NOT NULL,
     name TEXT,
     group_name TEXT DEFAULT "默认",
     sort_order INTEGER DEFAULT 0,
@@ -27,8 +72,10 @@ CREATE TABLE IF NOT EXISTS watchlist (
     target_sell_price REAL,
     stop_loss_price REAL,
     notes TEXT,
+    login_user_id TEXT DEFAULT 'admin',
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    strategy_state_updated_at TIMESTAMP
+    strategy_state_updated_at TIMESTAMP,
+    UNIQUE(login_user_id, code)
 );
 
 CREATE TABLE IF NOT EXISTS portfolio (
@@ -62,6 +109,75 @@ CREATE TABLE IF NOT EXISTS trades (
     trade_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     notes TEXT,
     account_id TEXT DEFAULT 'default'
+);
+
+CREATE TABLE IF NOT EXISTS trade_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_key TEXT UNIQUE NOT NULL,
+    account_id TEXT DEFAULT 'default',
+    code TEXT NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    outcome TEXT NOT NULL DEFAULT 'neutral',
+    trade_ids_json TEXT NOT NULL DEFAULT '[]',
+    opened_at TEXT,
+    closed_at TEXT,
+    holding_days REAL DEFAULT 0,
+    buy_amount REAL DEFAULT 0,
+    sell_amount REAL DEFAULT 0,
+    fees REAL DEFAULT 0,
+    realized_pnl REAL DEFAULT 0,
+    realized_pnl_pct REAL DEFAULT 0,
+    summary TEXT DEFAULT '',
+    facts_json TEXT DEFAULT '{}',
+    lesson_tags_json TEXT DEFAULT '[]',
+    rules_json TEXT DEFAULT '[]',
+    veto_lessons_json TEXT DEFAULT '[]',
+    report_context_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    confirmed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS trade_memory_embeddings (
+    memory_id INTEGER PRIMARY KEY,
+    memory_key TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding_text TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY(memory_id) REFERENCES trade_memories(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS self_evolution_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id TEXT UNIQUE NOT NULL,
+    version TEXT NOT NULL DEFAULT 'self-evolution-v3',
+    status TEXT NOT NULL DEFAULT 'active',
+    system_score REAL DEFAULT 0,
+    source_counts_json TEXT DEFAULT '{}',
+    layers_json TEXT DEFAULT '{}',
+    rules_json TEXT DEFAULT '[]',
+    constraints_json TEXT DEFAULT '{}',
+    context TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS recommendation_attributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT,
+    outcome TEXT NOT NULL DEFAULT 'neutral',
+    realized_pnl REAL DEFAULT 0,
+    realized_pnl_pct REAL DEFAULT 0,
+    tracking_pnl_pct REAL,
+    source_report_ids_json TEXT DEFAULT '[]',
+    trade_ids_json TEXT DEFAULT '[]',
+    memory_ids_json TEXT DEFAULT '[]',
+    evidence_json TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS conditional_orders (
@@ -131,7 +247,8 @@ CREATE TABLE IF NOT EXISTS analysis_reports (
     fact_check TEXT,
     bystander_verify TEXT,
     depth TEXT DEFAULT 'standard',
-    model_mode TEXT DEFAULT 'balanced'
+    model_mode TEXT DEFAULT 'balanced',
+    login_user_id TEXT DEFAULT 'admin'
 );
 
 CREATE TABLE IF NOT EXISTS stock_data_snapshots (
@@ -344,12 +461,16 @@ CREATE TABLE IF NOT EXISTS position_plan_items (
     confidence REAL,
     risk_score REAL,
     reason TEXT,
-    entry_plan TEXT,
-    stop_loss TEXT,
-    risk_note TEXT,
-    source_report_id INTEGER,
-    created_at TEXT DEFAULT (datetime('now'))
-);
+            entry_plan TEXT,
+            stop_loss TEXT,
+            risk_note TEXT,
+            source_report_id INTEGER,
+            adoption_status TEXT NOT NULL DEFAULT 'pending',
+            adopted_at TEXT,
+            adopted_by TEXT,
+            adoption_note TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
 
 CREATE TABLE IF NOT EXISTS holding_daily_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -403,6 +524,13 @@ CREATE TABLE IF NOT EXISTS holding_review_items (
     latest_report_created_at TEXT,
     needs_report INTEGER DEFAULT 0,
     action_hint TEXT,
+    decision_action TEXT NOT NULL DEFAULT 'watch',
+    decision_status TEXT NOT NULL DEFAULT 'not_executed',
+    decision_reason TEXT,
+    target_position_pct REAL DEFAULT 0,
+    suggested_amount REAL DEFAULT 0,
+    decision_meta_json TEXT DEFAULT '{}',
+    decision_updated_at TEXT,
     reason TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
@@ -442,6 +570,7 @@ CREATE TABLE IF NOT EXISTS anomaly_logs (
 
 CREATE TABLE IF NOT EXISTS daily_pnl (
     date TEXT NOT NULL,
+    account_id TEXT DEFAULT 'default',
     code6 TEXT DEFAULT '',
     total_assets REAL,
     cash REAL,
@@ -454,7 +583,7 @@ CREATE TABLE IF NOT EXISTS daily_pnl (
     close_price REAL,
     shares REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (date, code6)
+    PRIMARY KEY (account_id, date, code6)
 );
 
 CREATE TABLE IF NOT EXISTS cash_ledger (
@@ -473,6 +602,39 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS model_providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key TEXT DEFAULT '',
+    models_json TEXT DEFAULT '[]',
+    quick_model TEXT DEFAULT '',
+    deep_model TEXT DEFAULT '',
+    default_model TEXT DEFAULT '',
+    context_length TEXT DEFAULT '',
+    embedding_model TEXT DEFAULT '',
+    embedding_dimensions INTEGER DEFAULT 1536,
+    usage_json TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_model_providers_updated
+    ON model_providers(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS report_selection_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    selection_id TEXT UNIQUE NOT NULL,
+    source_page TEXT NOT NULL DEFAULT 'unknown',
+    source_label TEXT DEFAULT '',
+    codes_json TEXT NOT NULL DEFAULT '[]',
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    login_user_id TEXT DEFAULT 'admin',
+    created_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_report_selection_sets_expires
+    ON report_selection_sets(expires_at);
 
 CREATE TABLE IF NOT EXISTS pending_positions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -686,6 +848,11 @@ CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_report ON ai_shadow_orders(repor
 CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_code_status ON ai_shadow_orders(code, status);
 CREATE INDEX IF NOT EXISTS idx_ai_shadow_orders_created ON ai_shadow_orders(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trades_code_time ON trades(code, trade_time);
+CREATE INDEX IF NOT EXISTS idx_trade_memories_status_code ON trade_memories(status, code, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trade_memories_account_status ON trade_memories(account_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trade_memory_embeddings_model ON trade_memory_embeddings(model, dimensions, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_self_evolution_snapshots_status ON self_evolution_snapshots(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recommendation_attributions_snapshot ON recommendation_attributions(snapshot_id, code);
 CREATE INDEX IF NOT EXISTS idx_conditional_orders_status ON conditional_orders(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_conditional_orders_code_status ON conditional_orders(code, status);
 CREATE INDEX IF NOT EXISTS idx_analysis_reports_code_created ON analysis_reports(code, created_at DESC);
@@ -1120,12 +1287,16 @@ MIGRATIONS = [
             confidence REAL,
             risk_score REAL,
             reason TEXT,
-            entry_plan TEXT,
-            stop_loss TEXT,
-            risk_note TEXT,
-            source_report_id INTEGER,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
+    entry_plan TEXT,
+    stop_loss TEXT,
+    risk_note TEXT,
+    source_report_id INTEGER,
+    adoption_status TEXT NOT NULL DEFAULT 'pending',
+    adopted_at TEXT,
+    adopted_by TEXT,
+    adoption_note TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
         CREATE INDEX IF NOT EXISTS idx_position_plans_status_created
             ON position_plans(status, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_position_plans_adoption_created
@@ -1223,6 +1394,13 @@ MIGRATIONS = [
             latest_report_created_at TEXT,
             needs_report INTEGER DEFAULT 0,
             action_hint TEXT,
+            decision_action TEXT NOT NULL DEFAULT 'watch',
+            decision_status TEXT NOT NULL DEFAULT 'not_executed',
+            decision_reason TEXT,
+            target_position_pct REAL DEFAULT 0,
+            suggested_amount REAL DEFAULT 0,
+            decision_meta_json TEXT DEFAULT '{}',
+            decision_updated_at TEXT,
             reason TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
@@ -1256,6 +1434,30 @@ MIGRATIONS = [
             ON holding_trigger_flags(review_id, severity);
         CREATE INDEX IF NOT EXISTS idx_holding_trigger_flags_code
             ON holding_trigger_flags(code, created_at DESC);
+        """,
+    ),
+    (
+        13,
+        "model_provider_library",
+        """
+        CREATE TABLE IF NOT EXISTS model_providers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            base_url TEXT NOT NULL,
+            api_key TEXT DEFAULT '',
+            models_json TEXT DEFAULT '[]',
+            quick_model TEXT DEFAULT '',
+            deep_model TEXT DEFAULT '',
+            default_model TEXT DEFAULT '',
+            context_length TEXT DEFAULT '',
+            embedding_model TEXT DEFAULT '',
+            embedding_dimensions INTEGER DEFAULT 1536,
+            usage_json TEXT DEFAULT '[]',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_model_providers_updated
+            ON model_providers(updated_at DESC);
         """,
     ),
 ]
@@ -1312,6 +1514,21 @@ async def ensure_position_plan_market_context_columns(db):
     additions = {
         "decision_market_snapshot_json": "ALTER TABLE position_plans ADD COLUMN decision_market_snapshot_json TEXT DEFAULT '{}'",
         "market_context_captured_at": "ALTER TABLE position_plans ADD COLUMN market_context_captured_at TEXT",
+    }
+    for column, sql in additions.items():
+        if column not in columns:
+            await db.execute(sql)
+
+
+async def ensure_position_plan_item_adoption_columns(db):
+    """Backfill per-item adoption columns for existing position plan items."""
+    rows = await db.execute_fetchall("PRAGMA table_info(position_plan_items)")
+    columns = {row[1] for row in rows}
+    additions = {
+        "adoption_status": "ALTER TABLE position_plan_items ADD COLUMN adoption_status TEXT NOT NULL DEFAULT 'pending'",
+        "adopted_at": "ALTER TABLE position_plan_items ADD COLUMN adopted_at TEXT",
+        "adopted_by": "ALTER TABLE position_plan_items ADD COLUMN adopted_by TEXT",
+        "adoption_note": "ALTER TABLE position_plan_items ADD COLUMN adoption_note TEXT",
     }
     for column, sql in additions.items():
         if column not in columns:
@@ -1511,6 +1728,13 @@ async def ensure_holding_daily_review_tables(db):
             latest_report_created_at TEXT,
             needs_report INTEGER DEFAULT 0,
             action_hint TEXT,
+            decision_action TEXT NOT NULL DEFAULT 'watch',
+            decision_status TEXT NOT NULL DEFAULT 'not_executed',
+            decision_reason TEXT,
+            target_position_pct REAL DEFAULT 0,
+            suggested_amount REAL DEFAULT 0,
+            decision_meta_json TEXT DEFAULT '{}',
+            decision_updated_at TEXT,
             reason TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
@@ -1546,6 +1770,20 @@ async def ensure_holding_daily_review_tables(db):
             ON holding_trigger_flags(code, created_at DESC);
         """
     )
+    rows = await db.execute_fetchall("PRAGMA table_info(holding_review_items)")
+    columns = {row[1] for row in rows}
+    additions = {
+        "decision_action": "ALTER TABLE holding_review_items ADD COLUMN decision_action TEXT NOT NULL DEFAULT 'watch'",
+        "decision_status": "ALTER TABLE holding_review_items ADD COLUMN decision_status TEXT NOT NULL DEFAULT 'not_executed'",
+        "decision_reason": "ALTER TABLE holding_review_items ADD COLUMN decision_reason TEXT",
+        "target_position_pct": "ALTER TABLE holding_review_items ADD COLUMN target_position_pct REAL DEFAULT 0",
+        "suggested_amount": "ALTER TABLE holding_review_items ADD COLUMN suggested_amount REAL DEFAULT 0",
+        "decision_meta_json": "ALTER TABLE holding_review_items ADD COLUMN decision_meta_json TEXT DEFAULT '{}'",
+        "decision_updated_at": "ALTER TABLE holding_review_items ADD COLUMN decision_updated_at TEXT",
+    }
+    for column, sql in additions.items():
+        if column not in columns:
+            await db.execute(sql)
 
 
 async def ensure_portfolio_account_key(db):
@@ -1618,6 +1856,392 @@ async def ensure_portfolio_account_key(db):
     )
 
 
+def _hash_password(password: str) -> str:
+    return "sha256$" + hashlib.sha256(str(password or "").encode("utf-8")).hexdigest()
+
+
+async def _table_columns(db, table_name: str) -> set[str]:
+    rows = await db.execute_fetchall(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in rows}
+
+
+async def _add_missing_columns(db, table_name: str, additions: dict[str, str]) -> None:
+    columns = await _table_columns(db, table_name)
+    for column, sql in additions.items():
+        if column not in columns:
+            await db.execute(sql)
+
+
+async def ensure_identity_tables(db):
+    """Create login users and securities accounts while preserving legacy accounts."""
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS login_users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT DEFAULT '',
+            display_name TEXT,
+            role TEXT DEFAULT 'owner',
+            status TEXT DEFAULT 'active',
+            default_securities_account_id TEXT DEFAULT 'default',
+            must_change_credentials INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS login_sessions (
+            session_id TEXT PRIMARY KEY,
+            login_user_id TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            expires_at TEXT,
+            last_seen_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(login_user_id) REFERENCES login_users(id)
+        );
+        CREATE TABLE IF NOT EXISTS securities_accounts (
+            id TEXT PRIMARY KEY,
+            login_user_id TEXT NOT NULL DEFAULT 'admin',
+            name TEXT NOT NULL,
+            broker TEXT DEFAULT '',
+            account_no_mask TEXT DEFAULT '',
+            is_default INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            notes TEXT DEFAULT '',
+            display_order INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(login_user_id) REFERENCES login_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_securities_accounts_owner
+            ON securities_accounts(login_user_id, status, display_order, created_at);
+        """
+    )
+    await _add_missing_columns(
+        db,
+        "accounts",
+        {
+            "broker": "ALTER TABLE accounts ADD COLUMN broker TEXT DEFAULT ''",
+            "created_at": "ALTER TABLE accounts ADD COLUMN created_at TEXT",
+        },
+    )
+    await _add_missing_columns(
+        db,
+        "login_users",
+        {
+            "password_hash": "ALTER TABLE login_users ADD COLUMN password_hash TEXT DEFAULT ''",
+            "display_name": "ALTER TABLE login_users ADD COLUMN display_name TEXT",
+            "role": "ALTER TABLE login_users ADD COLUMN role TEXT DEFAULT 'owner'",
+            "status": "ALTER TABLE login_users ADD COLUMN status TEXT DEFAULT 'active'",
+            "default_securities_account_id": "ALTER TABLE login_users ADD COLUMN default_securities_account_id TEXT DEFAULT 'default'",
+            "must_change_credentials": "ALTER TABLE login_users ADD COLUMN must_change_credentials INTEGER DEFAULT 0",
+            "created_at": "ALTER TABLE login_users ADD COLUMN created_at TEXT",
+            "updated_at": "ALTER TABLE login_users ADD COLUMN updated_at TEXT",
+        },
+    )
+    await _add_missing_columns(
+        db,
+        "securities_accounts",
+        {
+            "login_user_id": "ALTER TABLE securities_accounts ADD COLUMN login_user_id TEXT DEFAULT 'admin'",
+            "name": "ALTER TABLE securities_accounts ADD COLUMN name TEXT DEFAULT ''",
+            "broker": "ALTER TABLE securities_accounts ADD COLUMN broker TEXT DEFAULT ''",
+            "account_no_mask": "ALTER TABLE securities_accounts ADD COLUMN account_no_mask TEXT DEFAULT ''",
+            "is_default": "ALTER TABLE securities_accounts ADD COLUMN is_default INTEGER DEFAULT 0",
+            "status": "ALTER TABLE securities_accounts ADD COLUMN status TEXT DEFAULT 'active'",
+            "notes": "ALTER TABLE securities_accounts ADD COLUMN notes TEXT DEFAULT ''",
+            "display_order": "ALTER TABLE securities_accounts ADD COLUMN display_order INTEGER DEFAULT 0",
+            "created_at": "ALTER TABLE securities_accounts ADD COLUMN created_at TEXT",
+            "updated_at": "ALTER TABLE securities_accounts ADD COLUMN updated_at TEXT",
+        },
+    )
+
+    legacy_user = await (
+        await db.execute("SELECT * FROM login_users WHERE id = ?", (LEGACY_LOGIN_USER_ID,))
+    ).fetchone()
+    admin_user = await (
+        await db.execute("SELECT * FROM login_users WHERE id = ?", (DEFAULT_LOGIN_USER_ID,))
+    ).fetchone()
+    if legacy_user and not admin_user:
+        await db.execute(
+            """
+            UPDATE login_users
+            SET id = ?,
+                username = ?,
+                password_hash = ?,
+                display_name = ?,
+                role = COALESCE(NULLIF(role, ''), 'owner'),
+                status = 'active',
+                default_securities_account_id = 'default',
+                must_change_credentials = 1,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (
+                DEFAULT_LOGIN_USER_ID,
+                DEFAULT_LOGIN_USERNAME,
+                _hash_password(DEFAULT_LOGIN_PASSWORD),
+                "管理员",
+                LEGACY_LOGIN_USER_ID,
+            ),
+        )
+    await db.execute(
+        """
+        INSERT OR IGNORE INTO login_users (
+            id, username, password_hash, display_name, role, default_securities_account_id, must_change_credentials
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            DEFAULT_LOGIN_USER_ID,
+            DEFAULT_LOGIN_USERNAME,
+            _hash_password(DEFAULT_LOGIN_PASSWORD),
+            "管理员",
+            "owner",
+            "default",
+            1,
+        ),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO accounts (id, name, broker) VALUES ('default', '默认账户', '')"
+    )
+    await db.execute(
+        """
+        INSERT OR IGNORE INTO securities_accounts (
+            id, login_user_id, name, broker, is_default, display_order, created_at
+        )
+        SELECT
+            id,
+            ?,
+            COALESCE(NULLIF(name, ''), id),
+            COALESCE(broker, ''),
+            CASE WHEN id = 'default' THEN 1 ELSE 0 END,
+            CASE WHEN id = 'default' THEN 0 ELSE 100 END,
+            COALESCE(created_at, datetime('now'))
+        FROM accounts
+        """,
+        (DEFAULT_LOGIN_USER_ID,),
+    )
+    await _migrate_legacy_login_user_refs(db)
+    await db.execute(
+        """
+        UPDATE login_users
+        SET default_securities_account_id = 'default'
+        WHERE id = ?
+          AND (
+            default_securities_account_id IS NULL
+            OR default_securities_account_id = ''
+            OR NOT EXISTS (
+                SELECT 1 FROM securities_accounts
+                WHERE id = login_users.default_securities_account_id
+                  AND login_user_id = login_users.id
+            )
+          )
+        """,
+        (DEFAULT_LOGIN_USER_ID,),
+    )
+    await db.commit()
+
+
+async def _migrate_legacy_login_user_refs(db):
+    """Assign legacy local-user rows to the admin login account."""
+    for table in ("login_sessions", "securities_accounts", "watchlist", "analysis_reports", "report_selection_sets"):
+        columns = await _table_columns(db, table)
+        if "login_user_id" not in columns:
+            continue
+        await db.execute(
+            f"""
+            UPDATE {table}
+            SET login_user_id = ?
+            WHERE login_user_id IS NULL OR login_user_id = '' OR login_user_id = ?
+            """,
+            (DEFAULT_LOGIN_USER_ID, LEGACY_LOGIN_USER_ID),
+        )
+    await db.execute("DELETE FROM login_users WHERE id = ?", (LEGACY_LOGIN_USER_ID,))
+
+
+async def ensure_daily_pnl_account_key(db):
+    """Migrate daily_pnl from global day/code rows to account-scoped rows."""
+    rows = await db.execute_fetchall("PRAGMA table_info(daily_pnl)")
+    if not rows:
+        return
+    columns = [row[1] for row in rows]
+    pk_columns = [row[1] for row in rows if row[5]]
+    if pk_columns == ["account_id", "date", "code6"]:
+        return
+
+    select_account = "COALESCE(account_id, 'default')" if "account_id" in columns else "'default'"
+    await db.execute("DROP TABLE IF EXISTS daily_pnl_account_key_backup")
+    await db.execute("ALTER TABLE daily_pnl RENAME TO daily_pnl_account_key_backup")
+    await db.executescript(
+        """
+        CREATE TABLE daily_pnl (
+            date TEXT NOT NULL,
+            account_id TEXT DEFAULT 'default',
+            code6 TEXT DEFAULT '',
+            total_assets REAL,
+            cash REAL,
+            market_value REAL,
+            realized_pnl REAL,
+            unrealized_pnl REAL,
+            total_pnl REAL,
+            total_pnl_pct REAL,
+            pnl REAL,
+            close_price REAL,
+            shares REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (account_id, date, code6)
+        );
+        """
+    )
+    await db.execute(
+        f"""
+        INSERT OR REPLACE INTO daily_pnl (
+            date, account_id, code6, total_assets, cash, market_value,
+            realized_pnl, unrealized_pnl, total_pnl, total_pnl_pct,
+            pnl, close_price, shares, created_at
+        )
+        SELECT
+            date,
+            {select_account},
+            COALESCE(code6, ''),
+            total_assets,
+            cash,
+            market_value,
+            realized_pnl,
+            unrealized_pnl,
+            total_pnl,
+            total_pnl_pct,
+            pnl,
+            close_price,
+            shares,
+            created_at
+        FROM daily_pnl_account_key_backup
+        WHERE date IS NOT NULL AND date != ''
+        """
+    )
+    await db.execute("DROP TABLE daily_pnl_account_key_backup")
+    await db.commit()
+
+
+async def ensure_login_user_scope_columns(db):
+    """Add login-user ownership to user-private research/worklist tables."""
+    watchlist_columns = await _table_columns(db, "watchlist")
+    if "login_user_id" not in watchlist_columns:
+        await db.execute("ALTER TABLE watchlist ADD COLUMN login_user_id TEXT DEFAULT 'admin'")
+    await ensure_watchlist_login_user_key(db)
+    await _migrate_legacy_login_user_refs(db)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_watchlist_login_user_sort ON watchlist(login_user_id, sort_order, added_at)"
+    )
+
+    report_columns = await _table_columns(db, "analysis_reports")
+    if "login_user_id" not in report_columns:
+        await db.execute("ALTER TABLE analysis_reports ADD COLUMN login_user_id TEXT DEFAULT 'admin'")
+    await _migrate_legacy_login_user_refs(db)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_analysis_reports_user_code_created ON analysis_reports(login_user_id, code, created_at DESC)"
+    )
+
+    selection_columns = await _table_columns(db, "report_selection_sets")
+    if "login_user_id" not in selection_columns:
+        await db.execute("ALTER TABLE report_selection_sets ADD COLUMN login_user_id TEXT DEFAULT 'admin'")
+    await _migrate_legacy_login_user_refs(db)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_report_selection_sets_user_expires ON report_selection_sets(login_user_id, expires_at)"
+    )
+    await db.commit()
+
+
+async def ensure_watchlist_login_user_key(db):
+    """Migrate watchlist uniqueness from global code to per-login-user code."""
+    rows = await db.execute_fetchall("PRAGMA table_info(watchlist)")
+    if not rows:
+        return
+    pk_columns = [row[1] for row in rows if row[5]]
+    indexes = await db.execute_fetchall("PRAGMA index_list(watchlist)")
+    has_user_code_unique = False
+    for index in indexes:
+        if not index[2]:
+            continue
+        info = await db.execute_fetchall(f"PRAGMA index_info({index[1]})")
+        columns = [item[2] for item in info]
+        if columns == ["login_user_id", "code"]:
+            has_user_code_unique = True
+            break
+    if pk_columns != ["code"] and has_user_code_unique:
+        return
+
+    await db.execute("DROP TABLE IF EXISTS watchlist_login_scope_backup")
+    await db.execute("ALTER TABLE watchlist RENAME TO watchlist_login_scope_backup")
+    await db.executescript(
+        """
+        CREATE TABLE watchlist (
+            code TEXT NOT NULL,
+            name TEXT,
+            group_name TEXT DEFAULT "默认",
+            sort_order INTEGER DEFAULT 0,
+            strategy_state TEXT DEFAULT "watch",
+            target_buy_price REAL,
+            target_sell_price REAL,
+            stop_loss_price REAL,
+            notes TEXT,
+            login_user_id TEXT DEFAULT 'admin',
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            strategy_state_updated_at TIMESTAMP,
+            UNIQUE(login_user_id, code)
+        );
+        """
+    )
+    backup_columns = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(watchlist_login_scope_backup)")}
+
+    def expr(column: str, fallback: str) -> str:
+        return column if column in backup_columns else fallback
+
+    await db.execute(
+        f"""
+        INSERT OR IGNORE INTO watchlist (
+            code, name, group_name, sort_order, strategy_state,
+            target_buy_price, target_sell_price, stop_loss_price, notes,
+            login_user_id, added_at, strategy_state_updated_at
+        )
+        SELECT
+            code,
+            {expr('name', "''")},
+            {expr('group_name', "'默认'")},
+            {expr('sort_order', '0')},
+            {expr('strategy_state', "'watch'")},
+            {expr('target_buy_price', 'NULL')},
+            {expr('target_sell_price', 'NULL')},
+            {expr('stop_loss_price', 'NULL')},
+            {expr('notes', "''")},
+            CASE
+                WHEN COALESCE({expr('login_user_id', "'admin'")}, 'admin') IN ('', 'local_owner') THEN 'admin'
+                ELSE COALESCE({expr('login_user_id', "'admin'")}, 'admin')
+            END,
+            {expr('added_at', "datetime('now')")},
+            {expr('strategy_state_updated_at', 'NULL')}
+        FROM watchlist_login_scope_backup
+        WHERE code IS NOT NULL AND code != ''
+        """
+    )
+    await db.execute("DROP TABLE watchlist_login_scope_backup")
+    await db.commit()
+
+
+async def ensure_securities_account_alias_views(db):
+    """Expose securities-account semantics without renaming legacy columns."""
+    await db.executescript(
+        """
+        CREATE VIEW IF NOT EXISTS portfolio_securities_view AS
+        SELECT *, account_id AS securities_account_id FROM portfolio;
+
+        CREATE VIEW IF NOT EXISTS trades_securities_view AS
+        SELECT *, account_id AS securities_account_id FROM trades;
+
+        CREATE VIEW IF NOT EXISTS cash_ledger_securities_view AS
+        SELECT *, account_id AS securities_account_id FROM cash_ledger;
+        """
+    )
+    await db.commit()
+
+
 async def init_db():
     """初始化数据库，创建所有表"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1628,9 +2252,14 @@ async def init_db():
         await ensure_batch_runtime_ops(db)
         await ensure_batch_worker_heartbeats_table(db)
         await ensure_holding_daily_review_tables(db)
+        await ensure_identity_tables(db)
+        await ensure_login_user_scope_columns(db)
         await ensure_portfolio_account_key(db)
+        await ensure_daily_pnl_account_key(db)
+        await ensure_securities_account_alias_views(db)
         await ensure_position_plan_adoption_columns(db)
         await ensure_position_plan_market_context_columns(db)
+        await ensure_position_plan_item_adoption_columns(db)
         await db.execute("INSERT OR IGNORE INTO accounts (id, name) VALUES ('default', '默认账户')")
         await db.commit()
     return True

@@ -1,16 +1,71 @@
 {% extends "base.html" %}
-{% block title %}AI报告库 — 炒股小牛马{% endblock %}
+{% block title %}AI投研中心 — 炒股小牛马{% endblock %}
 
 {% block content %}
 <div class="report-library" id="reportLibrary">
     <aside class="report-library-filters">
         <div class="library-panel-title">
             <div>
-                <h2>AI报告库</h2>
+                <h2>AI投研中心</h2>
                 <span id="reportLibraryCount">0 份</span>
             </div>
             <button class="btn btn-sm" onclick="loadReportLibrary()">刷新</button>
         </div>
+        <div class="research-sidebar-tabs" id="researchSidebarTabs">
+            <button class="active" type="button" data-sidebar-tab="stocks" onclick="switchResearchSidebarTab('stocks')">股票选择</button>
+            <button type="button" data-sidebar-tab="reports" onclick="switchResearchSidebarTab('reports')">报告筛选</button>
+        </div>
+        <div class="research-sidebar-panel active" id="researchStockPickerPanel" data-sidebar-panel="stocks">
+            <label class="library-filter">
+                <span>搜索股票</span>
+                <input id="researchStockSearch" class="form-input" placeholder="股票名称 / 代码" oninput="filterResearchStockPicker(this.value)">
+            </label>
+            <div class="library-filter">
+                <span>交易市场</span>
+                <div class="signal-filter-grid" id="researchStockMarketFilters" aria-label="股票选择市场筛选">
+                    <button type="button" class="signal-filter-chip active" data-market="tradable" onclick="setResearchStockMarketFilter('tradable')">可交易</button>
+                    <button type="button" class="signal-filter-chip" data-market="all" onclick="setResearchStockMarketFilter('all')">全部</button>
+                    <button type="button" class="signal-filter-chip" data-market="main" onclick="setResearchStockMarketFilter('main')">主板</button>
+                    <button type="button" class="signal-filter-chip" data-market="gem" onclick="setResearchStockMarketFilter('gem')">创业板</button>
+                    <button type="button" class="signal-filter-chip" data-market="star" onclick="setResearchStockMarketFilter('star')">科创板</button>
+                    <button type="button" class="signal-filter-chip" data-market="bse" onclick="setResearchStockMarketFilter('bse')">北交所</button>
+                </div>
+            </div>
+            <div class="library-filter">
+                <span>上次报告信号</span>
+                <div class="signal-filter-grid" id="researchStockSignalFilters" aria-label="股票选择信号筛选">
+                    <button type="button" class="signal-filter-chip active" data-signal="" onclick="toggleResearchStockSignalFilter('')">全部</button>
+                    <button type="button" class="signal-filter-chip" data-signal="STRONG_BUY" onclick="toggleResearchStockSignalFilter('STRONG_BUY')">强烈买入</button>
+                    <button type="button" class="signal-filter-chip" data-signal="BUY" onclick="toggleResearchStockSignalFilter('BUY')">买入</button>
+                    <button type="button" class="signal-filter-chip" data-signal="OVERWEIGHT" onclick="toggleResearchStockSignalFilter('OVERWEIGHT')">增持</button>
+                    <button type="button" class="signal-filter-chip" data-signal="HOLD" onclick="toggleResearchStockSignalFilter('HOLD')">持有</button>
+                    <button type="button" class="signal-filter-chip" data-signal="UNDERWEIGHT" onclick="toggleResearchStockSignalFilter('UNDERWEIGHT')">减持</button>
+                    <button type="button" class="signal-filter-chip" data-signal="SELL" onclick="toggleResearchStockSignalFilter('SELL')">卖出</button>
+                    <button type="button" class="signal-filter-chip" data-signal="STRONG_SELL" onclick="toggleResearchStockSignalFilter('STRONG_SELL')">强烈卖出</button>
+                    <button type="button" class="signal-filter-chip" data-signal="NO_REPORT" onclick="toggleResearchStockSignalFilter('NO_REPORT')">无报告</button>
+                </div>
+            </div>
+            <div class="library-action-row">
+                <button class="btn btn-sm" type="button" onclick="selectVisibleResearchStocks()">全选当前</button>
+                <button class="btn btn-sm" type="button" onclick="clearResearchStockSelection()">清空选择</button>
+            </div>
+            <div class="library-selection-summary">
+                <span>已选</span>
+                <strong id="selectedResearchStockCount">0</strong>
+                <span>只股票</span>
+            </div>
+            <div class="library-actions">
+                <button class="btn btn-primary" type="button" onclick="openResearchStockTaskModal('report_generation')">生成所选报告</button>
+                <div class="library-action-row">
+                    <button class="btn" type="button" onclick="openResearchStockTaskModal('data_prefetch')">预取七层数据</button>
+                    <button class="btn" type="button" onclick="openResearchStockTaskModal('position_plan')">生成组合研究</button>
+                </div>
+            </div>
+            <div class="research-stock-list" id="researchStockList">
+                <div class="library-empty-state">正在加载自选股...</div>
+            </div>
+        </div>
+        <div class="research-sidebar-panel" id="reportFilterPanel" data-sidebar-panel="reports">
         <div class="library-filter-stack">
             <label class="library-filter">
                 <span>搜索</span>
@@ -78,20 +133,33 @@
                 <button class="btn" onclick="exportReportLibrary('json')">导出 JSON</button>
             </div>
         </div>
+        </div>
     </aside>
 
     <main class="report-library-main">
         <div class="library-toolbar">
             <div>
-                <h3 id="reportTabTitle">报告列表</h3>
+                <h3 id="reportTabTitle">单股报告</h3>
                 <p id="reportTabHint">批量报告完成后在这里筛选、比较、勾选，并生成组合级多角色组合研究方案。</p>
             </div>
             <div class="library-tabs" id="reportLibraryTabs">
-                <button class="active" data-tab="reports" onclick="switchReportTab('reports')">报告</button>
-                <button data-tab="snapshots" onclick="switchReportTab('snapshots')">数据快照</button>
+                <button class="active" data-tab="reports" onclick="switchReportTab('reports')">单股报告</button>
+                <button data-tab="snapshots" onclick="switchReportTab('snapshots')">七层数据</button>
                 <button data-tab="plans" onclick="switchReportTab('plans')">组合研究</button>
                 <button data-tab="holding-reviews" onclick="switchReportTab('holding-reviews')">每日决策</button>
-                <button data-tab="jobs" onclick="switchReportTab('jobs')">批量任务</button>
+                <button data-tab="jobs" onclick="switchReportTab('jobs')">任务中心</button>
+            </div>
+        </div>
+        <div class="selection-intake-banner" id="selectionIntakeBanner" style="display:none;">
+            <div class="selection-intake-copy">
+                <strong>来自智能盯盘的选择集</strong>
+                <span id="selectionIntakeText">等待读取...</span>
+            </div>
+            <div class="library-action-row">
+                <button class="btn btn-sm btn-primary" type="button" onclick="openSelectionTaskModal('report_generation')">导入并生成报告</button>
+                <button class="btn btn-sm" type="button" onclick="openSelectionTaskModal('data_prefetch')">导入并预取数据</button>
+                <button class="btn btn-sm" type="button" onclick="openSelectionTaskModal('position_plan')">导入并组合研究</button>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="clearSelectionIntake()">忽略</button>
             </div>
         </div>
         <div class="report-table-wrap report-tab-panel active" id="tab-reports">
@@ -138,7 +206,13 @@
                 </tbody>
             </table>
         </div>
-        <div class="report-table-wrap report-tab-panel" id="tab-plans">
+        <div class="report-table-wrap report-tab-panel portfolio-research-domain-panel" id="tab-plans">
+            <div class="domain-panel-heading">
+                <div>
+                    <strong>组合研究</strong>
+                    <span>面向候选池和多报告集合，生成长期可复盘的建仓/调仓研究资产。</span>
+                </div>
+            </div>
             <table class="report-library-table">
                 <thead>
                     <tr>
@@ -158,7 +232,67 @@
                 </tbody>
             </table>
         </div>
-        <div class="report-table-wrap report-tab-panel" id="tab-holding-reviews">
+        <div class="report-table-wrap report-tab-panel daily-decision-domain-panel" id="tab-holding-reviews">
+            <div class="domain-panel-heading">
+                <div>
+                    <strong>每日决策</strong>
+                    <span>面向真实账户、今日持仓和次日执行动作，逐条建议可标记执行状态。</span>
+                </div>
+            </div>
+            <div class="holding-review-card daily-decision-builder">
+                <div class="card-header portfolio-card-header">
+                    <div>
+                        <div class="card-title">生成每日 AI 决策报告</div>
+                        <div class="cash-source-line">基于当前真实仓位、可用资金、持仓盈亏、候选池和市场环境生成次日交易决策口径。</div>
+                    </div>
+                    <button class="btn btn-sm btn-ghost" type="button" onclick="loadHoldingReviews()">刷新历史</button>
+                </div>
+                <div class="daily-decision-policy-grid">
+                    <div class="daily-decision-policy-card">
+                        <strong>默认仅分析当前持仓</strong>
+                        <span>持仓股会先重跑最新报告，再进入每日决策。</span>
+                    </div>
+                    <div class="daily-decision-policy-card">
+                        <strong>持仓股默认重跑并刷新七层快照</strong>
+                        <span>补跑前自动刷新行情、资金、新闻和基本面等七层数据。</span>
+                    </div>
+                </div>
+                <div class="daily-decision-option-row">
+                    <label class="daily-decision-checkbox">
+                        <input type="checkbox" id="dailyDecisionForceCandidates">
+                        <span>
+                            <strong>强制重跑候选股评估报告</strong>
+                            <small>仅当选择上次报告信号候选时生效。</small>
+                        </span>
+                    </label>
+                </div>
+                <div class="library-filter daily-decision-signal-filter">
+                    <div class="daily-decision-section-title">
+                        <span>按上次报告信号加入候选</span>
+                        <small>未选择时只分析当前持仓。</small>
+                    </div>
+                    <div class="signal-filter-grid" id="dailyDecisionSignalFilter">
+                        <button type="button" class="signal-filter-chip" data-daily-signal="STRONG_BUY">强烈买入</button>
+                        <button type="button" class="signal-filter-chip" data-daily-signal="BUY">买入</button>
+                        <button type="button" class="signal-filter-chip" data-daily-signal="OVERWEIGHT">增持</button>
+                        <button type="button" class="signal-filter-chip" data-daily-signal="HOLD">持有</button>
+                        <button type="button" class="signal-filter-chip" data-daily-signal="UNDERWEIGHT">减持</button>
+                        <button type="button" class="signal-filter-chip" data-daily-signal="SELL">卖出</button>
+                        <button type="button" class="signal-filter-chip" data-daily-signal="STRONG_SELL">强烈卖出</button>
+                        <button class="btn btn-sm btn-ghost" id="dailyDecisionClearSignals" type="button">清空候选</button>
+                    </div>
+                    <div class="cash-source-line" id="dailyDecisionSignalCount">
+                        未选择候选信号，仅分析当前持仓
+                    </div>
+                </div>
+                <div class="library-action-row daily-decision-actions">
+                    <button class="btn btn-sm btn-primary" type="button" onclick="runDailyDecisionReport()">生成每日决策报告</button>
+                    <button class="btn btn-sm" type="button" onclick="loadHoldingReviews()">刷新列表</button>
+                </div>
+                <div id="dailyDecisionRunStatus" class="holding-review-summary daily-decision-status">
+                    <div class="empty-state"><p>默认仅分析当前持仓，并先重跑持仓股最新报告；如需候选池，点击上方信号按钮后，会从自选股中按最新报告信号自动加入候选。</p></div>
+                </div>
+            </div>
             <div class="library-action-row batch-job-toolbar">
                 <button class="btn btn-sm" type="button" onclick="loadHoldingReviews()">刷新日更</button>
             </div>
@@ -303,9 +437,50 @@
         </div>
     </div>
 </div>
+
+<div class="modal-overlay" id="researchStockTaskModal">
+    <div class="modal-box" style="max-width:560px;">
+        <div class="modal-title">用所选股票创建投研任务</div>
+        <div class="modal-body">
+            <div class="selection-task-summary" id="researchStockTaskSummary">等待选择股票...</div>
+            <label class="library-filter">
+                <span>任务类型</span>
+                <select id="researchStockTaskTypeInput" class="form-input">
+                    <option value="report_generation">批量生成单股报告</option>
+                    <option value="data_prefetch">预取七层数据</option>
+                    <option value="position_plan">生成组合研究</option>
+                </select>
+            </label>
+            <label class="library-filter">
+                <span>分析深度</span>
+                <select id="researchStockDepthInput" class="form-input">
+                    <option value="quick">快速</option>
+                    <option value="standard" selected>标准</option>
+                    <option value="deep">深度</option>
+                </select>
+            </label>
+            <label class="library-filter">
+                <span>模型模式</span>
+                <select id="researchStockModelModeInput" class="form-input">
+                    <option value="economy">经济</option>
+                    <option value="balanced" selected>均衡</option>
+                    <option value="flagship">旗舰</option>
+                </select>
+            </label>
+            <label class="mini-check-row">
+                <input type="checkbox" id="researchStockForceReanalysis">
+                <span>强制重新分析，最近已有报告也重跑</span>
+            </label>
+        </div>
+        <div class="modal-actions">
+            <button class="btn" onclick="closeResearchStockTaskModal()">取消</button>
+            <button class="btn btn-primary" onclick="submitResearchStockTaskModal()">创建任务</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/js/ai-task-client.js?v=2.9.2"></script>
-<script src="/static/js/reports.js?v=2.9.13-holding-review-refresh-flow"></script>
+<script src="/static/js/reports.js?v=2.9.24-research-center-5"></script>
 {% endblock %}

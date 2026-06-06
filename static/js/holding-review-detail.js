@@ -6,8 +6,8 @@
 
   document.addEventListener('DOMContentLoaded', loadHoldingReviewDetail);
 
-  async function requestJson(url) {
-    const resp = await fetch(url);
+  async function requestJson(url, options) {
+    const resp = await fetch(url, options || {});
     const text = await resp.text();
     const data = text ? JSON.parse(text) : {};
     if (!resp.ok) throw new Error(data.detail || data.message || resp.statusText);
@@ -46,6 +46,73 @@
     }[value] || value || '--';
   }
 
+  function dailyDecisionActionLabel(value) {
+    return {
+      hold: '持有',
+      reduce: '减仓',
+      sell: '卖出',
+      add: '加仓',
+      forbid_buy: '禁止买入',
+      watch: '观察',
+      review: '复核',
+      take_profit: '止盈观察',
+      candidate: '候选观察',
+      wait: '等待',
+    }[String(value || '').toLowerCase()] || actionLabel(value);
+  }
+
+  function decisionStatusLabel(value) {
+    return {
+      executed: '已执行',
+      not_executed: '未执行',
+      ignored: '忽略',
+      watching: '观察中',
+    }[String(value || '').toLowerCase()] || value || '未执行';
+  }
+
+  function decisionStatusClass(value) {
+    const clean = String(value || 'not_executed').toLowerCase();
+    if (clean === 'executed') return 'signal-buy';
+    if (clean === 'ignored') return 'signal-sell';
+    return 'signal-hold';
+  }
+
+  function decisionActions(item) {
+    const id = Number(item.id || 0);
+    if (!id) return '<span class="muted">--</span>';
+    return `<div class="inline-action-group">
+      <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus(${id}, 'executed')">已执行</button>
+      <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus(${id}, 'watching')">观察中</button>
+      <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus(${id}, 'ignored')">忽略</button>
+    </div>`;
+  }
+
+  function executionClassLabel(value) {
+    return {
+      full_executed: '完全执行',
+      partial_executed: '部分执行',
+      over_executed: '超额执行',
+      not_executed: '未执行',
+      reverse_executed: '反向执行',
+      mixed_execution: '混合执行',
+      complied_no_trade: '遵守不交易',
+      discretionary_trade: '自主交易',
+      violated: '违反建议',
+    }[String(value || '').toLowerCase()] || value || '--';
+  }
+
+  function renderExecutionCell(execution) {
+    if (!execution) return '<span class="muted">--</span>';
+    const ids = (execution.matched_trade_ids || []).map(id => `#${Number(id)}`).join(' ');
+    return `${escapeHtml(execution.label || executionClassLabel(execution.classification))}<br><span class="muted">${formatNum(execution.matched_amount)} ${escapeHtml(ids)}</span>`;
+  }
+
+  function renderExecutionDelta(execution) {
+    if (!execution) return '<span class="muted">--</span>';
+    const value = Number(execution.deviation_amount || 0);
+    return `<span class="${priceClass(value)}">${formatNum(value)}</span>`;
+  }
+
   function severityLabel(value) {
     return { critical: '高风险', warning: '提醒', info: '信息' }[value] || value || '--';
   }
@@ -74,6 +141,7 @@
         requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/items`),
         requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/flags`),
       ]);
+      const execution = await loadDailyDecisionExecution(reviewId);
       const planTitle = review.tomorrow_plan?.title || '每日 AI 决策报告';
       if (title) title.textContent = `${planTitle} ${review.date || ''}`;
       if (meta) {
@@ -81,7 +149,7 @@
       }
       if (markdownLink) markdownLink.href = `/api/daily-decision-reports/${encodeURIComponent(reviewId)}/markdown`;
       renderAsset(review.asset_snapshot || {});
-      renderItems(items.items || []);
+      renderItems(items.items || [], execution);
       renderFlags(flags.flags || []);
       renderRoles(review.tomorrow_plan?.role_discussion || []);
       renderBattlePlan(review.tomorrow_plan?.battle_plan || {});
@@ -104,7 +172,18 @@
     `;
   }
 
-  function renderItems(items) {
+  async function loadDailyDecisionExecution(id) {
+    try {
+      const data = await requestJson(`/api/performance/suggestion-execution?source=daily&source_id=${encodeURIComponent(id)}&limit=500`);
+      const map = new Map();
+      (data.rows || []).forEach(row => map.set(Number(row.item_id), row.execution || {}));
+      return map;
+    } catch (_err) {
+      return new Map();
+    }
+  }
+
+  function renderItems(items, executionByItem = new Map()) {
     const holdings = items.filter(item => item.item_type === 'holding');
     const candidates = items.filter(item => item.item_type === 'candidate');
     const holdingBody = document.getElementById('holdingReviewHoldings');
@@ -118,8 +197,12 @@
         <td class="${priceClass(item.change_pct)}">${formatNum(item.change_pct)}%</td>
         <td class="${priceClass(item.holding_pnl)}">${formatNum(item.holding_pnl)} (${formatNum(item.holding_pnl_pct)}%)</td>
         <td>${escapeHtml(signalLabel(item.latest_signal))}</td>
-        <td>${escapeHtml(actionLabel(item.action_hint))}</td>
-      </tr>`).join('') : '<tr><td colspan="8" class="empty-row">暂无持仓</td></tr>';
+        <td>${escapeHtml(dailyDecisionActionLabel(item.decision_action || item.action_hint))}</td>
+        <td><span class="report-signal ${decisionStatusClass(item.decision_status)}">${escapeHtml(decisionStatusLabel(item.decision_status))}</span></td>
+        <td>${renderExecutionCell(executionByItem.get(Number(item.id)))}</td>
+        <td>${renderExecutionDelta(executionByItem.get(Number(item.id)))}</td>
+        <td>${decisionActions(item)}</td>
+      </tr>`).join('') : '<tr><td colspan="12" class="empty-row">暂无持仓</td></tr>';
     }
     if (candidateBody) {
       candidateBody.innerHTML = candidates.length ? candidates.map(item => `<tr>
@@ -128,8 +211,27 @@
         <td>${formatNum(item.price)}</td>
         <td class="${priceClass(item.change_pct)}">${formatNum(item.change_pct)}%</td>
         <td>${escapeHtml(signalLabel(item.latest_signal))}</td>
+        <td>${escapeHtml(dailyDecisionActionLabel(item.decision_action || item.action_hint))}</td>
+        <td><span class="report-signal ${decisionStatusClass(item.decision_status)}">${escapeHtml(decisionStatusLabel(item.decision_status))}</span></td>
+        <td>${renderExecutionCell(executionByItem.get(Number(item.id)))}</td>
+        <td>${renderExecutionDelta(executionByItem.get(Number(item.id)))}</td>
+        <td>${decisionActions(item)}</td>
         <td>${escapeHtml(item.reason || '')}</td>
-      </tr>`).join('') : '<tr><td colspan="6" class="empty-row">未加入候选池</td></tr>';
+      </tr>`).join('') : '<tr><td colspan="11" class="empty-row">未加入候选池</td></tr>';
+    }
+  }
+
+  async function updateDailyDecisionItemStatus(itemId, status) {
+    if (!reviewId || !itemId) return;
+    try {
+      await requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/items/${Number(itemId)}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      await loadHoldingReviewDetail();
+    } catch (err) {
+      alert(`更新每日决策状态失败：${err.message}`);
     }
   }
 
@@ -198,4 +300,5 @@
   }
 
   window.loadHoldingReviewDetail = loadHoldingReviewDetail;
+  window.updateDailyDecisionItemStatus = updateDailyDecisionItemStatus;
 })();

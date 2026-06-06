@@ -13,6 +13,7 @@ ANOMALY_THRESHOLDS = {
     "change_pct_up": 5.0,      # 涨幅异动阈值 %
     "change_pct_down": -5.0,   # 跌幅异动阈值 %
     "volume_ratio": 3.0,       # 放量异动倍数（相对近期）
+    "northbound_yi": 5.0,      # 北向资金净流入/流出阈值（亿元）
 }
 
 
@@ -20,6 +21,28 @@ def _get_db():
     db = sqlite3.connect(str(DB_PATH))
     db.row_factory = sqlite3.Row
     return db
+
+
+def _safe_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_anomaly_thresholds(db) -> dict:
+    rows = db.execute(
+        "SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
+        ("change_threshold", "volume_threshold", "northbound_threshold"),
+    ).fetchall()
+    settings = {row["key"]: row["value"] for row in rows}
+    change = abs(_safe_float(settings.get("change_threshold"), ANOMALY_THRESHOLDS["change_pct_up"]))
+    return {
+        "change_pct_up": change,
+        "change_pct_down": -change,
+        "volume_ratio": _safe_float(settings.get("volume_threshold"), ANOMALY_THRESHOLDS["volume_ratio"]),
+        "northbound_yi": _safe_float(settings.get("northbound_threshold"), ANOMALY_THRESHOLDS["northbound_yi"]),
+    }
 
 
 def _get_all_watchlist_codes():
@@ -127,14 +150,15 @@ async def _check_anomalies():
     anomalies = []
     db = _get_db()
     try:
+        thresholds = _get_anomaly_thresholds(db)
         # ── 北向资金异动检测 ──
         try:
             from data.signal import get_northbound
             nb_data = await get_northbound()
             if nb_data:
                 total_net = (nb_data.get("sh_net", 0) or 0) + (nb_data.get("sz_net", 0) or 0)
-                # total_net 单位: 万元, 阈值 100 亿 = 1000000 万
-                if abs(total_net) >= 1000000:
+                # total_net 单位: 万元；设置项单位是亿元。
+                if abs(total_net) >= thresholds["northbound_yi"] * 10000:
                     direction = "流入" if total_net >= 0 else "流出"
                     nb_desc = f"北向资金大幅{direction}: {total_net/10000:.1f}亿元"
                     if not _has_today_anomaly(db, "000000", "northbound_active"):
@@ -168,12 +192,12 @@ async def _check_anomalies():
             severity = "warning"
 
             # 涨跌幅异动
-            if change_pct >= ANOMALY_THRESHOLDS["change_pct_up"]:
+            if change_pct >= thresholds["change_pct_up"]:
                 anomaly_type = "涨幅异动"
                 description = f"{name}({code}) 涨幅 +{change_pct:.2f}%，当前价 {price:.2f}"
                 severity = "warning"
             # 跌幅异动
-            elif change_pct <= ANOMALY_THRESHOLDS["change_pct_down"]:
+            elif change_pct <= thresholds["change_pct_down"]:
                 anomaly_type = "跌幅异动"
                 description = f"{name}({code}) 跌幅 {change_pct:.2f}%，当前价 {price:.2f}"
                 severity = "warning"
@@ -201,7 +225,7 @@ async def _check_anomalies():
                 avg_vol = await asyncio.to_thread(_get_recent_avg_volume, code)
                 if avg_vol > 0:
                     vol_ratio = volume / avg_vol
-                    if vol_ratio >= ANOMALY_THRESHOLDS["volume_ratio"]:
+                    if vol_ratio >= thresholds["volume_ratio"]:
                         vol_desc = f"{name}({code}) 成交量 {volume}手，近5日均量 {avg_vol:.0f}手，倍率 {vol_ratio:.1f}x"
                         if not _has_today_anomaly(db, code, "volume_spike"):
                             db.execute(

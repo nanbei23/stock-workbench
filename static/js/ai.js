@@ -1,5 +1,5 @@
 /**
- * AI分析台 — v2 重构版
+ * 智能盯盘 — v2 重构版
  * 左栏:自选股卡片(单选/批量选) | 中栏:指数+控制+卡通/进度/报告 | 右栏:异动+历史
  */
 
@@ -25,7 +25,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadReports(),
         loadIndices(),
         loadTaskCenter(),
-        loadBatchResearchJobs(),
         loadReportQuality(),
         loadAiReadiness(),
         loadAIMarketPermissions(),
@@ -36,7 +35,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     initIdleStages();
     pollQueueStatus();
     setInterval(pollQueueStatus, 10000);
-    setInterval(loadBatchResearchJobs, 5000);
     pollAnomalies();
     setInterval(pollAnomalies, 30000);
     restoreActiveTask();
@@ -56,7 +54,6 @@ let reportCodes = new Set();
 let aiStockCache = [];
 let aiStockSearchText = '';
 let aiMarketFilter = 'tradable';
-const selectedBatchCodes = new Set();
 const selectedLastReportSignals = new Set();
 
 const DEPTH_CONFIG = {
@@ -184,7 +181,6 @@ function renderAIStockCards() {
         if (!container) return;
         if (!stocks.length) {
             container.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted)">暂无符合条件的自选股</div>';
-            updateBatchBar();
             return;
         }
         container.innerHTML = stocks.map(s => {
@@ -202,11 +198,9 @@ function renderAIStockCards() {
             const lastSignalClass = lastSignal.toLowerCase().replace(/_/g, '-');
             const lastSignalLabel = lastSignal === 'NO_REPORT' ? '无报告' : (SIG_LABEL[lastSignal] || lastSignal);
             const market = stockMarketInfo(s.code);
-            const checked = selectedBatchCodes.has(String(s.code)) ? 'checked' : '';
 
             return `<div class="ai-stock-card" data-code="${escapeAttr(s.code)}" onclick="selectCard('${escapeAttr(s.code)}')">
                 <div class="ai-stock-card-inner">
-                    <div class="ai-sc-check" onclick="event.stopPropagation()"><input type="checkbox" data-code="${escapeAttr(s.code)}" ${checked} onchange="setBatchSelection('${escapeAttr(s.code)}', this.checked)"></div>
                     <div class="sc-left">
                         <div><div class="sc-name">${escapeHtml(s.name||s.code)}</div><div class="sc-code">${escapeHtml(s.code)}</div></div>
                         <div class="sc-last-signal report-signal signal-${escapeHtml(lastSignalClass)}">上次 ${escapeHtml(lastSignalLabel)} · ${escapeHtml(market.label)}</div>
@@ -221,7 +215,6 @@ function renderAIStockCards() {
                 <div class="stock-card-bar ${barCls}"></div>
             </div>`;
         }).join('');
-        updateBatchBar();
 }
 
 function normalizeAIStockSearch(value) {
@@ -308,77 +301,8 @@ function selectCard(code) {
     }
 }
 
-function getSelectedCodes() { return Array.from(selectedBatchCodes); }
-function visibleAIStocks() {
-    const query = normalizeAIStockSearch(aiStockSearchText);
-    return aiStockCache.filter(stock => {
-        const signal = getStockLastSignal(stock);
-        const signalOk = !selectedLastReportSignals.size || selectedLastReportSignals.has(signal);
-        return signalOk && aiStockMatchesSearch(stock, query) && filterByTradingMarket(stock, aiMarketFilter);
-    });
-}
-function ensureBatchMode() {
-    const list = document.getElementById('aiStockList');
-    const btn = document.getElementById('batchToggleBtn');
-    list?.classList.add('batch-active');
-    btn?.classList.add('active');
-}
-function setBatchSelection(code, checked) {
-    if (checked) selectedBatchCodes.add(String(code));
-    else selectedBatchCodes.delete(String(code));
-    updateBatchBar();
-}
-function updateBatchBar() {
-    const n = getSelectedCodes().length;
-    const bar = document.getElementById('batchBar');
-    document.getElementById('batchCount').textContent = `已选 ${n} 只`;
-    bar.style.display = n > 0 ? '' : 'none';
-}
-function clearSelection() {
-    selectedBatchCodes.clear();
-    document.querySelectorAll('.ai-sc-check input').forEach(cb => cb.checked = false);
-    updateBatchBar();
-    document.getElementById('aiStockList')?.classList.remove('batch-active');
-    const btn = document.getElementById('batchToggleBtn');
-    if (btn) btn.classList.remove('active');
-}
-function selectVisibleAIStocks() {
-    ensureBatchMode();
-    visibleAIStocks().forEach(stock => selectedBatchCodes.add(String(stock.code)));
-    renderAIStockCards();
-}
-function selectAIStocksByLastSignals() {
-    return selectVisibleAIStocks();
-}
-function toggleBatchMode() {
-    const list = document.getElementById('aiStockList');
-    const btn = document.getElementById('batchToggleBtn');
-    const active = list.classList.toggle('batch-active');
-    btn.classList.toggle('active', active);
-    if (!active) clearSelection();
-}
-
 async function batchAnalyze() {
-    const codes = getSelectedCodes().filter(code => window.StockMarketPermissions?.isAllowed?.(code) ?? true);
-    if (!codes.length) return alert('请至少选择一只股票');
-    try {
-        const dc = getActiveDepthConfig();
-        if (!dc) return;
-        const resp = await aiTaskClient().batchReport({
-            codes,
-            depth: currentDepth,
-            model_mode: currentModelMode,
-            debate_rounds: dc.debate_rounds,
-            risk_rounds: dc.risk_rounds,
-            batch_size: 2
-        });
-        showToast(`后台批量报告任务已创建：${resp.job_id}`, 'success');
-        clearSelection();
-        pollQueueStatus();
-        loadTaskCenter();
-    } catch (e) {
-        showToast('批量提交失败: ' + e.message, 'error');
-    }
+    window.location.href = '/reports?sidebar=stocks&tab=jobs';
 }
 
 // === 指数 ===
@@ -471,9 +395,9 @@ function getActiveDepthConfig() {
 }
 
 function getBatchResearchOptions() {
-    const depth = document.getElementById('batchDepthSelect')?.value || 'standard';
-    const modelMode = document.getElementById('batchModelModeSelect')?.value || 'balanced';
-    const forceReanalysis = !!document.getElementById('batchForceReanalysis')?.checked;
+    const depth = currentDepth || 'standard';
+    const modelMode = currentModelMode || 'balanced';
+    const forceReanalysis = false;
     const modelTier = modelMode === 'economy' ? 'quick' : (depth === 'quick' ? 'quick' : 'deep');
     const depthLabel = { quick: '快速', standard: '标准', deep: '深度' };
     const modelModeLabel = { economy: '经济', balanced: '均衡', flagship: '旗舰' };
@@ -689,8 +613,6 @@ function showReport(result, elapsed) {
             fce.style.display = 'none';
         }
     }
-    const cb = document.getElementById('btnGenCondOrder');
-    if(cb) cb.style.display = (['STRONG_BUY','BUY','OVERWEIGHT','STRONG_SELL','SELL','UNDERWEIGHT'].includes(sig))?'inline-block':'none';
     const ft = document.querySelector('.report-nav .nav-item[data-target]');
     if(ft) switchReportTab(ft, ft.dataset.target);
 }
@@ -1251,35 +1173,11 @@ function renderAnomalies(a) {
     }).join('');
 }
 
-// === gbrain + 条件单 ===
+// === gbrain ===
 async function saveToGbrain() {
     const r=window._currentResult; if(!r) return alert('\u6ca1\u6709\u7ed3\u679c');
     const slug=`deep-analysis/${r.code||'x'}-${new Date().toISOString().slice(0,10)}`; const title=`${r.name||''} ${r.code||''} 深度分析`;
     try { const d=await aiTaskClient().saveToGbrain({slug,title,content:r.reasoning||''}); alert(d.status==='ok'?'\u5df2\u5b58\u5165: '+slug:'\u5931\u8d25'); } catch(e){alert('\u5931\u8d25: '+e.message);}
-}
-async function generateCondOrder() {
-    const r=window._currentResult;
-    if(!r?._reportId) return showToast('请先从历史报告打开一份可追溯报告','error');
-    try {
-        const draftResp = await aiTaskClient().conditionalOrderDraft({report_id:r._reportId, shares:r.shares||0});
-        const d = draftResp.draft;
-        let backtestText = '历史回测：暂无样本';
-        try {
-            const bt = await aiPost('/api/ai/conditional-order/backtest', {
-                code: d.code,
-                condition_type: d.condition_type,
-                target_price: d.target_price,
-                days: 90
-            });
-            backtestText = `历史回测：${bt.sample_days}日样本，触发${bt.trigger_count}次，首触发后收益${bt.post_trigger_return_pct == null ? '无样本' : bt.post_trigger_return_pct + '%'}`;
-        } catch(e) {}
-        const warningText = (d.warnings||[]).map(x => `- ${x}`).join('\n');
-        const message = `确认写入条件单？\n\n${d.name||d.code} ${d.code}\n方向：${d.action === 'buy' ? '买入' : '卖出'}\n触发：${d.condition_type} ${d.target_price}\n数量：${d.shares || 0}股\n来源报告：#${d.source_report_id}\n${backtestText}\n\n${warningText}`;
-        if (!confirm(message)) return;
-        const resp = await aiTaskClient().confirmConditionalOrderDraft(d);
-        if(resp.id||resp.success) showToast(resp.message||`条件单已创建: ${d.code}`,'success');
-        else showToast('失败','error');
-    } catch(e){showToast(e.message,'error');}
 }
 function downloadPdf() { const r=window._currentResult; if(!r?._reportId) return alert('\u8bf7\u9009\u62e9\u62a5\u544a'); window.open(`/api/ai/report/${r._reportId}/pdf`,'_blank'); }
 
@@ -1389,93 +1287,12 @@ const BATCH_STATUS_LABELS = {
 };
 
 async function loadBatchResearchJobs() {
-    const el = document.getElementById('batchResearchPanel');
-    if (!el) return;
-    try {
-        const data = await aiTaskClient().batchResearchJobs({ limit: '10' });
-        const jobs = data.jobs || [];
-        if (!jobs.length) {
-            el.innerHTML = '<div class="empty-row">暂无批量任务</div>';
-            return;
-        }
-        el.innerHTML = jobs.map(job => {
-            const total = Number(job.total_count || 0);
-            const done = Number(job.completed_count || 0) + Number(job.skipped_count || 0) + Number(job.waiting_count || 0) + Number(job.failed_count || 0);
-            const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
-            const retry = Number(job.failed_count || 0) || Number(job.waiting_count || 0)
-                ? `<button class="btn btn-sm" onclick="retryBatchResearch('${escapeAttr(job.job_id)}')">重试</button>`
-                : '';
-            const resume = ['pending','failed','interrupted'].includes(job.status)
-                ? `<button class="btn btn-sm" onclick="resumeBatchResearch('${escapeAttr(job.job_id)}')">继续</button>`
-                : '';
-            return `<div class="ai-task-card batch-job-card">
-                <div class="ai-task-main">
-                    <div class="ai-task-title">${escapeHtml(BATCH_JOB_TYPE_LABELS[job.job_type] || job.name || '批量任务')} <span>${escapeHtml(job.job_id)}</span></div>
-                    <div class="ai-task-meta">${escapeHtml(BATCH_STATUS_LABELS[job.status] || job.status)} · 完成${Number(job.completed_count||0)} / 跳过${Number(job.skipped_count||0)} / 待数据${Number(job.waiting_count||0)} / 失败${Number(job.failed_count||0)}</div>
-                    <div class="mini-progress"><span style="width:${pct}%"></span></div>
-                    ${job.current_code ? `<div class="ai-task-meta">当前：${escapeHtml(job.current_code)}</div>` : ''}
-                </div>
-                <div class="ai-task-actions">${resume}${retry}</div>
-            </div>`;
-        }).join('');
-    } catch(e) {
-        el.innerHTML = `<div class="empty-row">批量任务加载失败：${escapeHtml(e.message)}</div>`;
-    }
+    return null;
 }
 
 async function createBatchResearchJob(type) {
-    const rawCodes = getSelectedCodes();
-    const codes = rawCodes.filter(code => window.StockMarketPermissions?.isAllowed?.(code) ?? true);
-    const batchOptions = getBatchResearchOptions();
-    if (!codes.length) {
-        const list = document.getElementById('aiStockList');
-        const btn = document.getElementById('batchToggleBtn');
-        list?.classList.add('batch-active');
-        btn?.classList.add('active');
-        updateBatchBar();
-        return alert('请先在左侧自选股列表勾选要进入批量任务的股票');
-    }
-    try {
-        const payload = {
-            job_type: type,
-            codes,
-            allow_all: false,
-            skip_recent_days: type === 'data_prefetch' || batchOptions.forceReanalysis ? 0 : 30,
-            snapshot_concurrency: 3,
-            analysis_mode: type === 'report_generation' ? 'snapshot-tradingagents' : 'snapshot',
-            analysis_concurrency: 1,
-            analysis_depth: batchOptions.depth,
-            model_mode: batchOptions.modelMode,
-            snapshot_model_tier: batchOptions.modelTier,
-            plan_top_n: 10,
-            multi_role: type === 'position_plan'
-        };
-        const preflight = await aiTaskClient().preflightBatchResearch(payload);
-        const labels = {
-            data_prefetch: `为已选 ${codes.length} 只可交易股票创建七层数据预取任务？`,
-            report_generation: `为已选 ${codes.length} 只可交易股票创建${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}快照报告生成任务？${batchOptions.forceReanalysis ? '将强制重新分析，最近已有报告也会重跑。' : '最近30天已有报告会自动跳过。'}`,
-            position_plan: `基于已选 ${codes.length} 只可交易股票的已有完整报告生成${batchOptions.depthLabel} / ${batchOptions.modelModeLabel}组合级多角色组合研究方案？`
-        };
-        const estimate = [
-            labels[type] || '创建批量任务？',
-            '',
-            `股票数：${preflight.stock_count || codes.length}`,
-            ...(rawCodes.length !== codes.length ? [`权限过滤：已排除 ${rawCodes.length - codes.length} 只无交易权限标的`] : []),
-            `每只角色调用：${preflight.role_calls_per_stock || '--'} 次`,
-            `预计总调用：${preflight.estimated_role_calls || '--'} 次`,
-            `Worker：${preflight.worker_count || '--'} 个`,
-            `预计耗时：${preflight.estimated_duration_text || '--'}`,
-            ...(preflight.recommendations || [])
-        ].join('\n');
-        const warnings = preflight.warnings || [];
-        if (!confirm(`${estimate}${warnings.length ? `\n\n风险提示：\n${warnings.join('\n')}` : ''}\n\n确认创建吗？`)) return;
-        const resp = await aiTaskClient().createBatchResearch(payload);
-        showToast(`批量任务已创建：${resp.job_id}`, 'success');
-        clearSelection();
-        await loadBatchResearchJobs();
-    } catch(e) {
-        showToast('创建批量任务失败: ' + e.message, 'error');
-    }
+    const tab = type === 'position_plan' ? 'plans' : 'jobs';
+    window.location.href = `/reports?sidebar=stocks&tab=${encodeURIComponent(tab)}`;
 }
 
 async function resumeBatchResearch(jobId) {

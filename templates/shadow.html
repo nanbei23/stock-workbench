@@ -405,6 +405,8 @@
 
   <nav class="performance-tabs" id="performanceTabs">
     <button class="active" data-tab="signal" onclick="setPerformanceTab('signal')">信号验证</button>
+    <button data-tab="daily" onclick="setPerformanceTab('daily')">每日决策</button>
+    <button data-tab="execution" onclick="setPerformanceTab('execution')">建议执行闭环</button>
     <button data-tab="plans" onclick="setPerformanceTab('plans')">组合研究</button>
     <button data-tab="shadow" onclick="setPerformanceTab('shadow')">AI影子盘</button>
     <button data-tab="deviation" onclick="setPerformanceTab('deviation')">执行差异</button>
@@ -463,11 +465,96 @@
     </div>
   </section>
 
+  <section class="shadow-panel shadow-performance daily-decision-domain-panel" data-performance-panel="daily" hidden>
+    <header>
+      <div>
+        <h2>每日决策绩效</h2>
+        <p>只统计每日 AI 决策报告的逐条执行状态和后验表现，和组合研究方案绩效彻底分开。</p>
+      </div>
+    </header>
+    <div class="shadow-performance-grid">
+      <div class="shadow-calibration-card">
+        <h3>每日决策概览</h3>
+        <div class="shadow-calibration-summary" id="dailyDecisionPerformanceSummary">
+          <div><span>报告数</span><strong>--</strong></div>
+          <div><span>建议条目</span><strong>--</strong></div>
+          <div><span>持仓建议</span><strong>--</strong></div>
+          <div><span>候选建议</span><strong>--</strong></div>
+          <div><span>已跟踪</span><strong>--</strong></div>
+          <div><span>平均收益</span><strong>--</strong></div>
+        </div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>动作与执行状态</h3>
+        <div id="dailyDecisionActionRows"><div class="shadow-empty">暂无每日决策动作样本</div></div>
+      </div>
+    </div>
+    <div class="shadow-table-wrap" style="padding-top:10px;">
+      <table class="shadow-table">
+        <thead>
+          <tr>
+            <th>日期</th>
+            <th>股票</th>
+            <th>类型</th>
+            <th>每日动作</th>
+            <th>执行状态</th>
+            <th>跟踪收益</th>
+            <th>信号跟踪</th>
+          </tr>
+        </thead>
+        <tbody id="dailyDecisionPerformanceBody">
+          <tr><td colspan="7"><div class="shadow-empty">正在读取每日决策绩效...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="shadow-panel shadow-performance" data-performance-panel="execution" hidden>
+    <header>
+      <div>
+        <h2>建议执行闭环</h2>
+        <p>把每日决策和组合研究逐条建议绑定真实交易，识别完全执行、部分执行、未执行、反向执行和违规交易。</p>
+      </div>
+    </header>
+    <div class="shadow-performance-grid">
+      <div class="shadow-calibration-card">
+        <h3>闭环概览</h3>
+        <div class="shadow-calibration-summary" id="executionReviewSummary">
+          <div><span>建议条目</span><strong>--</strong></div>
+          <div><span>匹配交易</span><strong>--</strong></div>
+          <div><span>跟随执行</span><strong>--</strong></div>
+          <div><span>未执行/偏离</span><strong>--</strong></div>
+        </div>
+      </div>
+      <div class="shadow-calibration-card">
+        <h3>偏差分类</h3>
+        <div id="executionReviewBreakdown"><div class="shadow-empty">暂无执行闭环样本</div></div>
+      </div>
+    </div>
+    <div class="shadow-table-wrap" style="padding-top:10px;">
+      <table class="shadow-table">
+        <thead>
+          <tr>
+            <th>来源</th>
+            <th>股票</th>
+            <th>建议动作</th>
+            <th>实际执行</th>
+            <th>偏差金额</th>
+            <th>交易ID</th>
+          </tr>
+        </thead>
+        <tbody id="executionReviewBody">
+          <tr><td colspan="6"><div class="shadow-empty">正在读取建议执行闭环...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <section class="shadow-panel shadow-performance" data-performance-panel="plans" hidden>
     <header>
       <div>
         <h2>组合研究方案绩效</h2>
-        <p>只按用户整份采纳的最终组合研究方案统计后验表现，部分采纳、草稿和初筛方案只作为复盘参考。</p>
+        <p>统计整份采纳方案和部分采纳方案中已逐项采纳的建议，草稿、忽略和未采纳项只作为复盘参考。</p>
       </div>
     </header>
     <div class="shadow-performance-grid">
@@ -667,5 +754,5 @@
   </section>
 </div>
 
-<script src="/static/js/shadow.js?v=2.9.2"></script>
+<script src="/static/js/shadow.js?v=2.9.24-research-center-links"></script>
 {% endblock %}

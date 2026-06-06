@@ -240,7 +240,7 @@ def _confirmed_snapshot(conn: sqlite3.Connection, plan_id: str) -> dict[str, Any
     rows = conn.execute(
         """
         SELECT code, name, action, suggested_amount, position_pct, suggested_shares,
-               confidence, risk_score, source_report_id
+               confidence, risk_score, source_report_id, adoption_status, adopted_at, adopted_by
         FROM position_plan_items
         WHERE plan_id = ?
         ORDER BY id ASC
@@ -334,6 +334,82 @@ def partially_adopt_position_plan(plan_id: str, *, db_path: Path | None = None, 
         conn.commit()
         saved = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
     return _row_to_plan(saved)
+
+
+def update_position_plan_item_adoption(
+    plan_id: str,
+    item_id: int,
+    adoption_status: str,
+    *,
+    db_path: Path | None = None,
+    confirmed_by: str = "user",
+    note: str = "",
+) -> dict[str, Any]:
+    clean_status = str(adoption_status or "").strip()
+    allowed = {"pending", "adopted", "ignored", "watching"}
+    if clean_status not in allowed:
+        raise HTTPException(400, "组合研究明细采纳状态无效")
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM position_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "组合研究方案不存在")
+        plan = _row_to_plan(row)
+        _ensure_final_actionable_plan(plan, "逐项采纳")
+        if plan.get("adoption_status") == "adopted":
+            raise HTTPException(400, "已整份采纳的组合研究方案不能再逐项修改")
+        if plan.get("adoption_status") == "abandoned" or plan.get("status") == "abandoned":
+            raise HTTPException(400, "已放弃的组合研究方案不能逐项采纳")
+        item = conn.execute(
+            "SELECT * FROM position_plan_items WHERE plan_id = ? AND id = ?",
+            (plan_id, int(item_id)),
+        ).fetchone()
+        if not item:
+            raise HTTPException(404, "组合研究建议明细不存在")
+        confirmed_at = datetime.now().isoformat(timespec="seconds")
+        conn.execute(
+            """
+            UPDATE position_plan_items
+            SET adoption_status = ?,
+                adopted_at = CASE WHEN ? = 'pending' THEN NULL ELSE ? END,
+                adopted_by = CASE WHEN ? = 'pending' THEN NULL ELSE ? END,
+                adoption_note = ?,
+                created_at = created_at
+            WHERE plan_id = ? AND id = ?
+            """,
+            (clean_status, clean_status, confirmed_at, clean_status, confirmed_by, note, plan_id, int(item_id)),
+        )
+        snapshot = _confirmed_snapshot(conn, plan_id)
+        snapshot["decision_policy"] = "per_item_adoption"
+        snapshot["note"] = "逐项采纳只影响明细复盘和每日决策上下文，不自动写交易、不自动下单。"
+        item_statuses = [row["adoption_status"] for row in conn.execute("SELECT adoption_status FROM position_plan_items WHERE plan_id = ?", (plan_id,)).fetchall()]
+        plan_status = "draft" if item_statuses and all(status == "pending" for status in item_statuses) else "partially_adopted"
+        conn.execute(
+            """
+            UPDATE position_plans
+            SET adoption_status = ?,
+                confirmed_at = CASE WHEN ? = 'draft' THEN NULL ELSE ? END,
+                confirmed_by = CASE WHEN ? = 'draft' THEN NULL ELSE ? END,
+                confirmed_snapshot_json = CASE WHEN ? = 'draft' THEN '{}' ELSE ? END,
+                updated_at = datetime('now')
+            WHERE plan_id = ?
+            """,
+            (
+                plan_status,
+                plan_status,
+                confirmed_at,
+                plan_status,
+                confirmed_by,
+                plan_status,
+                _dumps(snapshot),
+                plan_id,
+            ),
+        )
+        conn.commit()
+        saved_item = conn.execute(
+            "SELECT * FROM position_plan_items WHERE plan_id = ? AND id = ?",
+            (plan_id, int(item_id)),
+        ).fetchone()
+    return dict(saved_item)
 
 
 def abandon_position_plan(plan_id: str, *, db_path: Path | None = None) -> dict[str, Any]:

@@ -152,15 +152,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Account Management ──────────────────────────────────────
 let currentAccountId = localStorage.getItem('accountId') || 'default';
+let currentLoginUser = null;
+
+async function loadLoginSession() {
+    try {
+        const resp = await fetch('/api/auth/session');
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        currentLoginUser = data.user || null;
+        const badge = document.getElementById('loginUserBadge');
+        if (badge && currentLoginUser) {
+            const name = currentLoginUser.display_name || currentLoginUser.username || currentLoginUser.id || '本机账户';
+            badge.textContent = `登录账户：${name}`;
+            badge.title = currentLoginUser.authenticated ? '已登录账户' : '兼容模式：本机默认登录账户';
+        }
+        if (
+            currentLoginUser?.authenticated &&
+            currentLoginUser?.must_change_credentials &&
+            !['/login', '/account'].includes(window.location.pathname)
+        ) {
+            window.location.href = '/account';
+        }
+        return currentLoginUser;
+    } catch(e) {
+        return null;
+    }
+}
 
 async function loadAccounts() {
     try {
+        await loadLoginSession();
         const resp = await fetch('/api/accounts');
         const data = await resp.json();
         const sel = document.getElementById('accountSwitcher');
         if (!sel) return;
-        sel.innerHTML = data.accounts.map(a =>
-            `<option value="${escapeAttr(a.id)}" ${a.id===currentAccountId?'selected':''}>${escapeHtml(a.name)}</option>`
+        const accounts = data.accounts || [];
+        if (!accounts.some(a => a.id === currentAccountId)) {
+            currentAccountId = accounts[0]?.id || currentLoginUser?.default_securities_account_id || 'default';
+            localStorage.setItem('accountId', currentAccountId);
+        }
+        sel.innerHTML = accounts.map(a =>
+            `<option value="${escapeAttr(a.id)}" ${a.id===currentAccountId?'selected':''}>证券账户：${escapeHtml(a.name)}</option>`
         ).join('');
         sel.onchange = () => {
             currentAccountId = sel.value;
@@ -169,6 +201,15 @@ async function loadAccounts() {
         };
     } catch(e) {}
 }
+
+async function logoutLoginUser() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    localStorage.removeItem('accountId');
+    location.href = '/login';
+}
+
+window.logoutLoginUser = logoutLoginUser;
+window.loadAccounts = loadAccounts;
 
 document.addEventListener('DOMContentLoaded', loadAccounts);
 document.addEventListener('DOMContentLoaded', loadOnboardingStatus);
@@ -191,6 +232,7 @@ function showToast(msg, type='info') {
 }
 
 async function loadOnboardingStatus() {
+    if (['/login', '/account'].includes(window.location.pathname)) return;
     if (sessionStorage.getItem('onboarding_hidden') === '1') return;
     try {
         const data = await API.get('/api/settings/onboarding');

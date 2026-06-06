@@ -7,13 +7,8 @@ import type {
   AnalysisTaskListResponse,
   BatchAnalyzeRequest,
   BatchAnalyzeResponse,
-  ConditionalOrderDraft,
-  ConditionalOrderDraftRequest,
-  ConditionalOrderDraftResponse,
   GbrainSaveRequest,
   GbrainSaveResponse,
-  GenerateConditionalOrderRequest,
-  GenerateConditionalOrderResponse,
   QueueStatusResponse,
   TaskActionResponse
 } from "./contracts/ai";
@@ -60,13 +55,6 @@ export const AiTaskClient = {
     return postJson<GbrainSaveResponse, GbrainSaveRequest>("/api/ai/gbrain/save", payload);
   },
 
-  generateConditionalOrder(payload: GenerateConditionalOrderRequest): Promise<GenerateConditionalOrderResponse> {
-    return postJson<GenerateConditionalOrderResponse, GenerateConditionalOrderRequest>(
-      "/api/ai/generate-cond-order",
-      payload
-    );
-  },
-
   tasks(params?: { limit?: number; status?: string }): Promise<AnalysisTaskListResponse> {
     const search = new URLSearchParams();
     if (params?.limit != null) search.set("limit", String(params.limit));
@@ -81,20 +69,6 @@ export const AiTaskClient = {
 
   cancelFromCenter(taskId: string): Promise<TaskActionResponse> {
     return postJson<TaskActionResponse>(`/api/ai/tasks/${encodeURIComponent(taskId)}/cancel`);
-  },
-
-  conditionalOrderDraft(payload: ConditionalOrderDraftRequest): Promise<ConditionalOrderDraftResponse> {
-    return postJson<ConditionalOrderDraftResponse, ConditionalOrderDraftRequest>(
-      "/api/ai/conditional-order/draft",
-      payload
-    );
-  },
-
-  confirmConditionalOrderDraft(payload: ConditionalOrderDraft): Promise<GenerateConditionalOrderResponse> {
-    return postJson<GenerateConditionalOrderResponse, ConditionalOrderDraft>(
-      "/api/ai/conditional-order/confirm",
-      payload
-    );
   }
 };
 

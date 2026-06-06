@@ -6,6 +6,7 @@ const API_BASE = '/api';
 let currentSettings = {};
 let modelProviderCache = [];
 let workerPoolRows = [];
+let currentAiSettingsPanel = 'current';
 
 const INVESTMENT_STYLE_PRESETS = {
     conservative: {
@@ -190,10 +191,29 @@ async function inferInvestmentProfileFromTrades() {
 
 // ── Tab切换 ──
 function switchSettingsTab(btn, section) {
-    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    btn.closest('.settings-tabs')?.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('section-' + section).classList.add('active');
+    updateSettingsActionsVisibility();
+}
+
+function aiSettingsSubtab(btn, panel) {
+    document.querySelectorAll('.ai-settings-subtabs .ai-settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.ai-settings-panel').forEach(s => s.classList.remove('active'));
+    btn.classList.add('active');
+    currentAiSettingsPanel = panel;
+    document.getElementById('ai-panel-' + panel)?.classList.add('active');
+    updateSettingsActionsVisibility();
+}
+
+function updateSettingsActionsVisibility() {
+    const actions = document.getElementById('settingsActions');
+    if (!actions) return;
+    const aiActive = document.getElementById('section-ai')?.classList.contains('active');
+    const instantSavePanels = ['library', 'workers'];
+    const shouldHide = !!(aiActive && instantSavePanels.includes(currentAiSettingsPanel));
+    actions.style.display = shouldHide ? 'none' : 'flex';
 }
 
 // ── 加载设置 ──
@@ -201,11 +221,11 @@ async function loadSettings() {
     try {
         const resp = await fetch(`${API_BASE}/settings`);
         currentSettings = await resp.json();
-        hydrateAiModelOptions(currentSettings);
-        hydrateVerificationModelOptions(currentSettings);
         applySettings(currentSettings);
+        hydrateProviderReferenceControls();
         syncAiNameFromBaseUrl();
         syncVerificationNameFromBaseUrl();
+        loadTradeMemoryEmbeddingStatus();
         toast('success', '设置已加载');
     } catch (e) {
         console.error('加载设置失败:', e);
@@ -250,21 +270,16 @@ function setVerificationModelOptions(models, selected) {
 }
 
 function hydrateVerificationModelOptions(settings) {
-    const stored = parseModelOptions(settings.verification_model_options);
-    setVerificationModelOptions(stored, settings.verification_model || '');
+    hydrateVerificationProviderReference(settings);
 }
 
 function setAiModelOptions(models, quickSelected, deepSelected) {
-    setSelectModelOptions(document.getElementById('set-quick_think_model'), models, quickSelected);
-    setSelectModelOptions(document.getElementById('set-deep_think_model'), models, deepSelected);
+    setSelectModelOptions(document.getElementById('set-ai_quick_model'), models, quickSelected);
+    setSelectModelOptions(document.getElementById('set-ai_deep_model'), models, deepSelected);
 }
 
 function hydrateAiModelOptions(settings) {
-    const stored = parseModelOptions(settings.llm_model_options);
-    const hasFetchedModels = stored.length > 0;
-    const quick = hasFetchedModels ? (settings.quick_think_model || '') : '';
-    const deep = hasFetchedModels ? (settings.deep_think_model || '') : '';
-    setAiModelOptions(stored, quick, deep);
+    hydrateAiProviderReference(settings);
 }
 
 function applySettings(s) {
@@ -287,6 +302,9 @@ function applySettings(s) {
 // ── 收集设置 ──
 function collectSettings() {
     const result = {};
+    syncLegacyAiProviderFields();
+    syncLegacyVerificationProviderFields();
+    syncLegacyEmbeddingProviderFields();
     syncAiModelOptions();
     syncVerificationModelOptions();
     document.querySelectorAll('[id^="set-"]').forEach(el => {
@@ -301,21 +319,184 @@ function collectSettings() {
 }
 
 function syncAiModelOptions(extraModels = []) {
-    const quickSelect = document.getElementById('set-quick_think_model');
-    const deepSelect = document.getElementById('set-deep_think_model');
     const hidden = document.getElementById('set-llm_model_options');
-    if (!quickSelect || !deepSelect || !hidden) return;
-    const quickOptions = Array.from(quickSelect.options).map(opt => opt.value).filter(Boolean);
-    const deepOptions = Array.from(deepSelect.options).map(opt => opt.value).filter(Boolean);
+    if (!hidden) return;
+    const quickOptions = Array.from(document.getElementById('set-ai_quick_model')?.options || []).map(opt => opt.value).filter(Boolean);
+    const deepOptions = Array.from(document.getElementById('set-ai_deep_model')?.options || []).map(opt => opt.value).filter(Boolean);
     hidden.value = JSON.stringify([...new Set([...quickOptions, ...deepOptions, ...extraModels].filter(Boolean))]);
 }
 
 function syncVerificationModelOptions(extraModels = []) {
-    const select = document.getElementById('set-verification_model');
     const hidden = document.getElementById('set-verification_model_options');
-    if (!select || !hidden) return;
-    const existing = Array.from(select.options).map(opt => opt.value).filter(Boolean);
+    if (!hidden) return;
+    const existing = Array.from(document.getElementById('set-verification_model')?.options || []).map(opt => opt.value).filter(Boolean);
     hidden.value = JSON.stringify([...new Set([...existing, ...extraModels].filter(Boolean))]);
+}
+
+function providerModels(provider, {embedding = false} = {}) {
+    if (!provider) return [];
+    const preferred = embedding
+        ? [provider.embedding_model, provider.default_model, provider.quick_model, provider.deep_model]
+        : [provider.quick_model, provider.deep_model, provider.default_model];
+    return [...new Set([...preferred, ...(provider.models || [])].filter(Boolean))];
+}
+
+function providerQuickModel(provider) {
+    const models = providerModels(provider);
+    return provider?.quick_model || provider?.default_model || provider?.deep_model || pickModel(models, 'quick') || '';
+}
+
+function providerDeepModel(provider) {
+    const models = providerModels(provider);
+    return provider?.deep_model || provider?.default_model || provider?.quick_model || pickModel(models, 'deep') || '';
+}
+
+function providerDefaultModel(provider) {
+    const models = providerModels(provider);
+    return provider?.default_model || provider?.deep_model || provider?.quick_model || pickModel(models, 'deep') || '';
+}
+
+function providerEmbeddingModel(provider) {
+    const models = providerModels(provider, {embedding: true});
+    return provider?.embedding_model || provider?.default_model || provider?.quick_model || pickModel(models, 'quick') || '';
+}
+
+function renderModelSummary(id, rows, emptyText) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const clean = (rows || []).filter(row => row && row.value);
+    if (!clean.length) {
+        el.textContent = emptyText;
+        return;
+    }
+    el.innerHTML = clean.map(row => `<span>${escapeHtml(row.label)}：<b>${escapeHtml(row.value)}</b></span>`).join('');
+}
+
+function renderAiRuntimeSummary(provider) {
+    renderModelSummary('aiRuntimeModelSummary', [
+        {label: '快速', value: providerQuickModel(provider)},
+        {label: '深度', value: providerDeepModel(provider)},
+        {label: '默认', value: providerDefaultModel(provider)},
+    ], '请选择主分析模型源');
+}
+
+function renderVerificationSummary(provider) {
+    renderModelSummary('verificationModelSummary', [
+        {label: '核对', value: providerDefaultModel(provider)},
+    ], '请选择核对模型源');
+}
+
+function renderEmbeddingSummary(provider) {
+    renderModelSummary('embeddingModelSummary', [
+        {label: '模型', value: providerEmbeddingModel(provider)},
+        {label: '维度', value: String(provider?.embedding_dimensions || 1536)},
+    ], '请选择向量模型源');
+}
+
+function providerOptions(selected = '', {usage = ''} = {}) {
+    const providers = (modelProviderCache || []).filter(provider => {
+        if (!usage) return true;
+        const tags = provider.usage || [];
+        return !tags.length || tags.includes(usage);
+    });
+    const options = providers.map(provider =>
+        `<option value="${escapeAttr(provider.id)}" ${String(provider.id) === String(selected) ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`
+    );
+    return `<option value="">请选择模型库配置</option>${options.join('')}`;
+}
+
+function inferProviderIdFromLegacy(settings, endpointKey) {
+    const current = settings?.[endpointKey] || '';
+    if (!current) return '';
+    const matched = (modelProviderCache || []).find(provider => String(provider.base_url || '') === String(current));
+    return matched?.id || '';
+}
+
+function hydrateProviderReferenceControls() {
+    if (!currentSettings) return;
+    hydrateAiProviderReference(currentSettings);
+    hydrateVerificationProviderReference(currentSettings);
+    hydrateEmbeddingProviderReference(currentSettings);
+}
+
+function hydrateAiProviderReference(settings = currentSettings) {
+    const selected = settings.ai_primary_provider_id || inferProviderIdFromLegacy(settings, 'custom_endpoint');
+    const providerSelect = document.getElementById('set-ai_primary_provider_id');
+    if (providerSelect) providerSelect.innerHTML = providerOptions(selected, {usage: 'ai'});
+    const provider = modelProviderById(selected);
+    renderAiRuntimeSummary(provider);
+    syncLegacyAiProviderFields();
+}
+
+function hydrateVerificationProviderReference(settings = currentSettings) {
+    const selected = settings.verification_provider_id || inferProviderIdFromLegacy(settings, 'verification_endpoint');
+    const providerSelect = document.getElementById('set-verification_provider_id');
+    if (providerSelect) providerSelect.innerHTML = providerOptions(selected, {usage: 'verification'});
+    const provider = modelProviderById(selected);
+    renderVerificationSummary(provider);
+    syncLegacyVerificationProviderFields();
+}
+
+function hydrateEmbeddingProviderReference(settings = currentSettings) {
+    const selected = settings.embedding_provider_id || inferProviderIdFromLegacy(settings, 'embedding_endpoint');
+    const providerSelect = document.getElementById('set-embedding_provider_id');
+    if (providerSelect) providerSelect.innerHTML = providerOptions(selected, {usage: 'embedding'});
+    const provider = modelProviderById(selected);
+    renderEmbeddingSummary(provider);
+    syncLegacyEmbeddingProviderFields();
+}
+
+function onAiProviderChange() {
+    const selected = document.getElementById('set-ai_primary_provider_id')?.value || '';
+    const provider = modelProviderById(selected);
+    renderAiRuntimeSummary(provider);
+    syncLegacyAiProviderFields();
+}
+
+function onVerificationProviderChange() {
+    const selected = document.getElementById('set-verification_provider_id')?.value || '';
+    const provider = modelProviderById(selected);
+    renderVerificationSummary(provider);
+    syncLegacyVerificationProviderFields();
+}
+
+function onEmbeddingProviderChange() {
+    const selected = document.getElementById('set-embedding_provider_id')?.value || '';
+    const provider = modelProviderById(selected);
+    renderEmbeddingSummary(provider);
+    syncLegacyEmbeddingProviderFields();
+}
+
+function syncLegacyAiProviderFields() {
+    const provider = modelProviderById(document.getElementById('set-ai_primary_provider_id')?.value || '');
+    const quick = providerQuickModel(provider);
+    const deep = providerDeepModel(provider);
+    const assign = (id, value) => { const el = document.getElementById(id); if (el) el.value = value || ''; };
+    assign('set-llm_name', provider?.name || '');
+    assign('set-custom_endpoint', provider?.base_url || '');
+    assign('set-api_key', provider?.has_api_key ? '********' : '');
+    assign('set-quick_think_model', quick);
+    assign('set-deep_think_model', deep);
+    assign('set-llm_context_length', provider?.context_length || '');
+    syncAiModelOptions(providerModels(provider));
+}
+
+function syncLegacyVerificationProviderFields() {
+    const provider = modelProviderById(document.getElementById('set-verification_provider_id')?.value || '');
+    const assign = (id, value) => { const el = document.getElementById(id); if (el) el.value = value || ''; };
+    assign('set-verification_name', provider?.name || '');
+    assign('set-verification_endpoint', provider?.base_url || '');
+    assign('set-verification_api_key', provider?.has_api_key ? '********' : '');
+    assign('set-verification_context_length', provider?.context_length || '');
+    syncVerificationModelOptions(providerModels(provider));
+}
+
+function syncLegacyEmbeddingProviderFields() {
+    const provider = modelProviderById(document.getElementById('set-embedding_provider_id')?.value || '');
+    const assign = (id, value) => { const el = document.getElementById(id); if (el) el.value = value || ''; };
+    assign('set-embedding_endpoint', provider?.base_url || '');
+    assign('set-embedding_api_key', provider?.has_api_key ? '********' : '');
+    assign('set-embedding_dimensions', provider?.embedding_dimensions || 1536);
 }
 
 function nameFromBaseUrl(baseUrl) {
@@ -370,6 +551,7 @@ async function saveSettings() {
         if (resp.ok) {
             toast('success', '设置已保存');
             currentSettings = settings;
+            loadTradeMemoryEmbeddingStatus();
         } else {
             toast('error', '保存失败');
         }
@@ -378,13 +560,148 @@ async function saveSettings() {
     }
 }
 
+function renderTradeMemoryEmbeddingStatus(data) {
+    const el = document.getElementById('embeddingIndexStatus');
+    if (!el) return;
+    const active = Number(data.active_memories || 0);
+    const indexed = Number(data.indexed_memories || 0);
+    const missing = Number(data.missing_embeddings || 0);
+    const coverage = Number(data.coverage_pct || 0).toFixed(active ? 1 : 0);
+    const provider = data.provider_configured ? 'Embedding Key 已配置' : 'Embedding Key 未配置';
+    const vec = data.sqlite_vec_available ? 'sqlite-vec 可用' : 'sqlite-vec 不可用';
+    const last = data.last_indexed_at ? ` · 最近索引 ${escapeHtml(data.last_indexed_at)}` : '';
+    el.className = `test-result ${missing ? 'error' : 'ok'}`;
+    el.innerHTML = `覆盖率 ${coverage}% · ${indexed}/${active} 已索引 · ${missing} 缺失 · ${provider} · ${vec}${last}`;
+}
+
+function embeddingConnectionPayload() {
+    return {
+        provider_id: (document.getElementById('set-embedding_provider_id')?.value || '').trim(),
+        api_key: (document.getElementById('set-embedding_api_key')?.value || '').trim(),
+        endpoint: (document.getElementById('set-embedding_endpoint')?.value || 'https://api.openai.com/v1/embeddings').trim(),
+        model: '',
+        dimensions: Number(document.getElementById('set-embedding_dimensions')?.value || 1536),
+    };
+}
+
+function renderEmbeddingConnectionResult(data) {
+    const el = document.getElementById('embeddingConnectionResult');
+    if (!el) return;
+    const status = data.status || 'error';
+    el.className = `test-result ${status === 'ok' ? 'ok' : 'error'}`;
+    if (status === 'ok') {
+        el.textContent = data.message || `连接成功 (${data.model || 'embedding'})`;
+        return;
+    }
+    const parts = [];
+    if (data.http_status) parts.push(`HTTP ${data.http_status}`);
+    if (data.error_type) parts.push(`类型: ${data.error_type}`);
+    if (data.error_code) parts.push(`代码: ${data.error_code}`);
+    if (data.request_id) parts.push(`Request ID: ${data.request_id}`);
+    const detail = parts.length ? `（${parts.map(escapeHtml).join(' · ')}）` : '';
+    el.innerHTML = `${escapeHtml(data.message || '连接失败')}${detail}`;
+}
+
+async function testTradeMemoryEmbeddingConnection() {
+    const el = document.getElementById('embeddingConnectionResult');
+    if (el) {
+        el.className = 'test-result';
+        el.textContent = '测试中...';
+    }
+    const payload = embeddingConnectionPayload();
+    if (!payload.provider_id && (!payload.api_key || payload.api_key === '********')) {
+        renderEmbeddingConnectionResult({
+            status: 'error',
+            error_type: 'missing_api_key',
+            message: '请先选择模型库中的 Embedding 配置再测试。',
+        });
+        return;
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/trade-memories/embeddings/test-connection`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '测试失败');
+        renderEmbeddingConnectionResult(data);
+        if (data.status === 'ok') {
+            toast('success', 'Embedding 连接成功');
+        } else {
+            toast('error', data.message || 'Embedding 连接失败');
+        }
+    } catch (e) {
+        renderEmbeddingConnectionResult({
+            status: 'error',
+            error_type: 'request_error',
+            message: e.message,
+        });
+    }
+}
+
+async function loadTradeMemoryEmbeddingStatus() {
+    const el = document.getElementById('embeddingIndexStatus');
+    if (el) {
+        el.className = 'test-result';
+        el.textContent = '读取中...';
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/trade-memories/embeddings/status`);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '读取失败');
+        renderTradeMemoryEmbeddingStatus(data);
+    } catch (e) {
+        if (el) {
+            el.className = 'test-result error';
+            el.textContent = '读取失败: ' + e.message;
+        }
+    }
+}
+
+async function backfillTradeMemoryEmbeddings() {
+    const el = document.getElementById('embeddingIndexStatus');
+    if (el) {
+        el.className = 'test-result';
+        el.textContent = '索引中...';
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/trade-memories/embeddings/backfill`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({account_id: 'default', limit: 200}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '索引失败');
+        if (data.enabled === false) {
+            toast('error', (data.errors || []).join('；') || 'Embedding 未配置');
+        } else if ((data.errors || []).length) {
+            toast('error', `索引完成但有失败: ${(data.errors || []).length}条`);
+        } else {
+            toast('success', `索引完成: 新增/更新${data.indexed || 0}条，跳过${data.skipped || 0}条`);
+        }
+        await loadTradeMemoryEmbeddingStatus();
+    } catch (e) {
+        toast('error', '索引失败: ' + e.message);
+        await loadTradeMemoryEmbeddingStatus();
+    }
+}
+
 // ── 测试API连接 ──
 async function testApiConnection() {
     const resultSpan = document.getElementById('testResult');
     resultSpan.textContent = '测试中...';
     resultSpan.className = 'test-result';
+    syncLegacyAiProviderFields();
     try {
-        const resp = await fetch(`${API_BASE}/settings/test-llm`, { method: 'POST' });
+        const resp = await fetch(`${API_BASE}/settings/test-llm`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                provider_id: document.getElementById('set-ai_primary_provider_id')?.value || '',
+                model_tier: 'quick',
+            }),
+        });
         const data = await resp.json();
         if (data.status === 'ok') {
             resultSpan.className = 'test-result ok';
@@ -401,31 +718,20 @@ async function testApiConnection() {
 
 async function testVerificationConnection() {
     const resultSpan = document.getElementById('testVerificationResult');
-    const endpoint = document.getElementById('set-verification_endpoint')?.value?.trim() || '';
-    const apiKey = document.getElementById('set-verification_api_key')?.value?.trim() || '';
-    const model = document.getElementById('set-verification_model')?.value?.trim() || '';
-    if (!endpoint) {
+    const providerId = document.getElementById('set-verification_provider_id')?.value?.trim() || '';
+    if (!providerId) {
         resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 Base URL未配置';
-        return;
-    }
-    if (!apiKey) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 API密钥未配置';
-        return;
-    }
-    if (!model) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 请先选择核对模型';
+        resultSpan.textContent = '失败 请先选择核对模型配置';
         return;
     }
     resultSpan.textContent = '测试中...';
     resultSpan.className = 'test-result';
+    syncLegacyVerificationProviderFields();
     try {
         const resp = await fetch(`${API_BASE}/settings/test-verification`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ endpoint, api_key: apiKey, model }),
+            body: JSON.stringify({ provider_id: providerId }),
         });
         const data = await resp.json();
         if (data.status === 'ok') {
@@ -441,64 +747,6 @@ async function testVerificationConnection() {
     }
 }
 
-// ── 获取远程模型列表 ──
-async function fetchRemoteModels() {
-    const endpointInput = document.getElementById('set-custom_endpoint');
-    const endpoint = endpointInput.value.trim();
-    const apiKey = document.getElementById('set-api_key').value.trim();
-    const resultSpan = document.getElementById('fetchModelsResult');
-    const btn = document.getElementById('fetchModelsBtn');
-    
-    if (!endpoint) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 请先填写 Base URL';
-        return;
-    }
-    if (!apiKey) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 请先填写 API Key';
-        return;
-    }
-    
-    syncAiNameFromBaseUrl();
-    btn.disabled = true;
-    btn.textContent = '获取中...';
-    resultSpan.className = 'test-result';
-    resultSpan.textContent = '正在根据 Base URL 获取模型...';
-    
-    try {
-        const resp = await fetch(`${API_BASE}/settings/fetch-models`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ endpoint, api_key: apiKey })
-        });
-        const data = await resp.json();
-        
-        if (resp.ok && data.status === 'ok' && data.models.length > 0) {
-            const deepSelect = document.getElementById('set-deep_think_model');
-            const quickSelect = document.getElementById('set-quick_think_model');
-            const currentDeep = deepSelect.value;
-            const currentQuick = quickSelect.value;
-            const quickSelected = data.models.includes(currentQuick) ? currentQuick : pickModel(data.models, 'quick');
-            const deepSelected = data.models.includes(currentDeep) ? currentDeep : pickModel(data.models, 'deep');
-            setAiModelOptions(data.models, quickSelected, deepSelected);
-            syncAiModelOptions(data.models);
-            
-            resultSpan.className = 'test-result ok';
-            resultSpan.textContent = `成功 获取到 ${data.models.length} 个模型`;
-        } else {
-            resultSpan.className = 'test-result error';
-            resultSpan.textContent = `失败 ${data.detail || '未获取到模型'}`;
-        }
-    } catch (e) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = `失败 网络错误: ${e.message}`;
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '获取';
-    }
-}
-
 function pickModel(models, role) {
     const list = models || [];
     if (!list.length) return '';
@@ -507,70 +755,6 @@ function pickModel(models, role) {
     const hints = role === 'deep' ? deepHints : quickHints;
     const found = list.find(model => hints.some(hint => String(model).toLowerCase().includes(hint)));
     return found || list[0];
-}
-
-// ── 获取核对模型列表 ──
-async function fetchVerificationModels(options = {}) {
-    const endpointInput = document.getElementById('set-verification_endpoint');
-    const endpoint = endpointInput.value.trim();
-    const apiKey = document.getElementById('set-verification_api_key')?.value?.trim() || '';
-    const resultSpan = document.getElementById('fetchVerModelsResult');
-    const btn = document.getElementById('fetchVerModelsBtn');
-
-    if (!endpoint) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 请先填写 Base URL';
-        return;
-    }
-    if (!apiKey) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = '失败 请先填写 API Key';
-        return;
-    }
-
-    syncVerificationNameFromBaseUrl();
-    btn.disabled = true;
-    btn.textContent = '获取中...';
-    resultSpan.className = 'test-result';
-    resultSpan.textContent = '正在根据 Base URL 获取模型...';
-
-    try {
-        const resp = await fetch(`${API_BASE}/settings/fetch-models`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ endpoint, api_key: apiKey })
-        });
-        const data = await resp.json();
-
-        if (resp.ok && data.status === 'ok' && data.models.length > 0) {
-            const select = document.getElementById('set-verification_model');
-            const currentValue = select.value;
-            const selected = data.models.includes(currentValue) ? currentValue : data.models[0];
-            setVerificationModelOptions(data.models, selected);
-            syncVerificationModelOptions(data.models);
-
-            resultSpan.className = 'test-result ok';
-            resultSpan.textContent = `成功 获取到 ${data.models.length} 个模型`;
-        } else {
-            resultSpan.className = 'test-result error';
-            resultSpan.textContent = `失败 ${data.detail || '未获取到模型'}`;
-        }
-    } catch (e) {
-        resultSpan.className = 'test-result error';
-        resultSpan.textContent = `失败 网络错误: ${e.message}`;
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '获取';
-    }
-}
-
-// ── API密钥显示/隐藏 ──
-function toggleApiKeyVisibility() {
-    const el = document.getElementById('set-api_key');
-    const isPassword = el.type === 'password';
-    el.type = isPassword ? 'text' : 'password';
-    const btn = el.parentElement?.querySelector('button');
-    if (btn) btn.textContent = isPassword ? '隐藏' : '显示';
 }
 
 // ── 浏览器通知 ──
@@ -586,7 +770,7 @@ function requestNotifyPermission() {
             toast('success', '通知权限已授权');
             // 测试通知
             new Notification('炒股小牛马', {
-                body: '通知已启用！条件单触发时会自动提醒你。',
+                body: '通知已启用，异动提醒会自动发送。',
                 tag: 'test',
             });
         } else {
@@ -653,7 +837,7 @@ async function importData(input) {
         const result = await resp.json();
         if (resp.ok) {
             const imp = result.imported;
-            toast('success', `导入完成: 自选${imp.watchlist}条/持仓${imp.portfolio}条/条件单${imp.orders}条/设置${imp.settings}条`);
+            toast('success', `导入完成: 自选${imp.watchlist}条/持仓${imp.portfolio}条/设置${imp.settings}条`);
             loadSettings(); // 重新加载
         } else {
             toast('error', '导入失败');
@@ -706,37 +890,333 @@ async function loadModelProviders() {
         const data = await resp.json();
         const providers = data.providers || [];
         modelProviderCache = providers;
+        hydrateProviderReferenceControls();
         if (!providers.length) {
             el.innerHTML = '<div class="empty-state"><p>暂无模型配置</p></div>';
             renderWorkerPoolRows();
             return;
         }
-        el.innerHTML = providers.map(p => `<div class="quality-report-row">
-            <div>
-              <b>${escapeHtml(p.name || p.id)}</b>
-              <small>${escapeHtml(p.base_url || '')} · ${(p.models || []).length} 个模型 · ${p.has_api_key ? '已保存 Key' : '无 Key'}</small>
-            </div>
-            <button class="btn-secondary" onclick="refreshModelProvider('${escapeAttr(p.id)}')">刷新模型</button>
-            <button class="btn-secondary" onclick="testModelProvider('${escapeAttr(p.id)}')">测试</button>
-            <button class="btn-secondary" onclick="applyModelProvider('${escapeAttr(p.id)}','ai')">用于AI</button>
-            <button class="btn-secondary" onclick="applyModelProvider('${escapeAttr(p.id)}','verification')">用于核对</button>
-            <button class="btn-secondary" onclick="deleteModelProvider('${escapeAttr(p.id)}')">删除</button>
-        </div>`).join('');
+        el.innerHTML = `<div class="model-provider-grid">${providers.map(renderModelProviderCard).join('')}</div>`;
         renderWorkerPoolRows();
     } catch (e) {
         el.innerHTML = `<div class="empty-state"><p>模型配置读取失败：${escapeHtml(e.message)}</p></div>`;
     }
 }
 
-function providerCheckboxes(selected = []) {
-    const selectedSet = new Set(selected || []);
-    if (!modelProviderCache.length) {
-        return '<span class="text-muted">请先保存模型配置</span>';
+function providerUsageLabel(usage = []) {
+    const labels = {ai: 'AI', verification: '核对', embedding: '记忆'};
+    return (usage || []).map(item => labels[item] || item).filter(Boolean).join(' / ') || '未标记';
+}
+
+function providerModelSummary(provider, key, fallback = '-') {
+    return provider?.[key] || fallback;
+}
+
+function renderModelProviderCard(p) {
+    const id = escapeAttr(p.id);
+    const modelCount = (p.models || []).length;
+    const keyBadgeClass = p.has_api_key ? 'model-provider-badge' : 'model-provider-badge missing';
+    return `<div class="model-provider-card">
+        <div class="model-provider-card-header">
+            <div class="model-provider-card-title">
+                <b title="${escapeAttr(p.name || p.id)}">${escapeHtml(p.name || p.id)}</b>
+                <small title="${escapeAttr(p.base_url || '')}">${escapeHtml(p.base_url || '')}</small>
+            </div>
+            <span class="${keyBadgeClass}">${p.has_api_key ? 'Key 已保存' : '无 Key'}</span>
+        </div>
+        <div class="model-provider-meta">
+            <div><span>用途</span><span title="${escapeAttr(providerUsageLabel(p.usage || []))}">${escapeHtml(providerUsageLabel(p.usage || []))}</span></div>
+            <div><span>模型数</span><span>${modelCount}</span></div>
+            <div><span>快速</span><span title="${escapeAttr(providerModelSummary(p, 'quick_model'))}">${escapeHtml(providerModelSummary(p, 'quick_model'))}</span></div>
+            <div><span>深度</span><span title="${escapeAttr(providerModelSummary(p, 'deep_model'))}">${escapeHtml(providerModelSummary(p, 'deep_model'))}</span></div>
+            <div><span>默认</span><span title="${escapeAttr(providerModelSummary(p, 'default_model'))}">${escapeHtml(providerModelSummary(p, 'default_model'))}</span></div>
+            <div><span>Embedding</span><span title="${escapeAttr(providerModelSummary(p, 'embedding_model'))}">${escapeHtml(providerModelSummary(p, 'embedding_model'))}</span></div>
+        </div>
+        <div class="model-provider-actions">
+            <button class="btn-secondary" onclick="openModelProviderEditor('${id}')">编辑</button>
+            <button class="btn-secondary" onclick="refreshModelProvider('${id}')">获取模型</button>
+            <button class="btn-secondary" onclick="testModelProvider('${id}')">测试</button>
+            <button class="btn-secondary" onclick="deleteModelProvider('${id}')">删除</button>
+        </div>
+    </div>`;
+}
+
+function modelProviderById(id) {
+    return (modelProviderCache || []).find(provider => String(provider.id) === String(id));
+}
+
+function providerModelsText(provider) {
+    return (provider?.models || []).join('\n');
+}
+
+function parseProviderModelsText(value) {
+    return String(value || '')
+        .split(/[\n,]/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function setProviderEditUsage(usage) {
+    const usageSet = new Set(usage || []);
+    document.getElementById('providerEditUsageAi').checked = usageSet.has('ai');
+    document.getElementById('providerEditUsageVerification').checked = usageSet.has('verification');
+    document.getElementById('providerEditUsageEmbedding').checked = usageSet.has('embedding');
+    onProviderEditUsageChange();
+}
+
+function inferProviderEditUsage(provider) {
+    const explicit = (provider?.usage || []).filter(Boolean);
+    if (explicit.length) return explicit;
+    if (!provider) return ['ai'];
+    const usage = [];
+    if ((provider.models || []).length || provider.quick_model || provider.deep_model || provider.default_model) {
+        usage.push('ai');
     }
-    return modelProviderCache.map(provider => `<label class="worker-provider-option">
-        <input type="checkbox" value="${escapeAttr(provider.id)}" ${selectedSet.has(provider.id) ? 'checked' : ''}>
-        <span>${escapeHtml(provider.name || provider.id)}</span>
-    </label>`).join('');
+    if (provider.embedding_model) {
+        usage.push('embedding');
+    }
+    return usage.length ? usage : ['ai'];
+}
+
+function providerEditChatEnabled() {
+    return !!(document.getElementById('providerEditUsageAi')?.checked || document.getElementById('providerEditUsageVerification')?.checked);
+}
+
+function setProviderEditModelSelectOptions(models, selected = {}) {
+    const list = models || [];
+    setSelectModelOptions(document.getElementById('providerEditQuickModel'), list, selected.quick || pickModel(list, 'quick'), '请先获取模型');
+    setSelectModelOptions(document.getElementById('providerEditDeepModel'), list, selected.deep || pickModel(list, 'deep'), '请先获取模型');
+    setSelectModelOptions(document.getElementById('providerEditDefaultModel'), list, selected.default || selected.deep || selected.quick || pickModel(list, 'deep'), '请先获取模型');
+}
+
+function onProviderEditUsageChange() {
+    const chatEnabled = providerEditChatEnabled();
+    const embeddingEnabled = !!document.getElementById('providerEditUsageEmbedding')?.checked;
+    const chatFields = document.getElementById('providerEditChatModelFields');
+    const embeddingFields = document.getElementById('providerEditEmbeddingFields');
+    const fetchRow = document.getElementById('providerEditFetchRow');
+    if (chatFields) chatFields.style.display = chatEnabled ? 'grid' : 'none';
+    if (fetchRow) fetchRow.style.display = chatEnabled ? 'flex' : 'none';
+    if (embeddingFields) embeddingFields.style.display = embeddingEnabled ? 'grid' : 'none';
+    if (embeddingEnabled && !document.getElementById('providerEditEmbeddingModel')?.value) {
+        document.getElementById('providerEditEmbeddingModel').value = 'text-embedding-v4';
+    }
+}
+
+function openModelProviderEditor(id = '') {
+    const provider = id ? modelProviderById(id) : null;
+    document.getElementById('providerEditTitle').textContent = provider ? '编辑模型源' : '新增模型源';
+    document.getElementById('providerEditId').value = provider?.id || '';
+    document.getElementById('providerEditName').value = provider?.name || '';
+    document.getElementById('providerEditBaseUrl').value = provider?.base_url || '';
+    document.getElementById('providerEditApiKey').value = provider?.has_api_key ? '********' : '';
+    document.getElementById('providerEditModels').value = providerModelsText(provider);
+    setProviderEditModelSelectOptions(provider?.models || [], {
+        quick: provider?.quick_model || '',
+        deep: provider?.deep_model || '',
+        default: provider?.default_model || '',
+    });
+    document.getElementById('providerEditContextLength').value = provider?.context_length || '';
+    document.getElementById('providerEditEmbeddingModel').value = provider?.embedding_model || '';
+    document.getElementById('providerEditEmbeddingDimensions').value = provider?.embedding_dimensions || 1536;
+    setProviderEditUsage(inferProviderEditUsage(provider));
+    const result = document.getElementById('providerEditFetchModelsResult');
+    if (result) {
+        result.className = 'test-result';
+        result.textContent = provider?.models?.length ? `已有 ${provider.models.length} 个模型` : '未获取';
+    }
+    document.getElementById('providerEditModal').classList.add('show');
+}
+
+function closeProviderEditModal() {
+    document.getElementById('providerEditModal')?.classList.remove('show');
+}
+
+function collectProviderEditPayload() {
+    const usage = ['Ai', 'Verification', 'Embedding']
+        .map(name => {
+            const input = document.getElementById(`providerEditUsage${name}`);
+            return input?.checked ? input.value : '';
+        })
+        .filter(Boolean);
+    return {
+        name: document.getElementById('providerEditName')?.value || '',
+        base_url: document.getElementById('providerEditBaseUrl')?.value || '',
+        api_key: document.getElementById('providerEditApiKey')?.value || '',
+        models: parseProviderModelsText(document.getElementById('providerEditModels')?.value || ''),
+        quick_model: document.getElementById('providerEditQuickModel')?.value || '',
+        deep_model: document.getElementById('providerEditDeepModel')?.value || '',
+        default_model: document.getElementById('providerEditDefaultModel')?.value || '',
+        context_length: document.getElementById('providerEditContextLength')?.value || '',
+        embedding_model: document.getElementById('providerEditEmbeddingModel')?.value || '',
+        embedding_dimensions: Number(document.getElementById('providerEditEmbeddingDimensions')?.value || 1536),
+        usage,
+    };
+}
+
+async function fetchProviderEditModels() {
+    const endpoint = document.getElementById('providerEditBaseUrl')?.value?.trim() || '';
+    const apiKey = document.getElementById('providerEditApiKey')?.value?.trim() || '';
+    const resultSpan = document.getElementById('providerEditFetchModelsResult');
+    const btn = document.getElementById('providerEditFetchModelsBtn');
+    if (!endpoint) {
+        if (resultSpan) {
+            resultSpan.className = 'test-result error';
+            resultSpan.textContent = '失败 请先填写 Base URL';
+        }
+        return;
+    }
+    if (!apiKey) {
+        if (resultSpan) {
+            resultSpan.className = 'test-result error';
+            resultSpan.textContent = '失败 请先填写 API Key';
+        }
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '获取中...';
+    }
+    if (resultSpan) {
+        resultSpan.className = 'test-result';
+        resultSpan.textContent = '正在获取模型...';
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/settings/fetch-models`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({endpoint, api_key: apiKey}),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.status !== 'ok' || !Array.isArray(data.models) || !data.models.length) {
+            throw new Error(data.detail || '未获取到模型');
+        }
+        document.getElementById('providerEditModels').value = data.models.join('\n');
+        setProviderEditModelSelectOptions(data.models, {
+            quick: document.getElementById('providerEditQuickModel')?.value || '',
+            deep: document.getElementById('providerEditDeepModel')?.value || '',
+            default: document.getElementById('providerEditDefaultModel')?.value || '',
+        });
+        if (resultSpan) {
+            resultSpan.className = 'test-result ok';
+            resultSpan.textContent = `成功 ${data.models.length} 个模型`;
+        }
+    } catch (e) {
+        if (resultSpan) {
+            resultSpan.className = 'test-result error';
+            resultSpan.textContent = `失败 ${e.message}`;
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '获取模型';
+        }
+    }
+}
+
+async function saveModelProviderEdit() {
+    const id = document.getElementById('providerEditId')?.value || '';
+    const payload = collectProviderEditPayload();
+    if (!payload.base_url) {
+        toast('error', '请填写 Base URL');
+        return;
+    }
+    if (!payload.usage.length) {
+        toast('error', '请选择模型源用途');
+        return;
+    }
+    const chatEnabled = payload.usage.includes('ai') || payload.usage.includes('verification');
+    if (chatEnabled && !payload.models.length) {
+        toast('error', 'AI/核对模型源请先获取模型列表');
+        return;
+    }
+    if (payload.usage.includes('embedding') && !payload.embedding_model) {
+        toast('error', '请填写 Embedding 模型');
+        return;
+    }
+    try {
+        const resp = await fetch(id ? `${API_BASE}/model-providers/${id}` : `${API_BASE}/model-providers`, {
+            method: id ? 'PUT' : 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || '保存失败');
+        closeProviderEditModal();
+        toast('success', '模型配置已保存');
+        await loadModelProviders();
+    } catch (e) {
+        toast('error', '保存失败: ' + e.message);
+    }
+}
+
+function workerProviderById(id) {
+    return (modelProviderCache || []).find(provider => String(provider.id) === String(id));
+}
+
+function workerProviderLabel(id) {
+    const provider = workerProviderById(id);
+    return provider ? (provider.name || provider.id) : (id || '-');
+}
+
+function workerProviderSelectOptions(selected = '', emptyText = '不使用') {
+    const selectedValue = String(selected || '');
+    const providers = (modelProviderCache || []).filter(provider => {
+        const usage = provider.usage || [];
+        return !usage.length || usage.includes('ai') || usage.includes('verification');
+    });
+    const options = [`<option value="">${escapeHtml(emptyText)}</option>`];
+    providers.forEach(provider => {
+        const id = String(provider.id || '');
+        options.push(`<option value="${escapeAttr(id)}" ${id === selectedValue ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`);
+    });
+    if (selectedValue && !providers.some(provider => String(provider.id) === selectedValue)) {
+        options.push(`<option value="${escapeAttr(selectedValue)}" selected>${escapeHtml(selectedValue)}（已保存）</option>`);
+    }
+    return options.join('');
+}
+
+function workerProviders(worker) {
+    const providerIds = (worker.provider_ids || []).filter(Boolean);
+    return {
+        primary: providerIds[0] || '',
+        fallback: providerIds[1] || '',
+    };
+}
+
+function renderWorkerProviderSummary(worker) {
+    const providers = workerProviders(worker);
+    const primary = providers.primary ? workerProviderLabel(providers.primary) : '未关联';
+    const fallback = providers.fallback ? workerProviderLabel(providers.fallback) : '无备用';
+    return `<span class="worker-provider-summary">
+        <b title="${escapeAttr(primary)}">${escapeHtml(primary)}</b>
+        <small title="${escapeAttr(fallback)}">备用：${escapeHtml(fallback)}</small>
+    </span>`;
+}
+
+function renderWorkerPoolCard(worker, index) {
+    const id = escapeAttr(worker.id || `worker-${index + 1}`);
+    const enabled = worker.enabled !== false;
+    const tier = (worker.model_tier || 'deep') === 'quick' ? '快速模型' : '深度模型';
+    return `<div class="model-provider-card worker-pool-card" data-index="${index}">
+        <div class="model-provider-card-header">
+            <div class="model-provider-card-title">
+                <b title="${escapeAttr(worker.name || worker.id || id)}">${escapeHtml(worker.name || worker.id || id)}</b>
+                <small title="${escapeAttr(worker.id || id)}">${escapeHtml(worker.id || id)}</small>
+            </div>
+            <span class="model-provider-badge ${enabled ? '' : 'missing'}">${enabled ? '启用' : '停用'}</span>
+        </div>
+        <div class="model-provider-meta">
+            <div><span>模型档位</span><span>${escapeHtml(tier)}</span></div>
+            <div><span>模型源</span>${renderWorkerProviderSummary(worker)}</div>
+            <div><span>轮询间隔</span><span>${Number(worker.sleep_seconds || 5)} 秒</span></div>
+            <div><span>陈旧阈值</span><span>${Number(worker.stale_minutes || 15)} 分钟</span></div>
+        </div>
+        <div class="model-provider-actions">
+            <button class="btn-secondary" onclick="openWorkerPoolEditor(${index})">编辑</button>
+            <button class="btn-secondary" onclick="removeWorkerPoolRow(${index})">删除</button>
+        </div>
+    </div>`;
 }
 
 function renderWorkerPoolRows() {
@@ -746,19 +1226,7 @@ function renderWorkerPoolRows() {
         el.innerHTML = '<div class="empty-state"><p>暂无 Worker 配置</p></div>';
         return;
     }
-    el.innerHTML = workerPoolRows.map((worker, index) => `<div class="worker-pool-row" data-index="${index}">
-        <label class="worker-enabled"><input type="checkbox" data-field="enabled" ${worker.enabled !== false ? 'checked' : ''}>启用</label>
-        <input class="setting-input" data-field="id" value="${escapeAttr(worker.id || '')}" placeholder="worker-id">
-        <input class="setting-input" data-field="name" value="${escapeAttr(worker.name || '')}" placeholder="显示名称">
-        <select class="setting-select" data-field="model_tier">
-            <option value="deep" ${(worker.model_tier || 'deep') === 'deep' ? 'selected' : ''}>深度模型</option>
-            <option value="quick" ${worker.model_tier === 'quick' ? 'selected' : ''}>快速模型</option>
-        </select>
-        <input class="setting-input" type="number" min="1" step="1" data-field="sleep_seconds" value="${escapeAttr(worker.sleep_seconds || 5)}" placeholder="轮询秒">
-        <input class="setting-input" type="number" min="1" step="1" data-field="stale_minutes" value="${escapeAttr(worker.stale_minutes || 15)}" placeholder="超时分钟">
-        <div class="worker-provider-list">${providerCheckboxes(worker.provider_ids || [])}</div>
-        <button class="btn-secondary" onclick="removeWorkerPoolRow(${index})">删除</button>
-    </div>`).join('');
+    el.innerHTML = `<div class="model-provider-grid">${workerPoolRows.map(renderWorkerPoolCard).join('')}</div>`;
 }
 
 async function loadWorkerPoolConfig() {
@@ -774,8 +1242,14 @@ async function loadWorkerPoolConfig() {
 }
 
 function addWorkerPoolRow() {
+    openWorkerPoolEditor();
+}
+
+function openWorkerPoolEditor(index = '') {
+    const isEdit = index !== '' && index !== null && index !== undefined;
+    const worker = isEdit ? workerPoolRows[Number(index)] : null;
     const next = workerPoolRows.length + 1;
-    workerPoolRows.push({
+    const draft = worker || {
         id: `worker-${next}`,
         name: `Worker ${next}`,
         enabled: true,
@@ -783,28 +1257,76 @@ function addWorkerPoolRow() {
         model_tier: 'deep',
         sleep_seconds: 5,
         stale_minutes: 15,
-    });
-    renderWorkerPoolRows();
+    };
+    const providers = workerProviders(draft);
+    document.getElementById('workerEditTitle').textContent = worker ? '编辑 Worker' : '新增 Worker';
+    document.getElementById('workerEditIndex').value = worker ? String(index) : '';
+    document.getElementById('workerEditId').value = draft.id || '';
+    document.getElementById('workerEditName').value = draft.name || '';
+    document.getElementById('workerEditEnabled').value = draft.enabled === false ? 'false' : 'true';
+    document.getElementById('workerEditModelTier').value = draft.model_tier === 'quick' ? 'quick' : 'deep';
+    document.getElementById('workerEditPrimaryProviderId').innerHTML = workerProviderSelectOptions(providers.primary, '请选择主模型源');
+    document.getElementById('workerEditFallbackProviderId').innerHTML = workerProviderSelectOptions(providers.fallback, '不使用备用模型源');
+    document.getElementById('workerEditSleepSeconds').value = draft.sleep_seconds || 5;
+    document.getElementById('workerEditStaleMinutes').value = draft.stale_minutes || 15;
+    document.getElementById('workerPoolEditorModal')?.classList.add('show');
+}
+
+function closeWorkerPoolEditor() {
+    document.getElementById('workerPoolEditorModal')?.classList.remove('show');
 }
 
 function removeWorkerPoolRow(index) {
-    workerPoolRows.splice(index, 1);
-    renderWorkerPoolRows();
+    showConfirm('删除 Worker', '删除后该 Worker 不会再由模型池脚本启动。确定删除吗？', async () => {
+        workerPoolRows.splice(index, 1);
+        await saveWorkerPoolConfig();
+    });
 }
 
 function collectWorkerPoolRows() {
-    return Array.from(document.querySelectorAll('#workerPoolList .worker-pool-row')).map(row => {
-        const field = name => row.querySelector(`[data-field="${name}"]`);
-        return {
-            id: field('id')?.value?.trim() || '',
-            name: field('name')?.value?.trim() || '',
-            enabled: !!field('enabled')?.checked,
-            model_tier: field('model_tier')?.value || 'deep',
-            sleep_seconds: Number(field('sleep_seconds')?.value || 5),
-            stale_minutes: Number(field('stale_minutes')?.value || 15),
-            provider_ids: Array.from(row.querySelectorAll('.worker-provider-list input:checked')).map(input => input.value),
-        };
-    });
+    return workerPoolRows.map(worker => ({
+        id: worker.id || '',
+        name: worker.name || '',
+        enabled: worker.enabled !== false,
+        model_tier: worker.model_tier === 'quick' ? 'quick' : 'deep',
+        sleep_seconds: Number(worker.sleep_seconds || 5),
+        stale_minutes: Number(worker.stale_minutes || 15),
+        provider_ids: (worker.provider_ids || []).filter(Boolean),
+    }));
+}
+
+function collectWorkerPoolEditPayload() {
+    const primary = document.getElementById('workerEditPrimaryProviderId')?.value || '';
+    const fallback = document.getElementById('workerEditFallbackProviderId')?.value || '';
+    return {
+        id: document.getElementById('workerEditId')?.value?.trim() || '',
+        name: document.getElementById('workerEditName')?.value?.trim() || '',
+        enabled: document.getElementById('workerEditEnabled')?.value !== 'false',
+        model_tier: document.getElementById('workerEditModelTier')?.value === 'quick' ? 'quick' : 'deep',
+        sleep_seconds: Number(document.getElementById('workerEditSleepSeconds')?.value || 5),
+        stale_minutes: Number(document.getElementById('workerEditStaleMinutes')?.value || 15),
+        provider_ids: [...new Set([primary, fallback].filter(Boolean))],
+    };
+}
+
+async function saveWorkerPoolEdit() {
+    const indexValue = document.getElementById('workerEditIndex')?.value || '';
+    const payload = collectWorkerPoolEditPayload();
+    if (!payload.id) {
+        toast('error', '请填写 Worker ID');
+        return;
+    }
+    if (!payload.provider_ids.length) {
+        toast('error', '请至少选择一个主模型源');
+        return;
+    }
+    if (indexValue === '') {
+        workerPoolRows.push(payload);
+    } else {
+        workerPoolRows[Number(indexValue)] = payload;
+    }
+    closeWorkerPoolEditor();
+    await saveWorkerPoolConfig();
 }
 
 async function saveWorkerPoolConfig() {
@@ -822,88 +1344,6 @@ async function saveWorkerPoolConfig() {
         toast('success', 'Worker 模型池配置已保存');
     } catch (e) {
         toast('error', 'Worker 配置保存失败: ' + e.message);
-    }
-}
-
-async function saveCurrentModelProvider() {
-    const models = parseModelOptions(document.getElementById('set-llm_model_options')?.value || '[]');
-    const payload = {
-        name: document.getElementById('set-llm_name')?.value || '',
-        base_url: document.getElementById('set-custom_endpoint')?.value || '',
-        api_key: document.getElementById('set-api_key')?.value || '',
-        models,
-        quick_model: document.getElementById('set-quick_think_model')?.value || '',
-        deep_model: document.getElementById('set-deep_think_model')?.value || '',
-        default_model: document.getElementById('set-deep_think_model')?.value || document.getElementById('set-quick_think_model')?.value || '',
-        context_length: document.getElementById('set-llm_context_length')?.value || '',
-        apply_to: 'ai',
-    };
-    if (!payload.base_url) {
-        toast('error', '请先填写 Base URL');
-        return;
-    }
-    try {
-        const resp = await fetch(`${API_BASE}/model-providers`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || '保存失败');
-        toast('success', '模型配置已保存并应用到AI引擎');
-        await loadSettings();
-        loadModelProviders();
-    } catch (e) {
-        toast('error', '保存失败: ' + e.message);
-    }
-}
-
-async function saveVerificationModelProvider() {
-    const models = parseModelOptions(document.getElementById('set-verification_model_options')?.value || '[]');
-    const payload = {
-        name: document.getElementById('set-verification_name')?.value || '',
-        base_url: document.getElementById('set-verification_endpoint')?.value || '',
-        api_key: document.getElementById('set-verification_api_key')?.value || '',
-        models,
-        default_model: document.getElementById('set-verification_model')?.value || '',
-        quick_model: '',
-        deep_model: document.getElementById('set-verification_model')?.value || '',
-        context_length: document.getElementById('set-verification_context_length')?.value || '',
-        apply_to: 'verification',
-    };
-    if (!payload.base_url) {
-        toast('error', '请先填写核对 Base URL');
-        return;
-    }
-    try {
-        const resp = await fetch(`${API_BASE}/model-providers`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || '保存失败');
-        toast('success', '核对模型配置已保存并应用到旁观者核对');
-        await loadSettings();
-        loadModelProviders();
-    } catch (e) {
-        toast('error', '保存失败: ' + e.message);
-    }
-}
-
-async function applyModelProvider(id, target) {
-    try {
-        const resp = await fetch(`${API_BASE}/model-providers/${id}/apply`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({target}),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || '应用失败');
-        toast('success', target === 'verification' ? '已应用到旁观者核对' : '已应用到AI引擎');
-        await loadSettings();
-    } catch (e) {
-        toast('error', '应用失败: ' + e.message);
     }
 }
 
@@ -954,13 +1394,21 @@ async function loadDataHealth() {
     try {
         const resp = await fetch(`${API_BASE}/data-health`);
         const data = await resp.json();
-        el.innerHTML = `<div class="backup-status-grid">${(data.checks || []).map(item => `
+        const identity = (data.checks || []).find(item => item.key === 'identity_integrity');
+        const identityRows = identity ? `
+            <div>
+              <span>登录账户完整性</span>
+              <strong class="${identity.status === 'ok' ? 'up' : 'down'}">${identity.status === 'ok' ? '正常' : '需处理'}</strong>
+              <small>${escapeHtml(identity.message || '')}</small>
+              ${renderDataHealthDetails(identity.details)}
+            </div>` : '';
+        el.innerHTML = `<div class="backup-status-grid">${(data.checks || []).filter(item => item.key !== 'identity_integrity').map(item => `
             <div>
               <span>${escapeHtml(item.label)}</span>
               <strong class="${item.status === 'ok' ? 'up' : 'down'}">${item.status === 'ok' ? '正常' : '需处理'}</strong>
               <small>${escapeHtml(item.message || '')}</small>
               ${renderDataHealthDetails(item.details)}
-            </div>`).join('')}</div>`;
+            </div>`).join('')}${identityRows}</div>`;
     } catch (e) {
         el.innerHTML = `<div class="empty-state"><p>数据健康检查失败：${escapeHtml(e.message)}</p></div>`;
     }
@@ -993,6 +1441,7 @@ function renderDataHealthDetails(details) {
         const parts = [];
         if (item.table_name) parts.push(item.table_name);
         if (item.account_id !== undefined) parts.push(`账户 ${item.account_id || '空'}`);
+        if (item.orphan_securities_account_ids !== undefined) parts.push(`异常证券账户 ${item.orphan_securities_account_ids}`);
         if (item.code) parts.push(`${item.name || item.code} ${item.code}`);
         if (item.expected_shares !== undefined) parts.push(`应为 ${item.expected_shares} 股，当前 ${item.actual_shares} 股`);
         if (item.configured_cash !== undefined) parts.push(`设置 ${item.configured_cash}，流水 ${item.ledger_cash ?? '缺失'}`);
@@ -1061,7 +1510,6 @@ function hermesToolLabel(tool) {
         add_watchlist: '添加自选股',
         record_trade: '记录交易',
         set_position: '校准持仓',
-        create_conditional_order: '创建条件单',
     }[tool] || tool;
 }
 
@@ -1161,6 +1609,33 @@ function restoreLatestBackup() {
     });
 }
 
+function restoreUploadedDatabase(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    input.value = '';
+    showConfirm(
+        '上传数据库文件恢复',
+        `将使用「${file.name}」替换当前整个 SQLite 数据库。系统会先自动备份当前数据库，但恢复后建议重启服务。确定继续吗？`,
+        async () => {
+            try {
+                const form = new FormData();
+                form.append('file', file);
+                const resp = await fetch(`${API_BASE}/settings/backup/restore-upload`, {
+                    method: 'POST',
+                    body: form,
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || '恢复失败');
+                toast('success', `数据库恢复完成: ${data.filename || file.name}${data.restart_required ? '，请重启服务' : ''}`);
+                await loadSettings();
+                await loadBackupStatus();
+            } catch (e) {
+                toast('error', '上传恢复失败: ' + e.message);
+            }
+        }
+    );
+}
+
 // ── 重置设置 ──
 async function resetSettings() {
     showConfirm('重置设置', '确定要将所有设置恢复为默认值吗？', async () => {
@@ -1176,12 +1651,12 @@ async function resetSettings() {
 
 // ── 清空数据 ──
 function confirmClearAll() {
-    showConfirm('清空所有数据', '此操作不可撤销！将删除所有自选股、持仓、条件单和历史报告。', async () => {
+    showConfirm('清空所有数据', '此操作不可撤销！将删除所有自选股、持仓和历史报告。', async () => {
         try {
             const resp = await fetch(`${API_BASE}/settings/clear-all`, { method: 'POST' });
             const data = await resp.json();
             const c = data.cleared;
-            toast('success', `已清空: 自选${c.watchlist}/持仓${c.portfolio}/交易${c.trades}/条件单${c.conditional_orders}/报告${c.analysis_reports}`);
+            toast('success', `已清空: 自选${c.watchlist}/持仓${c.portfolio}/交易${c.trades}/报告${c.analysis_reports}`);
         } catch (e) {
             toast('error', '清空失败');
         }
@@ -1220,6 +1695,7 @@ loadBackupStatus();
 loadModelProviders();
 loadWorkerPoolConfig();
 loadHermesToolPolicy();
+loadTradeMemoryEmbeddingStatus();
 loadDataAudit();
 loadDataHealth();
 loadSystemDiagnostics();
@@ -1228,40 +1704,148 @@ loadWorkspaceTemplates();
 // ── 账户管理 ──
 async function loadAccountList() {
     try {
+        const sessionResp = await fetch(`${API_BASE}/auth/session`);
+        const sessionData = await sessionResp.json();
+        const user = sessionData.user || {};
+        const loginPanel = document.getElementById('loginAccountPanel');
+        if (loginPanel) {
+            loginPanel.innerHTML = `<div style="display:flex;gap:8px;align-items:center;font-size:0.85rem;">
+              <span style="color:var(--text-muted);">登录账户</span>
+              <strong>${escapeHtml(user.display_name || user.username || user.id || '本机账户')}</strong>
+              <span style="color:var(--text-muted);">${user.authenticated ? '已登录' : '本机默认账户'}</span>
+            </div>`;
+        }
+        const usersResp = await fetch(`${API_BASE}/auth/users`);
+        const usersData = await usersResp.json();
+        const userList = document.getElementById('loginUserList');
+        if (userList) {
+            userList.innerHTML = (usersData.users || []).map(u =>
+                `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:0.85rem;">
+                  <span style="color:var(--text-muted);font-size:0.75rem;">登录账户</span>
+                  <span style="font-weight:600;">${escapeHtml(u.display_name || u.username || u.id)}</span>
+                  <span style="color:var(--text-muted);font-size:0.75rem;">${escapeHtml(u.username || '')}</span>
+                  <span style="color:var(--text-muted);font-size:0.7rem;">${escapeHtml(u.status || '')}</span>
+                  ${u.id === 'admin' ? '' : `<button class="btn-secondary danger" style="font-size:0.75rem;" onclick="deleteLoginUser('${escapeAttr(u.id)}')">停用</button>`}
+                </div>`
+            ).join('');
+        }
         const resp = await fetch(`${API_BASE}/accounts`);
         const data = await resp.json();
         const el = document.getElementById('accountList');
         if (!el) return;
         el.innerHTML = data.accounts.map(a =>
             `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:0.85rem;">
+              <span style="color:var(--text-muted);font-size:0.75rem;">证券账户</span>
               <span style="font-weight:600;">${escapeHtml(a.name)}</span>
               <span style="color:var(--text-muted);font-size:0.75rem;">${escapeHtml(a.broker || '')}</span>
               <span style="color:var(--text-muted);font-size:0.7rem;">(${escapeHtml(a.id)})</span>
+              <button class="btn-secondary" style="font-size:0.75rem;" onclick="editSecuritiesAccount('${escapeAttr(a.id)}','${escapeAttr(a.name)}','${escapeAttr(a.broker || '')}','${escapeAttr(a.notes || '')}')">编辑</button>
+              <button class="btn-secondary danger" style="font-size:0.75rem;" onclick="deleteSecuritiesAccount('${escapeAttr(a.id)}')">停用</button>
             </div>`
         ).join('');
     } catch(e) {}
 }
 
-async function addAccount() {
-    const name = prompt('账户名称（如：方正证券）:');
-    if (!name) return;
-    const broker = prompt('券商名称（可选）:') || '';
+async function saveLoginUser(event) {
+    event.preventDefault();
+    const payload = {
+        username: document.getElementById('loginUserUsername').value.trim(),
+        display_name: document.getElementById('loginUserDisplayName').value.trim(),
+        password: document.getElementById('loginUserPassword').value,
+    };
+    if (!payload.username) {
+        toast('error', '请输入登录用户名');
+        return;
+    }
     try {
-        const resp = await fetch(`${API_BASE}/accounts`, {
+        const resp = await fetch(`${API_BASE}/auth/users`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, broker }),
+            body: JSON.stringify(payload),
         });
         const data = await resp.json();
-        if (data.success) {
-            toast('success', '账户已创建');
-            loadAccountList();
-            loadAccounts(); // refresh the global switcher too
-        } else {
-            toast('error', '创建失败: ' + (data.error || ''));
+        if (!resp.ok) {
+            toast('error', '新增失败: ' + (data.detail || data.error || ''));
+            return;
         }
+        toast('success', '登录账户已创建');
+        document.getElementById('loginUserManagementPanel').reset();
+        loadAccountList();
     } catch(e) {
-        toast('error', '创建失败: ' + e.message);
+        toast('error', '新增失败: ' + e.message);
+    }
+}
+
+async function deleteLoginUser(id) {
+    try {
+        const resp = await fetch(`${API_BASE}/auth/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            toast('error', '停用失败: ' + (data.detail || data.error || ''));
+            return;
+        }
+        toast('success', '登录账户已停用');
+        loadAccountList();
+    } catch(e) {
+        toast('error', '停用失败: ' + e.message);
+    }
+}
+
+function editSecuritiesAccount(id, name, broker, notes) {
+    document.getElementById('securitiesAccountId').value = id || '';
+    document.getElementById('securitiesAccountName').value = name || '';
+    document.getElementById('securitiesAccountBroker').value = broker || '';
+    document.getElementById('securitiesAccountNotes').value = notes || '';
+}
+
+async function saveSecuritiesAccount(event) {
+    event.preventDefault();
+    const id = document.getElementById('securitiesAccountId').value;
+    const payload = {
+        name: document.getElementById('securitiesAccountName').value.trim(),
+        broker: document.getElementById('securitiesAccountBroker').value.trim(),
+        notes: document.getElementById('securitiesAccountNotes').value.trim(),
+    };
+    if (!payload.name) {
+        toast('error', '请输入证券账户名称');
+        return;
+    }
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `${API_BASE}/accounts/${encodeURIComponent(id)}` : `${API_BASE}/accounts`;
+    try {
+        const resp = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            toast('error', '保存失败: ' + (data.detail || data.error || ''));
+            return;
+        }
+        toast('success', '证券账户已保存');
+        document.getElementById('securitiesAccountForm').reset();
+        document.getElementById('securitiesAccountId').value = '';
+        loadAccountList();
+        if (typeof loadAccounts === 'function') loadAccounts();
+    } catch(e) {
+        toast('error', '保存失败: ' + e.message);
+    }
+}
+
+async function deleteSecuritiesAccount(id) {
+    try {
+        const resp = await fetch(`${API_BASE}/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            toast('error', '停用失败: ' + (data.detail || data.error || ''));
+            return;
+        }
+        toast('success', '证券账户已停用');
+        loadAccountList();
+        if (typeof loadAccounts === 'function') loadAccounts();
+    } catch(e) {
+        toast('error', '停用失败: ' + e.message);
     }
 }
 
@@ -1291,19 +1875,35 @@ if (_origSaveSettings) {
 }
 
 Object.assign(window, {
+    aiSettingsSubtab,
     loadModelProviders,
-    saveCurrentModelProvider,
-    saveVerificationModelProvider,
-    applyModelProvider,
+    openModelProviderEditor,
+    closeProviderEditModal,
+    saveModelProviderEdit,
+    fetchProviderEditModels,
+    onProviderEditUsageChange,
+    onAiProviderChange,
+    onVerificationProviderChange,
+    onEmbeddingProviderChange,
+    syncLegacyAiProviderFields,
+    syncLegacyVerificationProviderFields,
+    syncLegacyEmbeddingProviderFields,
     refreshModelProvider,
     testModelProvider,
     deleteModelProvider,
     loadWorkerPoolConfig,
     addWorkerPoolRow,
+    openWorkerPoolEditor,
+    closeWorkerPoolEditor,
+    saveWorkerPoolEdit,
     removeWorkerPoolRow,
     saveWorkerPoolConfig,
     loadHermesToolPolicy,
     saveHermesToolPolicy,
+    loadTradeMemoryEmbeddingStatus,
+    testTradeMemoryEmbeddingConnection,
+    renderEmbeddingConnectionResult,
+    backfillTradeMemoryEmbeddings,
     loadDataAudit,
     loadDataHealth,
     loadSystemDiagnostics,

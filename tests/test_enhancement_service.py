@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
@@ -8,6 +9,10 @@ from fastapi import HTTPException
 from models import database
 from repositories import settings_repository
 from services import enhancement_service
+
+
+def json_dumps(value):
+    return json.dumps(value, ensure_ascii=False)
 
 
 class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -48,6 +53,91 @@ class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(applied["settings"]["quick_think_model"], "fast")
         self.assertEqual(applied["settings"]["deep_think_model"], "deep")
         self.assertEqual(applied["settings"]["api_key"], "********")
+
+    async def test_model_provider_pool_persists_to_dedicated_table(self):
+        enhancement_service.save_model_provider({
+            "id": "p-table",
+            "name": "Table Provider",
+            "base_url": "https://table.example.com/v1",
+            "api_key": "sk-table",
+            "models": ["fast", "deep"],
+            "quick_model": "fast",
+            "deep_model": "deep",
+            "usage": ["ai"],
+        })
+
+        with sqlite3.connect(self.db_path) as db:
+            provider = db.execute(
+                "SELECT id, name, base_url, api_key, models_json, usage_json FROM model_providers WHERE id = ?",
+                ("p-table",),
+            ).fetchone()
+            legacy = db.execute("SELECT value FROM settings WHERE key = ?", ("model_providers",)).fetchone()
+
+        self.assertIsNotNone(provider)
+        self.assertEqual(provider[1], "Table Provider")
+        self.assertEqual(provider[2], "https://table.example.com/v1")
+        self.assertEqual(provider[3], "sk-table")
+        self.assertEqual(provider[4], '["fast", "deep"]')
+        self.assertEqual(provider[5], '["ai"]')
+        self.assertIsNone(legacy)
+
+    async def test_model_provider_list_migrates_legacy_settings_json_once(self):
+        settings_repository.upsert_settings({
+            "model_providers": json_dumps([
+                {
+                    "id": "legacy",
+                    "name": "Legacy Provider",
+                    "base_url": "https://legacy.example.com/v1",
+                    "api_key": "sk-legacy",
+                    "models": ["legacy-fast"],
+                    "quick_model": "legacy-fast",
+                    "deep_model": "legacy-fast",
+                }
+            ])
+        })
+
+        listed = enhancement_service.list_model_providers()
+
+        self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["providers"][0]["id"], "legacy")
+        self.assertTrue(listed["providers"][0]["has_api_key"])
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute("SELECT id FROM model_providers WHERE id = 'legacy'").fetchone()
+        self.assertIsNotNone(row)
+
+    async def test_model_provider_update_preserves_secret_placeholder_and_applies_usage(self):
+        enhancement_service.save_model_provider({
+            "id": "p-edit",
+            "name": "Before",
+            "base_url": "https://before.example.com/v1",
+            "api_key": "sk-original",
+            "models": ["old"],
+            "quick_model": "old",
+        })
+
+        updated = enhancement_service.update_model_provider("p-edit", {
+            "name": "After",
+            "base_url": "https://after.example.com/v1",
+            "api_key": "********",
+            "models": ["fast", "deep", "text-embedding-v4"],
+            "quick_model": "fast",
+            "deep_model": "deep",
+            "embedding_model": "text-embedding-v4",
+            "embedding_dimensions": 1536,
+            "usage": ["ai", "embedding"],
+        })
+
+        self.assertEqual(updated["provider"]["name"], "After")
+        self.assertEqual(updated["provider"]["base_url"], "https://after.example.com/v1")
+        self.assertEqual(updated["provider"]["usage"], ["ai", "embedding"])
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT api_key, embedding_model, embedding_dimensions FROM model_providers WHERE id = ?",
+                ("p-edit",),
+            ).fetchone()
+        self.assertEqual(row[0], "sk-original")
+        self.assertEqual(row[1], "text-embedding-v4")
+        self.assertEqual(row[2], 1536)
 
     async def test_model_provider_save_can_apply_to_current_ai_settings(self):
         enhancement_service.save_model_provider({
@@ -141,28 +231,6 @@ class EnhancementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(versions["count"], 2)
         self.assertTrue(compared["diff"]["signal_changed"])
         self.assertEqual(compared["diff"]["confidence_delta"], -10)
-
-    async def test_condition_backtest_counts_triggers(self):
-        with sqlite3.connect(self.db_path) as db:
-            db.executemany(
-                "INSERT INTO daily_pnl (date, code6, close_price) VALUES (?, ?, ?)",
-                [
-                    ("2026-01-01", "000001", 10.0),
-                    ("2026-01-02", "000001", 9.5),
-                    ("2026-01-03", "000001", 11.0),
-                ],
-            )
-            db.commit()
-
-        result = await enhancement_service.condition_backtest({
-            "code": "000001",
-            "condition_type": "price_lte",
-            "target_price": 10,
-            "days": 90,
-        })
-
-        self.assertEqual(result["trigger_count"], 2)
-        self.assertEqual(result["post_trigger_return_pct"], 10.0)
 
     async def test_data_health_detects_missing_model_list(self):
         result = await enhancement_service.data_health()

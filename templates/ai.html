@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AI分析台 — 炒股小牛马{% endblock %}
+{% block title %}智能盯盘 — 炒股小牛马{% endblock %}
 
 {% block content %}
 <div class="ai-container" id="aiContainer">
@@ -8,12 +8,11 @@
         <span id="queuePanelText"></span>
     </div>
 
-    <!-- 左栏：自选股卡片列表（可单选/批量选） -->
+    <!-- 左栏：自选股卡片列表（单股盯盘入口） -->
     <aside class="ai-left" id="aiLeft">
     <div class="ai-left-header">
         <h3>自选股</h3>
         <div class="ai-left-actions">
-            <button class="btn btn-sm ai-batch-toggle" id="batchToggleBtn" onclick="toggleBatchMode()" title="批量选择">批量</button>
             <button class="btn btn-sm ai-panel-close" onclick="toggleLeftPanel()" title="收起左栏">收起</button>
         </div>
     </div>
@@ -50,19 +49,9 @@
                 <button type="button" class="signal-filter-chip" data-signal="STRONG_SELL" onclick="toggleLastSignalFilter('STRONG_SELL')">强烈卖出</button>
                 <button type="button" class="signal-filter-chip" data-signal="NO_REPORT" onclick="toggleLastSignalFilter('NO_REPORT')">无报告</button>
             </div>
-            <div class="ai-batch-select-row">
-                <button class="btn btn-sm" onclick="selectVisibleAIStocks()">全选当前</button>
-                <button class="btn btn-sm" onclick="selectAIStocksByLastSignals()">按信号选择</button>
-            </div>
         </div>
         <div class="ai-stock-list" id="aiStockList">
             <!-- JS填充：复用 stock-card 样式 -->
-        </div>
-        <!-- 批量操作栏 -->
-        <div id="batchBar" class="ai-batch-bar" style="display:none">
-            <span id="batchCount">已选 0 只</span>
-            <button class="btn btn-sm btn-primary" onclick="batchAnalyze()">批量分析</button>
-            <button class="btn btn-sm" onclick="clearSelection()">取消</button>
         </div>
     </aside>
 
@@ -151,7 +140,6 @@
                     </div>
                     <div class="report-header-right">
                         <button class="btn btn-sm" onclick="saveToGbrain()">存入gbrain</button>
-                        <button class="btn btn-sm btn-primary" id="btnGenCondOrder" onclick="generateCondOrder()" style="display:none;" title="从当前AI报告生成可回溯条件单草稿">报告转条件单</button>
                         <button class="btn btn-sm" onclick="downloadPdf()">下载</button>
                         <button class="btn btn-sm" onclick="closeReport()">关闭</button>
                     </div>
@@ -215,45 +203,6 @@
             </div>
             <div id="aiTaskList" class="ai-task-list">
                 <div class="empty-row">暂无任务</div>
-            </div>
-        </div>
-
-        <div class="ai-section ai-right-section">
-            <div class="section-header">
-                <h3>批量研究</h3>
-                <div class="section-actions">
-                    <button class="btn btn-sm" onclick="createBatchResearchJob('data_prefetch')">预取所选数据</button>
-                    <button class="btn btn-sm btn-primary" onclick="createBatchResearchJob('report_generation')">生成所选报告</button>
-                </div>
-            </div>
-            <div class="batch-research-controls">
-                <label class="batch-research-control">
-                    <span>分析深度</span>
-                    <select id="batchDepthSelect" class="control-select">
-                        <option value="quick">快速</option>
-                        <option value="standard" selected>标准</option>
-                        <option value="deep">深度</option>
-                    </select>
-                </label>
-                <label class="batch-research-control">
-                    <span>模型模式</span>
-                    <select id="batchModelModeSelect" class="control-select">
-                        <option value="economy">经济</option>
-                        <option value="balanced" selected>均衡</option>
-                        <option value="flagship">旗舰</option>
-                    </select>
-                </label>
-                <label class="batch-research-control batch-research-checkbox">
-                    <input type="checkbox" id="batchForceReanalysis">
-                    <span>强制重新分析</span>
-                </label>
-            </div>
-            <div id="batchResearchPanel" class="report-quality-panel">
-                <div class="empty-row">暂无批量任务</div>
-            </div>
-            <div class="section-actions" style="margin-top:8px;justify-content:space-between">
-                <button class="btn btn-sm" onclick="createBatchResearchJob('position_plan')">用所选股票生成组合研究方案</button>
-                <a class="btn btn-sm" href="/reports">进入报告库</a>
             </div>
         </div>
 
@@ -322,7 +271,7 @@
                 <h3>最近报告</h3>
                 <div class="section-actions">
                     <input id="reportSearch" type="text" class="form-input-sm" placeholder="搜索代码..." onkeyup="searchReports(event)">
-                    <a class="btn btn-sm" href="/reports">全部</a>
+                    <a class="btn btn-sm" href="/reports">AI投研中心</a>
                 </div>
             </div>
             <div id="reportsList" class="reports-list">
@@ -335,5 +284,5 @@
 
 {% block scripts %}
 <script src="/static/js/ai-task-client.js?v=2.9.2"></script>
-<script src="/static/js/ai.js?v=2.9.20-pnl-pct"></script>
+<script src="/static/js/ai.js?v=2.9.24-smart-watch"></script>
 {% endblock %}

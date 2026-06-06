@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from models import conditional_order, news_manager, portfolio, settings, watchlist
+from models import news_manager, portfolio, settings, watchlist
 
 
 class ModelHelperTests(unittest.TestCase):
@@ -22,7 +22,6 @@ class ModelHelperTests(unittest.TestCase):
             portfolio: portfolio.DB_PATH,
             settings: settings.DB_PATH,
             news_manager: news_manager.DB_PATH,
-            conditional_order: conditional_order.DB_PATH,
         }
         for module in self.original_paths:
             module.DB_PATH = db_path
@@ -72,20 +71,6 @@ class ModelHelperTests(unittest.TestCase):
                     published_at TEXT,
                     cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                CREATE TABLE conditional_orders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL,
-                    name TEXT,
-                    condition_type TEXT NOT NULL,
-                    target_price REAL NOT NULL,
-                    action TEXT NOT NULL,
-                    shares REAL,
-                    status TEXT DEFAULT 'pending',
-                    triggered_at TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    expires_at TIMESTAMP,
-                    notes TEXT
-                );
                 """
             )
 
@@ -128,19 +113,6 @@ class ModelHelperTests(unittest.TestCase):
         news = news_manager.get_news("600519")
         self.assertEqual(len(news), 1)
         self.assertEqual(news_manager.get_sentiment_summary("600519")["overall"], "positive")
-
-    def test_conditional_order_uses_pending_current_schema(self):
-        order_id = conditional_order.create_order(
-            "600519", "price_gte", 100.0, action="sell", action_shares=100
-        )
-        active = conditional_order.get_active_orders("600519")
-        self.assertEqual(active[0]["id"], order_id)
-
-        triggered = conditional_order.check_orders({"600519": {"price": 101.0, "change_pct": 1.0}})
-        self.assertEqual(len(triggered), 1)
-        conditional_order.update_status(order_id, "triggered")
-        self.assertEqual(conditional_order.get_active_orders("600519"), [])
-
 
 if __name__ == "__main__":
     unittest.main()

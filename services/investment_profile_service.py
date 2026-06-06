@@ -111,7 +111,14 @@ def normalize_investment_profile(settings: dict[str, Any] | None = None) -> dict
     }
 
 
-def investment_profile_context(settings: dict[str, Any] | None = None) -> str:
+def investment_profile_context(
+    settings: dict[str, Any] | None = None,
+    db_path: Path | None = None,
+    *,
+    code: str | None = None,
+    report_text: str | None = None,
+    account_id: str = "default",
+) -> str:
     profile = normalize_investment_profile(settings)
     left_side = "允许左侧试仓，但必须小仓位、明确止损和补仓条件" if profile["allow_left_side"] else "不允许左侧交易，优先等待右侧确认或触发条件"
     volatility = VOLATILITY_LABELS.get(profile["allow_high_volatility"], VOLATILITY_LABELS["cautious"])
@@ -151,10 +158,38 @@ def investment_profile_context(settings: dict[str, Any] | None = None) -> str:
         lines.append(f"- 用户自定义说明：{profile['custom_notes']}")
     if profile["inferred_summary"]:
         lines.append(f"- 交易历史推断摘要：{profile['inferred_summary']}")
+    try:
+        from services import trade_memory_service
+
+        memory_context = trade_memory_service.trade_memory_context(
+            code=code,
+            report_text=report_text,
+            account_id=account_id,
+            db_path=db_path,
+        )
+    except Exception:
+        memory_context = ""
+    if memory_context:
+        lines.append(memory_context)
+    try:
+        from services import self_evolution_service
+
+        evolution_context = self_evolution_service.latest_context(db_path=db_path)
+    except Exception:
+        evolution_context = ""
+    if evolution_context:
+        lines.append(evolution_context)
     return "\n".join(lines)
 
 
-def investment_profile_snapshot(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+def investment_profile_snapshot(
+    settings: dict[str, Any] | None = None,
+    db_path: Path | None = None,
+    *,
+    code: str | None = None,
+    report_text: str | None = None,
+    account_id: str = "default",
+) -> dict[str, Any]:
     profile = normalize_investment_profile(settings)
     output_contract = {
         "style_match": {
@@ -177,7 +212,13 @@ def investment_profile_snapshot(settings: dict[str, Any] | None = None) -> dict[
         **profile,
         "version": INVESTMENT_PROFILE_VERSION,
         "output_contract": output_contract,
-        "context": investment_profile_context(settings),
+        "context": investment_profile_context(
+            settings,
+            db_path=db_path,
+            code=code,
+            report_text=report_text,
+            account_id=account_id,
+        ),
     }
 
 
@@ -340,10 +381,22 @@ def infer_profile_from_trade_history(db_path: Path | None = None) -> dict[str, A
     }
 
 
-def investment_profile_from_db(db_path: Path | None = None) -> dict[str, Any]:
+def investment_profile_from_db(
+    db_path: Path | None = None,
+    *,
+    code: str | None = None,
+    report_text: str | None = None,
+    account_id: str = "default",
+) -> dict[str, Any]:
     path = db_path or DB_PATH
     with sqlite3.connect(str(path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
     settings = {row["key"]: row["value"] for row in rows}
-    return investment_profile_snapshot(settings)
+    return investment_profile_snapshot(
+        settings,
+        db_path=path,
+        code=code,
+        report_text=report_text,
+        account_id=account_id,
+    )

@@ -76,7 +76,7 @@ class TradeRecord:
 
 
 @dataclass(frozen=True)
-class ConditionalOrder:
+class TradingPlan:
     code: str
     name: str
     target_price: float
@@ -87,7 +87,7 @@ class ConditionalOrder:
 @dataclass(frozen=True)
 class ParsedTradeHistory:
     closed_trades: list[ClosedTrade]
-    conditional_orders: list[ConditionalOrder]
+    trading_plans: list[TradingPlan]
     cash_balance: float | None
     initial_capital_reported: float | None
 
@@ -185,7 +185,7 @@ def parse_trade_history(content: str) -> ParsedTradeHistory:
     year = infer_year(content)
     section = ""
     closed: list[ClosedTrade] = []
-    orders: list[ConditionalOrder] = []
+    plans: list[TradingPlan] = []
     cash_balance: float | None = None
     initial_capital_reported: float | None = None
 
@@ -223,18 +223,18 @@ def parse_trade_history(content: str) -> ParsedTradeHistory:
                 cash_balance = parse_money(cells[1])
             elif "初始本金" in cells[0]:
                 initial_capital_reported = parse_money(cells[1])
-        elif "待建仓条件单" in section and len(cells) >= 7 and cells[0] != "标的":
+        elif "待建仓" in section and len(cells) >= 7 and cells[0] != "标的":
             code = cells[1]
             price = parse_price(cells[2])
             shares = parse_quantity(cells[3])
             if not re.fullmatch(r"\d{6}", code or "") or not price or not shares:
                 continue
             notes = f"初始化导入；买入价 {cells[2]}；金额 {cells[4]}；止盈 {cells[5]}；止损 {cells[6]}"
-            orders.append(ConditionalOrder(code=code, name=cells[0], target_price=price, shares=shares, notes=notes))
+            plans.append(TradingPlan(code=code, name=cells[0], target_price=price, shares=shares, notes=notes))
 
     return ParsedTradeHistory(
         closed_trades=closed,
-        conditional_orders=orders,
+        trading_plans=plans,
         cash_balance=cash_balance,
         initial_capital_reported=initial_capital_reported,
     )
@@ -333,7 +333,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def reset_imported_data(conn: sqlite3.Connection) -> None:
-    for table in ("trades", "portfolio", "watchlist", "conditional_orders", "cash_ledger"):
+    for table in ("trades", "portfolio", "watchlist", "trading_plans", "cash_ledger"):
         conn.execute(f"DELETE FROM {table}")
     conn.execute("DELETE FROM settings WHERE key = 'cash_balance_default'")
     conn.commit()
@@ -448,18 +448,20 @@ def insert_cash(conn: sqlite3.Connection, account_id: str, balance: float | None
     return {"balance": rounded, "imported": 1}
 
 
-def insert_conditional_orders(conn: sqlite3.Connection, orders: list[ConditionalOrder], account_id: str) -> int:
-    for order in orders:
+def insert_trading_plans(conn: sqlite3.Connection, plans: list[TradingPlan], account_id: str) -> int:
+    for plan in plans:
+        plan_total_cost = round(plan.target_price * plan.shares, 3)
         conn.execute(
             """
-            INSERT INTO conditional_orders
-                (code, name, condition_type, target_price, action, shares, status, notes, account_id)
-            VALUES (?, ?, 'price_lte', ?, 'buy', ?, 'pending', ?, ?)
+            INSERT INTO trading_plans
+                (code, name, direction, plan_type, target_price, condition_type,
+                 plan_shares, plan_total_cost, status, reason, account_id)
+            VALUES (?, ?, 'buy', 'near_target', ?, 'price_lte', ?, ?, 'pending', ?, ?)
             """,
-            (order.code, order.name, order.target_price, order.shares, order.notes, account_id),
+            (plan.code, plan.name, plan.target_price, plan.shares, plan_total_cost, plan.notes, account_id),
         )
     conn.commit()
-    return len(orders)
+    return len(plans)
 
 
 def initialize_database(
@@ -495,7 +497,7 @@ def initialize_database(
             "inferred_initial_capital": inferred_initial_capital,
             "imported": 0,
         },
-        "conditional_orders": {"parsed": len(parsed_history.conditional_orders), "imported": 0},
+        "trading_plans": {"parsed": len(parsed_history.trading_plans), "imported": 0},
         "fee_model": asdict(fee_config),
     }
     if not apply:
@@ -513,9 +515,7 @@ def initialize_database(
         summary["trades"]["imported"] = insert_trades(conn, trades, account_id)
         cash_summary = insert_cash(conn, account_id, effective_cash)
         summary["cash"].update(cash_summary)
-        summary["conditional_orders"]["imported"] = insert_conditional_orders(
-            conn, parsed_history.conditional_orders, account_id
-        )
+        summary["trading_plans"]["imported"] = insert_trading_plans(conn, parsed_history.trading_plans, account_id)
     return summary
 
 
@@ -530,7 +530,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-commission", type=float, default=5.0, help="最低综合佣金，默认不免五")
     parser.add_argument("--transfer-fee-rate", type=float, default=0.00001, help="上海股票过户费率")
     parser.add_argument("--sell-stamp-tax-rate", type=float, default=0.0, help="卖出印花税率，默认按截图为 0")
-    parser.add_argument("--reset", action="store_true", help="导入前清空自选、交易、持仓、条件单和现金流水")
+    parser.add_argument("--reset", action="store_true", help="导入前清空自选、交易、持仓、交易计划和现金流水")
     parser.add_argument("--apply", action="store_true", help="实际写入数据库；不传则只预览")
     parser.add_argument("--no-backup", action="store_true", help="写入前不备份数据库")
     return parser

@@ -93,7 +93,6 @@ def export_data() -> dict:
         for key, query in {
             "watchlist": "SELECT * FROM watchlist ORDER BY sort_order ASC",
             "portfolio": "SELECT * FROM portfolio ORDER BY code",
-            "orders": "SELECT * FROM conditional_orders ORDER BY id",
             "reports": "SELECT * FROM analysis_reports ORDER BY created_at DESC LIMIT 100",
             "daily_pnl": "SELECT * FROM daily_pnl ORDER BY date DESC",
         }.items():
@@ -106,7 +105,7 @@ def export_data() -> dict:
 
 def import_data(data) -> dict:
     conn = open_connection()
-    imported = {"watchlist": 0, "portfolio": 0, "orders": 0, "settings": 0}
+    imported = {"watchlist": 0, "portfolio": 0, "settings": 0}
     try:
         if data.settings:
             for key, value in data.settings.items():
@@ -160,30 +159,6 @@ def import_data(data) -> dict:
                 except Exception:
                     pass
 
-        if data.orders:
-            for item in data.orders:
-                try:
-                    conn.execute(
-                        """
-                        INSERT INTO conditional_orders
-                            (code, name, condition_type, target_price, action, shares, status, notes)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            item.get("code", ""),
-                            item.get("name", ""),
-                            item.get("condition_type", "price_lte"),
-                            item.get("target_price", 0),
-                            item.get("action", "buy"),
-                            item.get("shares", 0),
-                            item.get("status", "active"),
-                            item.get("notes", ""),
-                        ),
-                    )
-                    imported["orders"] += 1
-                except Exception:
-                    pass
-
         conn.commit()
         return imported
     finally:
@@ -211,26 +186,6 @@ def fetch_recent_notifications() -> list[dict]:
     conn = open_connection()
     notifications = []
     try:
-        rows = conn.execute(
-            """
-            SELECT code, name, condition_type, target_price, action, shares, triggered_at
-            FROM conditional_orders
-            WHERE status = 'triggered'
-              AND triggered_at > datetime('now', '-5 minutes')
-            ORDER BY triggered_at DESC
-            """
-        ).fetchall()
-        for row in rows:
-            data = dict(row)
-            action_str = "买入" if data.get("action") == "buy" else "卖出"
-            notifications.append({
-                "type": "order_trigger",
-                "title": f"条件单触发: {data.get('name', '') or data['code']}",
-                "body": f"{action_str} {data.get('shares', 0)}股 @ {data['target_price']}",
-                "time": data.get("triggered_at", ""),
-                "data": data,
-            })
-
         rows = conn.execute(
             """
             SELECT id, code, signal, confidence, created_at

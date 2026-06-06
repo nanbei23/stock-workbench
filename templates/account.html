@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}账户管理 - 炒股小牛马{% endblock %}
+{% block content %}
+<div class="detail-area">
+  <div class="detail-header">
+    <div>
+      <h2>账户管理</h2>
+      <div class="cash-source-line">登录账户决定数据归属；证券账户决定资金、持仓和交易动作。</div>
+    </div>
+  </div>
+
+  <div class="card" id="initialCredentialNotice" style="display:none;margin-bottom:14px;border-color:#F4A261;">
+    <div class="card-header">
+      <div>
+        <div class="card-title">首次登录需要修改账户资料</div>
+        <div class="cash-source-line">请把默认用户名 admin 和默认密码 123456 改成你自己的登录信息。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section" style="display:block;">
+    <div class="setting-group">
+      <div class="setting-group-title">账户资料</div>
+      <div class="setting-hint">修改当前登录账户的用户名、显示名和登录密码。</div>
+      <form id="accountProfileForm" class="form-grid" onsubmit="saveAccountProfile(event)" style="margin:10px 0;">
+        <div class="form-group">
+          <label>用户名</label>
+          <input class="setting-input" id="accountProfileUsername" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label>显示名</label>
+          <input class="setting-input" id="accountProfileDisplayName">
+        </div>
+        <div class="form-group">
+          <label>新密码</label>
+          <input class="setting-input" id="accountProfilePassword" type="password" autocomplete="new-password">
+        </div>
+        <button class="btn-save" type="submit">保存账户资料</button>
+      </form>
+      <div id="loginAccountPanel" class="account-management-panel"></div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">登录账户</div>
+      <div class="setting-hint">添加或停用登录账户。每个登录账户有独立数据归属。</div>
+      <form id="loginUserManagementPanel" class="form-grid" onsubmit="saveLoginUser(event)" style="margin:10px 0;">
+        <div class="form-group">
+          <label>登录用户名</label>
+          <input class="setting-input" id="loginUserUsername" required>
+        </div>
+        <div class="form-group">
+          <label>显示名</label>
+          <input class="setting-input" id="loginUserDisplayName">
+        </div>
+        <div class="form-group">
+          <label>初始密码</label>
+          <input class="setting-input" id="loginUserPassword" type="password">
+        </div>
+        <button class="btn-save" type="submit">新增登录账户</button>
+      </form>
+      <div id="loginUserList" style="margin-bottom:8px;"></div>
+    </div>
+
+    <div class="setting-group">
+      <div class="setting-group-title">证券账户</div>
+      <div class="setting-hint">添加、删除、修改当前登录账户下的证券账户。</div>
+      <form id="securitiesAccountForm" class="form-grid" onsubmit="saveSecuritiesAccount(event)" style="margin:10px 0;">
+        <input type="hidden" id="securitiesAccountId">
+        <div class="form-group">
+          <label>证券账户名称</label>
+          <input class="setting-input" id="securitiesAccountName" required>
+        </div>
+        <div class="form-group">
+          <label>券商</label>
+          <input class="setting-input" id="securitiesAccountBroker">
+        </div>
+        <div class="form-group">
+          <label>备注</label>
+          <input class="setting-input" id="securitiesAccountNotes">
+        </div>
+        <button class="btn-save" type="submit">保存证券账户</button>
+      </form>
+      <div id="accountList" style="margin-bottom:8px;"></div>
+    </div>
+  </div>
+</div>
+<script src="/static/js/account.js?v=2.9.25-account-admin"></script>
+{% endblock %}

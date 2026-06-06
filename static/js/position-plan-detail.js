@@ -13,6 +13,12 @@
     superseded: '已被替代',
     archived: '已归档',
   };
+  const itemAdoptionLabels = {
+    pending: '未处理',
+    adopted: '已采纳',
+    ignored: '已忽略',
+    watching: '观察中',
+  };
   const RESEARCH_ASSET_NOTE = '研究参考，不自动写交易';
   const strategyLabels = {
     auto: '自动',
@@ -104,6 +110,54 @@
     if (el) el.innerHTML = value;
   }
 
+  function adoptionStatusLabel(value) {
+    return itemAdoptionLabels[String(value || 'pending').toLowerCase()] || value || '未处理';
+  }
+
+  function adoptionStatusClass(value) {
+    const clean = String(value || 'pending').toLowerCase();
+    if (clean === 'adopted') return 'signal-buy';
+    if (clean === 'ignored') return 'signal-sell';
+    return 'signal-hold';
+  }
+
+  function itemAdoptionActions(item) {
+    const id = Number(item.id || 0);
+    if (!id) return '<span class="muted">--</span>';
+    return `<div class="inline-action-group">
+      <button class="btn btn-xs" onclick="updatePositionPlanItemAdoption(${id}, 'adopted')">采纳</button>
+      <button class="btn btn-xs" onclick="updatePositionPlanItemAdoption(${id}, 'watching')">观察</button>
+      <button class="btn btn-xs" onclick="updatePositionPlanItemAdoption(${id}, 'ignored')">忽略</button>
+    </div>`;
+  }
+
+  function executionClassLabel(value) {
+    return {
+      full_executed: '完全执行',
+      partial_executed: '部分执行',
+      over_executed: '超额执行',
+      not_executed: '未执行',
+      reverse_executed: '反向执行',
+      mixed_execution: '混合执行',
+      complied_no_trade: '遵守不交易',
+      discretionary_trade: '自主交易',
+      violated: '违反建议',
+    }[String(value || '').toLowerCase()] || value || '--';
+  }
+
+  function renderExecutionCell(execution) {
+    if (!execution) return '<span class="muted">--</span>';
+    const ids = (execution.matched_trade_ids || []).map(id => `#${Number(id)}`).join(' ');
+    return `${escapeHtml(execution.label || executionClassLabel(execution.classification))}<br><span class="muted">${money(execution.matched_amount || 0)} ${escapeHtml(ids)}</span>`;
+  }
+
+  function renderExecutionDelta(execution) {
+    if (!execution) return '<span class="muted">--</span>';
+    const value = Number(execution.deviation_amount || 0);
+    const cls = value > 0 ? 'price-up' : value < 0 ? 'price-down' : 'muted';
+    return `<span class="${cls}">${money(value)}</span>`;
+  }
+
   function renderMeta(plan) {
     const cash = plan.cash_snapshot_json || {};
     const portfolio = plan.portfolio_snapshot_json || {};
@@ -119,7 +173,7 @@
     setHtml('planMetaGrid', values.map(([strong, span]) => `<div><span>${escapeHtml(span)}</span><strong>${escapeHtml(strong)}</strong></div>`).join(''));
   }
 
-  function renderItems(plan) {
+  function renderItems(plan, executionByItem = new Map()) {
     const items = plan.items || [];
     setText('planItemsMeta', `${items.length} 条建议`);
     const rows = items.map(item => {
@@ -132,11 +186,15 @@
         <td>${money(item.suggested_shares)}</td>
         <td>${item.confidence == null ? '--' : asNumber(item.confidence).toFixed(3)}</td>
         <td>${item.risk_score == null ? '--' : asNumber(item.risk_score).toFixed(3)}</td>
+        <td><span class="report-signal ${adoptionStatusClass(item.adoption_status)}">${escapeHtml(adoptionStatusLabel(item.adoption_status))}</span></td>
+        <td>${renderExecutionCell(executionByItem.get(Number(item.id)))}</td>
+        <td>${renderExecutionDelta(executionByItem.get(Number(item.id)))}</td>
         <td><span class="plan-item-reason">${escapeHtml(item.reason || item.entry_plan || item.risk_note || '--')}</span></td>
         <td>${sourceId ? `<a class="text-link" href="/ai?report_id=${Number(sourceId)}">报告 ${Number(sourceId)}</a>` : '--'}</td>
+        <td>${itemAdoptionActions(item)}</td>
       </tr>`;
     }).join('');
-    setHtml('planItemRows', rows || '<tr><td colspan="9" class="library-empty-state">暂无建议明细</td></tr>');
+    setHtml('planItemRows', rows || '<tr><td colspan="13" class="library-empty-state">暂无建议明细</td></tr>');
   }
 
   function roleName(item, index) {
@@ -192,6 +250,7 @@
     if (!id) return;
     try {
       const plan = await requestJson(`/api/position-plans/${encodeURIComponent(id)}`);
+      const execution = await loadPositionPlanExecution(id);
       document.title = `${plan.title || plan.plan_id} - 组合研究方案详情`;
       setText('planDetailTitle', plan.title || plan.plan_id);
       setText('planDetailSubtitle', `${plan.plan_id} · ${RESEARCH_ASSET_NOTE} · ${stageLabels[plan.stage] || plan.stage || '--'} · ${time(plan.created_at)} · 任务 ${plan.batch_job_id || '--'}`);
@@ -210,7 +269,7 @@
       const archiveBtn = document.getElementById('planArchiveBtn');
       if (archiveBtn) archiveBtn.onclick = () => archivePlan(id);
       renderMeta(plan);
-      renderItems(plan);
+      renderItems(plan, execution);
       setHtml('planSummaryBody', markdown(plan.summary || '暂无摘要'));
       renderRoles(plan);
       renderSources(plan);
@@ -218,8 +277,30 @@
     } catch (err) {
       setText('planDetailTitle', '组合研究方案加载失败');
       setHtml('planDetailSubtitle', escapeHtml(err.message));
-      setHtml('planItemRows', `<tr><td colspan="9" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`);
+      setHtml('planItemRows', `<tr><td colspan="13" class="library-empty-state">加载失败：${escapeHtml(err.message)}</td></tr>`);
     }
+  }
+
+  async function loadPositionPlanExecution(id) {
+    try {
+      const data = await requestJson(`/api/performance/suggestion-execution?source=position_plan&source_id=${encodeURIComponent(id)}&limit=500`);
+      const map = new Map();
+      (data.rows || []).forEach(row => map.set(Number(row.item_id), row.execution || {}));
+      return map;
+    } catch (_err) {
+      return new Map();
+    }
+  }
+
+  async function updatePositionPlanItemAdoption(itemId, adoptionStatus) {
+    const id = planId();
+    if (!id || !itemId) return;
+    await requestJson(`/api/position-plans/${encodeURIComponent(id)}/items/${Number(itemId)}/adoption`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adoption_status: adoptionStatus }),
+    });
+    await loadPositionPlanDetail();
   }
 
   async function adoptPlan(id) {
@@ -239,4 +320,6 @@
     await requestJson(`/api/position-plans/${encodeURIComponent(id)}/archive`, { method: 'POST' });
     await loadPositionPlanDetail();
   }
+
+  window.updatePositionPlanItemAdoption = updatePositionPlanItemAdoption;
 })();

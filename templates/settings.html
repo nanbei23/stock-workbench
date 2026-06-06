@@ -324,11 +324,13 @@
   .confirm-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.5);
+    background: rgba(0,0,0,0.62);
     display: none;
     align-items: center;
     justify-content: center;
-    z-index: 9998;
+    z-index: 30000;
+    padding: 24px;
+    box-sizing: border-box;
   }
 
   .confirm-overlay.show {
@@ -336,8 +338,10 @@
   }
 
   .confirm-box {
-    background: var(--surface);
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border-light);
     border-radius: 12px;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.35);
     padding: 24px;
     width: 400px;
     text-align: center;
@@ -359,6 +363,260 @@
     gap: 12px;
     justify-content: center;
   }
+
+  .ai-settings-subtabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 18px;
+    border-bottom: 1px solid var(--border-light);
+  }
+
+  .ai-settings-tab {
+    padding: 10px 20px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+
+  .ai-settings-tab:hover {
+    color: var(--text-primary);
+  }
+
+  .ai-settings-tab.active {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+  }
+
+  .ai-settings-panel {
+    display: none;
+  }
+
+  .ai-settings-panel.active {
+    display: block;
+  }
+
+  .provider-edit-box {
+    width: min(760px, calc(100vw - 48px));
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    text-align: left;
+    background: var(--bg-card, #fff);
+    position: relative;
+    z-index: 30001;
+  }
+
+  .provider-edit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 14px 0 18px;
+  }
+
+  .provider-edit-grid label {
+    display: grid;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+  }
+
+  .provider-edit-grid .setting-input,
+  .provider-edit-grid .setting-select,
+  .provider-edit-grid textarea {
+    width: 100%;
+    text-align: left;
+    box-sizing: border-box;
+  }
+
+  .provider-edit-grid label:nth-child(2),
+  .provider-edit-grid label:nth-child(3),
+  .provider-edit-grid label:nth-child(4),
+  .provider-edit-fetch-row,
+  .provider-edit-section,
+  .provider-edit-usage {
+    grid-column: 1 / -1;
+  }
+
+  .provider-edit-fetch-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .provider-edit-section {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    background: var(--surface-secondary);
+  }
+
+  .provider-edit-section-title {
+    grid-column: 1 / -1;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .worker-edit-box .provider-edit-grid label {
+    grid-column: auto;
+  }
+
+  .provider-edit-usage {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 0.84rem;
+  }
+
+  .model-provider-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+
+  .model-provider-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    background: var(--surface-secondary);
+    min-height: 188px;
+  }
+
+  .model-provider-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .model-provider-card-title {
+    min-width: 0;
+  }
+
+  .model-provider-card-title b {
+    display: block;
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .model-provider-card-title small {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .model-provider-badge {
+    flex: 0 0 auto;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: rgba(82,183,136,0.12);
+    color: var(--color-down);
+    font-size: 0.7rem;
+    white-space: nowrap;
+  }
+
+  .model-provider-badge.missing {
+    background: rgba(224,122,95,0.12);
+    color: var(--color-up);
+  }
+
+  .model-provider-meta {
+    display: grid;
+    gap: 6px;
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+  }
+
+  .model-provider-meta div {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .model-provider-meta span:first-child {
+    color: var(--text-muted);
+    flex: 0 0 auto;
+  }
+
+  .model-provider-meta span:last-child {
+    min-width: 0;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .model-provider-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: auto;
+  }
+
+  .model-provider-actions .btn-secondary {
+    padding: 6px 9px;
+    font-size: 0.74rem;
+  }
+
+  .worker-provider-summary {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    text-align: right;
+  }
+
+  .worker-provider-summary small {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .model-summary {
+    display: grid;
+    gap: 4px;
+    min-width: 320px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    background: var(--surface-secondary);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+  }
+
+  .model-summary b {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  @media (max-width: 720px) {
+    .provider-edit-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .provider-edit-section {
+      grid-template-columns: 1fr;
+    }
+
+    .model-provider-grid {
+      grid-template-columns: 1fr;
+    }
+  }
 </style>
 {% endblock %}
 
@@ -370,6 +628,8 @@
   <div class="settings-tabs">
     <button class="settings-tab active" onclick="switchSettingsTab(this, 'market')">行情监控</button>
     <button class="settings-tab" onclick="switchSettingsTab(this, 'ai')">AI引擎</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'tasks')">任务调度</button>
+    <button class="settings-tab" onclick="switchSettingsTab(this, 'tools')">工具权限</button>
     <button class="settings-tab" onclick="switchSettingsTab(this, 'notify')">通知</button>
     <button class="settings-tab" onclick="switchSettingsTab(this, 'risk')">风控</button>
     <button class="settings-tab" onclick="switchSettingsTab(this, 'fee')">费率</button>
@@ -446,11 +706,11 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">北向资金异动阈值</div>
-          <div class="setting-hint">分钟净流入/流出超过此值</div>
+          <div class="setting-hint">当日北向净流入/流出超过此值</div>
         </div>
         <div class="setting-control">
           <input type="number" class="setting-input" id="set-northbound_threshold" step="0.001" min="1" max="100">
-          <span class="setting-unit">亿/分钟</span>
+          <span class="setting-unit">亿元</span>
         </div>
       </div>
     </div>
@@ -502,8 +762,16 @@
 
   <!-- AI引擎 -->
   <div class="settings-section" id="section-ai">
+    <div class="ai-settings-subtabs">
+      <button type="button" class="ai-settings-tab active" onclick="aiSettingsSubtab(this, 'current')">运行模型</button>
+      <button type="button" class="ai-settings-tab" onclick="aiSettingsSubtab(this, 'library')">模型库</button>
+      <button type="button" class="ai-settings-tab" onclick="aiSettingsSubtab(this, 'workers')">Worker 模型池</button>
+      <button type="button" class="ai-settings-tab" onclick="aiSettingsSubtab(this, 'memory')">记忆向量</button>
+    </div>
+
+    <div class="ai-settings-panel active" id="ai-panel-current">
     <div class="setting-group">
-      <div class="setting-group-title">AI分析引擎（TradingAgents-astock）</div>
+      <div class="setting-group-title">主分析配置</div>
       <div class="setting-row">
         <div>
           <div class="setting-label">模型模式</div>
@@ -531,68 +799,68 @@
         </div>
       </div>
       <input type="hidden" id="set-llm_provider" value="openai-compatible">
+      <input type="hidden" id="set-llm_name">
+      <input type="hidden" id="set-custom_endpoint">
+      <input type="hidden" id="set-api_key">
+      <input type="hidden" id="set-quick_think_model">
+      <input type="hidden" id="set-deep_think_model">
+      <input type="hidden" id="set-llm_model_options">
+      <input type="hidden" id="set-llm_context_length">
       <div class="setting-row">
         <div>
-          <div class="setting-label">名称</div>
-          <div class="setting-hint">根据 Base URL 自动生成，可手动调整</div>
+          <div class="setting-label">主分析模型配置 <span class="required-star">*</span></div>
+          <div class="setting-hint">从模型库选择 Provider；Base URL 和 API Key 只在模型库维护</div>
         </div>
         <div class="setting-control">
-          <input type="text" class="setting-input" id="set-llm_name" placeholder="根据 Base URL 自动生成" style="width: 360px;" oninput="this.dataset.generated='false'">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">Base URL <span class="required-star">*</span></div>
-          <div class="setting-hint">OpenAI 兼容服务地址，例如 https://api.example.com/v1</div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="setting-input" id="set-custom_endpoint" placeholder="例如 https://api.example.com/v1" style="width: 360px;" oninput="syncAiNameFromBaseUrl()">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">API Key <span class="required-star">*</span></div>
-          <div class="setting-hint">用于获取模型列表和执行AI分析</div>
-        </div>
-        <div class="setting-control">
-          <div class="password-group">
-            <input type="password" class="setting-input" id="set-api_key" placeholder="sk-...">
-            <button class="btn-icon" onclick="toggleApiKeyVisibility()">显示</button>
-          </div>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">快速思考模型 <span class="required-star">*</span></div>
-          <div class="setting-hint">用于数据处理和轻量判断，从 Base URL 模型列表选择</div>
-        </div>
-        <div class="setting-control verification-model-control">
-          <select class="setting-select" id="set-quick_think_model" style="flex:1;">
-            <option value="">请先获取模型列表</option>
-          </select>
-          <button type="button" class="btn-secondary" onclick="fetchRemoteModels()" id="fetchModelsBtn">获取</button>
-          <span id="fetchModelsResult" class="test-result" style="font-size:12px;"></span>
-          <input type="hidden" id="set-llm_model_options">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">深度思考模型 <span class="required-star">*</span></div>
-          <div class="setting-hint">用于分析推理和最终裁决，使用同一 Base URL 模型列表</div>
-        </div>
-        <div class="setting-control">
-          <select class="setting-select" id="set-deep_think_model" style="width: 360px;">
-            <option value="">请先获取模型列表</option>
+          <select class="setting-select" id="set-ai_primary_provider_id" style="width: 360px;" onchange="onAiProviderChange()">
+            <option value="">请先在模型库新增配置</option>
           </select>
         </div>
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">上下文长度</div>
-          <div class="setting-hint">可选，例如 256000</div>
+          <div class="setting-label">实际模型</div>
+          <div class="setting-hint">由模型源的快速/深度/默认模型自动决定，运行页不再覆盖</div>
         </div>
         <div class="setting-control">
-          <input type="number" class="setting-input" id="set-llm_context_length" placeholder="例如 256000（可选）" min="0" step="1024" style="width: 220px;">
+          <div class="model-summary" id="aiRuntimeModelSummary">请选择主分析模型源</div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">旁观者核对</div>
+          <div class="setting-hint">启用后用模型库中的另一个模型独立核对报告</div>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="set-verification_enabled">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">核对模型配置</div>
+          <div class="setting-hint">从模型库选择 Provider；不再单独维护核对 Base URL / Key</div>
+        </div>
+        <div class="setting-control">
+          <select class="setting-select" id="set-verification_provider_id" style="width: 360px;" onchange="onVerificationProviderChange()">
+            <option value="">不使用核对配置</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">核对实际模型</div>
+          <div class="setting-hint">默认使用模型源的默认模型；没有默认时使用深度模型</div>
+        </div>
+        <div class="setting-control">
+          <div class="model-summary" id="verificationModelSummary">请选择核对模型源</div>
+          <input type="hidden" id="set-verification_model_options">
+          <input type="hidden" id="set-verification_name">
+          <input type="hidden" id="set-verification_endpoint">
+          <input type="hidden" id="set-verification_api_key">
+          <input type="hidden" id="set-verification_context_length">
         </div>
       </div>
       <div class="setting-row">
@@ -647,44 +915,100 @@
       <div class="setting-row">
         <div></div>
         <div class="setting-control">
-          <button class="btn-test" onclick="testApiConnection()">测试连接</button>
+          <button class="btn-test" onclick="testApiConnection()">测试主AI</button>
           <span class="test-result" id="testResult"></span>
+          <button class="btn-test" onclick="testVerificationConnection()">测试核对</button>
+          <span class="test-result" id="testVerificationResult"></span>
         </div>
       </div>
     </div>
+    </div>
 
+    <div class="ai-settings-panel" id="ai-panel-memory">
     <div class="setting-group">
-      <div class="setting-group-title">模型配置池</div>
+      <div class="setting-group-title">记忆向量配置</div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">保存并应用模型配置</div>
-          <div class="setting-hint">保存名称、Base URL、模型列表、快速/深度模型和上下文长度，并同步应用到当前区域</div>
+          <div class="setting-label">Embedding 模型配置 <span class="required-star">*</span></div>
+          <div class="setting-hint">从模型库选择 Provider；Endpoint 和 Key 只在模型库维护</div>
         </div>
         <div class="setting-control">
-          <button type="button" class="btn-secondary" onclick="saveCurrentModelProvider()">保存并用于AI</button>
-          <button type="button" class="btn-secondary" onclick="saveVerificationModelProvider()">保存并用于核对</button>
-          <button type="button" class="btn-secondary" onclick="loadModelProviders()">刷新</button>
+          <select class="setting-select" id="set-embedding_provider_id" style="width: 360px;" onchange="onEmbeddingProviderChange()">
+            <option value="">请选择向量模型配置</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Embedding 实际模型</div>
+          <div class="setting-hint">由模型源的 Embedding 模型和维度自动决定</div>
+        </div>
+        <div class="setting-control">
+          <div class="model-summary" id="embeddingModelSummary">请选择向量模型源</div>
+          <input type="hidden" id="set-embedding_dimensions" value="1536">
+          <input type="hidden" id="set-embedding_endpoint">
+          <input type="hidden" id="set-embedding_api_key">
+        </div>
+      </div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">向量索引状态</div>
+          <div class="setting-hint">active 复盘记忆的 sqlite-vec 覆盖率；保存 active 记忆后会自动增量索引</div>
+        </div>
+        <div class="setting-control" style="align-items:flex-start;flex-direction:column;">
+          <div id="embeddingIndexStatus" class="test-result">未加载</div>
+          <div id="embeddingConnectionResult" class="test-result">未测试</div>
+          <div>
+            <button type="button" class="btn-secondary" onclick="testTradeMemoryEmbeddingConnection()">测试连接</button>
+            <button type="button" class="btn-secondary" onclick="loadTradeMemoryEmbeddingStatus()">刷新状态</button>
+            <button type="button" class="btn-secondary" onclick="backfillTradeMemoryEmbeddings()">补齐向量索引</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="ai-settings-panel" id="ai-panel-library">
+    <div class="setting-group">
+      <div class="setting-group-title">模型源</div>
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">模型源</div>
+          <div class="setting-hint">新增或编辑 Provider；运行模型、核对、记忆向量和 Worker 只引用这里的模型资产</div>
+        </div>
+        <div class="setting-control">
+          <button type="button" class="btn-secondary" onclick="openModelProviderEditor()">新增模型源</button>
+          <button type="button" class="btn-secondary" onclick="loadModelProviders()">刷新列表</button>
         </div>
       </div>
       <div id="modelProviderList" class="provider-list">
         <div class="empty-state"><p>暂无模型配置</p></div>
       </div>
+    </div>
+    </div>
+
+    <div class="ai-settings-panel" id="ai-panel-workers">
+    <div class="setting-group">
+      <div class="setting-group-title">Worker 配置</div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">批量 Worker 模型池</div>
-          <div class="setting-hint">保存后可用 scripts/run_batch_worker_pool.py 一次启动多个 worker</div>
+          <div class="setting-label">Worker 模型池</div>
+          <div class="setting-hint">每个 Worker 关联模型库中的主模型源和备用模型源；保存后可用 scripts/run_batch_worker_pool.py 一次启动多个 worker</div>
         </div>
         <div class="setting-control">
-          <button type="button" class="btn-secondary" onclick="addWorkerPoolRow()">新增 Worker</button>
-          <button type="button" class="btn-secondary" onclick="saveWorkerPoolConfig()">保存 Worker 配置</button>
-          <button type="button" class="btn-secondary" onclick="loadWorkerPoolConfig()">刷新</button>
+          <button type="button" class="btn-secondary" onclick="openWorkerPoolEditor()">新增 Worker</button>
+          <button type="button" class="btn-secondary" onclick="loadWorkerPoolConfig()">刷新列表</button>
         </div>
       </div>
       <div id="workerPoolList" class="provider-list worker-pool-list">
         <div class="empty-state"><p>暂无 Worker 配置</p></div>
       </div>
     </div>
+    </div>
 
+  </div>
+
+    <div class="settings-section" id="section-tools">
     <div class="setting-group">
       <div class="setting-group-title">Hermes 工具权限</div>
       <div class="setting-row">
@@ -701,83 +1025,11 @@
         <div class="empty-state"><p>加载 Hermes 工具权限...</p></div>
       </div>
     </div>
-
-    <div class="setting-group">
-      <div class="setting-group-title">旁观者核对</div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">启用旁观者核对</div>
-          <div class="setting-hint">用不同模型独立验证分析报告，避免同源幻觉</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="set-verification_enabled">
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">名称</div>
-          <div class="setting-hint">根据 Base URL 自动生成，可手动调整</div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="setting-input" id="set-verification_name" placeholder="根据 Base URL 自动生成" style="width: 360px;" oninput="this.dataset.generated='false'">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">Base URL <span class="required-star">*</span></div>
-          <div class="setting-hint">OpenAI 兼容服务地址，例如 https://api.example.com/v1</div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="setting-input" id="set-verification_endpoint" placeholder="例如 https://api.example.com/v1" style="width: 360px;" oninput="syncVerificationNameFromBaseUrl()">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">API Key <span class="required-star">*</span></div>
-          <div class="setting-hint">用于从 Base URL 获取模型列表和执行核对</div>
-        </div>
-        <div class="setting-control">
-          <div style="display:flex;align-items:center;gap:6px">
-            <input type="password" class="setting-input" id="set-verification_api_key" placeholder="sk-...">
-            <button type="button" class="pwd-toggle" id="btnToggleApiKey" onclick="toggleApiKey(this)" title="显示/隐藏">显示</button>
-          </div>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">默认模型 <span class="required-star">*</span></div>
-          <div class="setting-hint">根据 Base URL 获取模型列表后选择</div>
-        </div>
-        <div class="setting-control verification-model-control">
-          <select class="setting-select" id="set-verification_model" style="flex:1;">
-            <option value="">请先获取模型列表</option>
-          </select>
-          <button type="button" class="btn-secondary" onclick="fetchVerificationModels()" id="fetchVerModelsBtn">获取</button>
-          <span id="fetchVerModelsResult" class="test-result" style="font-size:12px;"></span>
-          <input type="hidden" id="set-verification_model_options">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">上下文长度</div>
-          <div class="setting-hint">可选，例如 256000</div>
-        </div>
-        <div class="setting-control">
-          <input type="number" class="setting-input" id="set-verification_context_length" placeholder="例如 256000（可选）" min="0" step="1024" style="width: 220px;">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div></div>
-        <div class="setting-control">
-          <button class="btn-test" onclick="testVerificationConnection()">测试连接</button>
-          <span class="test-result" id="testVerificationResult"></span>
-        </div>
-      </div>
     </div>
 
+    <div class="settings-section" id="section-tasks">
     <div class="setting-group">
-      <div class="setting-group-title">AI调度计划</div>
+      <div class="setting-group-title">调度计划</div>
       <div class="setting-row">
         <div class="setting-label">早盘开盘报告 (09:30)</div>
         <label class="toggle"><input type="checkbox" id="set-schedule_open_report"><span class="toggle-slider"></span></label>
@@ -801,7 +1053,7 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">自动生成每日 AI 决策报告</div>
-          <div class="setting-hint">收盘后结合持仓、现金、最新报告和候选规则生成正式决策报告</div>
+          <div class="setting-hint">收盘后结合持仓、现金和最新持仓报告生成正式决策报告</div>
         </div>
         <label class="toggle"><input type="checkbox" id="set-daily_decision_auto_enabled"><span class="toggle-slider"></span></label>
       </div>
@@ -825,63 +1077,13 @@
       </div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">候选范围</div>
-          <div class="setting-hint">自动任务读取持久规则，不读取页面临时勾选</div>
+          <div class="setting-label">持仓报告刷新策略</div>
+          <div class="setting-hint">每日决策默认先重跑当前持仓股报告，并刷新七层快照，不需要手动选择</div>
         </div>
-        <div class="setting-control">
-          <select class="setting-select" id="set-daily_decision_candidate_mode" style="width: 240px;">
-            <option value="holdings_only">仅持仓股</option>
-            <option value="fixed_group">持仓股 + 固定候选分组</option>
-            <option value="signal_filter">持仓股 + 上次报告信号筛选</option>
-            <option value="all_watchlist">持仓股 + 全部自选股</option>
-          </select>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">固定候选分组</div>
-          <div class="setting-hint">候选范围选择固定分组时使用，例如 每日决策候选</div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="setting-input" id="set-daily_decision_candidate_group" placeholder="每日决策候选" style="width: 240px;">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">信号筛选</div>
-          <div class="setting-hint">候选范围选择信号筛选时使用，逗号分隔</div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="setting-input" id="set-daily_decision_signal_filter" placeholder="STRONG_BUY,BUY,OVERWEIGHT" style="width: 320px;">
-        </div>
-      </div>
-      <div class="setting-row">
-        <div class="setting-label">包含观察池</div>
-        <label class="toggle"><input type="checkbox" id="set-daily_decision_include_observation_pool"><span class="toggle-slider"></span></label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">强制补跑持仓报告</div>
-          <div class="setting-hint">生成每日决策前，先为当前持仓股创建补报告任务</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="set-daily_decision_force_refresh_holdings"><span class="toggle-slider"></span></label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">强制补跑候选报告</div>
-          <div class="setting-hint">仅在候选范围命中股票时生效</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="set-daily_decision_force_refresh_candidates"><span class="toggle-slider"></span></label>
-      </div>
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">补跑前刷新七层快照</div>
-          <div class="setting-hint">让补跑报告优先基于最新七层数据</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="set-daily_decision_refresh_snapshots"><span class="toggle-slider"></span></label>
+        <span class="badge badge-info">固定启用</span>
       </div>
     </div>
-  </div>
+    </div>
 
   <!-- 通知 -->
   <div class="settings-section" id="section-notify">
@@ -889,8 +1091,8 @@
       <div class="setting-group-title">浏览器通知</div>
       <div class="setting-row">
         <div>
-          <div class="setting-label">启用浏览器通知</div>
-          <div class="setting-hint">需要浏览器授权通知权限</div>
+          <div class="setting-label">浏览器异动通知</div>
+          <div class="setting-hint">开启后，页面会轮询异动记录并发送浏览器通知；需要浏览器授权通知权限</div>
         </div>
         <div class="setting-control">
           <button class="btn-test" id="btnNotifyPerm" onclick="requestNotifyPermission()">请求权限</button>
@@ -899,22 +1101,6 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
-      </div>
-      <div class="setting-row">
-        <div class="setting-label">策略状态变化通知</div>
-        <label class="toggle"><input type="checkbox" id="set-notify_strategy_change"><span class="toggle-slider"></span></label>
-      </div>
-      <div class="setting-row">
-        <div class="setting-label">条件单触发通知</div>
-        <label class="toggle"><input type="checkbox" id="set-notify_order_trigger"><span class="toggle-slider"></span></label>
-      </div>
-      <div class="setting-row">
-        <div class="setting-label">异动通知</div>
-        <label class="toggle"><input type="checkbox" id="set-notify_anomaly"><span class="toggle-slider"></span></label>
-      </div>
-      <div class="setting-row">
-        <div class="setting-label">AI分析完成通知</div>
-        <label class="toggle"><input type="checkbox" id="set-notify_analysis_done"><span class="toggle-slider"></span></label>
       </div>
       <div class="setting-row">
         <div>
@@ -1173,7 +1359,7 @@
       <div class="setting-row">
         <div>
           <div class="setting-label">待执行计划金额上限</div>
-          <div class="setting-hint">条件单/计划单超过该金额时进入预警</div>
+          <div class="setting-hint">交易计划超过该金额时进入预警</div>
         </div>
         <div class="setting-control">
           <input type="number" class="setting-input" id="set-risk_max_pending_order_amount" step="0.001" min="0">
@@ -1241,12 +1427,6 @@
   <!-- 数据管理 -->
   <div class="settings-section" id="section-data">
     <div class="setting-group">
-      <div class="setting-group-title">账户管理</div>
-      <div id="accountList" style="margin-bottom:8px;"></div>
-      <button class="btn-secondary" onclick="addAccount()" style="font-size:0.85rem;">+ 添加账户</button>
-    </div>
-
-    <div class="setting-group">
       <div class="setting-group-title">数据库备份/恢复</div>
       <div id="backupStatusPanel" class="backup-status-panel">
         <div class="empty-state"><p>正在读取数据库状态...</p></div>
@@ -1256,12 +1436,15 @@
         <button class="btn-secondary" onclick="document.getElementById('importFile').click()">导入JSON数据</button>
         <button class="btn-secondary" onclick="createBackup()">一键备份数据库</button>
         <button class="btn-secondary" onclick="restoreLatestBackup()">恢复最近数据库备份</button>
+        <button class="btn-secondary danger" onclick="document.getElementById('restoreDbFile').click()">上传数据库恢复</button>
         <input type="file" id="importFile" class="file-input" accept=".json" onchange="importData(this)">
+        <input type="file" id="restoreDbFile" class="file-input" accept=".db,.sqlite,.sqlite3,application/vnd.sqlite3,application/octet-stream" onchange="restoreUploadedDatabase(this)">
       </div>
     </div>
 
     <div class="setting-group">
       <div class="setting-group-title">数据健康检查</div>
+      <div class="setting-label">登录账户完整性</div>
       <div id="dataAuditPanel" class="data-audit-panel">
         <div class="empty-state"><p>正在生成数据审计...</p></div>
       </div>
@@ -1300,9 +1483,112 @@
   </div>
 
   <!-- 底部保存栏 -->
-  <div class="settings-actions">
+  <div class="settings-actions" id="settingsActions">
     <button class="btn-save" onclick="saveSettings()">保存设置</button>
-    <button class="btn-secondary" onclick="loadSettings()">重新加载</button>
+    <button class="btn-secondary" onclick="loadSettings()">放弃更改</button>
+  </div>
+</div>
+
+<!-- 模型配置编辑 -->
+<div class="confirm-overlay" id="providerEditModal">
+  <div class="confirm-box provider-edit-box">
+    <h3 id="providerEditTitle">编辑模型源</h3>
+    <input type="hidden" id="providerEditId">
+    <div class="provider-edit-grid">
+      <label>名称
+        <input type="text" class="setting-input" id="providerEditName" placeholder="例如 DashScope 主模型">
+      </label>
+      <label>Base URL
+        <input type="text" class="setting-input" id="providerEditBaseUrl" placeholder="https://api.example.com/v1">
+      </label>
+      <label>API Key
+        <input type="password" class="setting-input" id="providerEditApiKey" placeholder="留空或 ******** 表示不修改">
+      </label>
+      <div class="provider-edit-usage">
+        <label><input type="checkbox" id="providerEditUsageAi" value="ai" onchange="onProviderEditUsageChange()"> AI分析</label>
+        <label><input type="checkbox" id="providerEditUsageVerification" value="verification" onchange="onProviderEditUsageChange()"> 旁观者核对</label>
+        <label><input type="checkbox" id="providerEditUsageEmbedding" value="embedding" onchange="onProviderEditUsageChange()"> 记忆向量</label>
+      </div>
+      <div class="provider-edit-fetch-row" id="providerEditFetchRow">
+        <button type="button" class="btn-secondary" id="providerEditFetchModelsBtn" onclick="fetchProviderEditModels()">获取模型</button>
+        <span class="test-result" id="providerEditFetchModelsResult">未获取</span>
+      </div>
+      <input type="hidden" id="providerEditModels">
+      <div class="provider-edit-section" id="providerEditChatModelFields">
+        <div class="provider-edit-section-title">Chat 模型</div>
+        <label>快速模型
+          <select class="setting-select" id="providerEditQuickModel"></select>
+        </label>
+        <label>深度模型
+          <select class="setting-select" id="providerEditDeepModel"></select>
+        </label>
+        <label>默认模型
+          <select class="setting-select" id="providerEditDefaultModel"></select>
+        </label>
+        <label>上下文长度
+          <input type="number" class="setting-input" id="providerEditContextLength" min="0" step="1024">
+        </label>
+      </div>
+      <div class="provider-edit-section" id="providerEditEmbeddingFields">
+        <div class="provider-edit-section-title">Embedding</div>
+        <label>Embedding 模型
+          <input type="text" class="setting-input" id="providerEditEmbeddingModel" placeholder="text-embedding-v4">
+        </label>
+        <label>Embedding 维度
+          <input type="number" class="setting-input" id="providerEditEmbeddingDimensions" min="1536" max="1536" step="1" value="1536">
+        </label>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn-secondary" onclick="closeProviderEditModal()">取消</button>
+      <button class="btn-save" onclick="saveModelProviderEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Worker 模型池编辑 -->
+<div class="confirm-overlay" id="workerPoolEditorModal">
+  <div class="confirm-box provider-edit-box worker-edit-box">
+    <h3 id="workerEditTitle">编辑 Worker</h3>
+    <input type="hidden" id="workerEditIndex">
+    <div class="provider-edit-grid">
+      <label>Worker ID
+        <input type="text" class="setting-input" id="workerEditId" placeholder="worker-1">
+      </label>
+      <label>显示名称
+        <input type="text" class="setting-input" id="workerEditName" placeholder="Worker 1">
+      </label>
+      <label>运行状态
+        <select class="setting-select" id="workerEditEnabled">
+          <option value="true">启用</option>
+          <option value="false">停用</option>
+        </select>
+      </label>
+      <label>模型档位
+        <select class="setting-select" id="workerEditModelTier">
+          <option value="deep">深度模型</option>
+          <option value="quick">快速模型</option>
+        </select>
+      </label>
+      <label>主模型源
+        <select class="setting-select" id="workerEditPrimaryProviderId"></select>
+      </label>
+      <label>备用模型源
+        <select class="setting-select" id="workerEditFallbackProviderId"></select>
+      </label>
+      <label>轮询间隔（秒）
+        <input type="number" class="setting-input" id="workerEditSleepSeconds" min="1" step="1" value="5">
+        <span class="setting-hint">Worker 空闲时每隔多久检查新任务</span>
+      </label>
+      <label>陈旧阈值（分钟）
+        <input type="number" class="setting-input" id="workerEditStaleMinutes" min="1" step="1" value="15">
+        <span class="setting-hint">多久无心跳后视为离线/可回收</span>
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn-secondary" onclick="closeWorkerPoolEditor()">取消</button>
+      <button class="btn-save" onclick="saveWorkerPoolEdit()">保存</button>
+    </div>
   </div>
 </div>
 
@@ -1318,5 +1604,5 @@
   </div>
 </div>
 
-<script src="/static/js/settings.js?v=2.9.18-investment-profile-v2"></script>
+<script src="/static/js/settings.js?v=2.9.19-provider-single-source"></script>
 {% endblock %}

@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}炒股小牛马{% endblock %}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.9.11">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9.24-research-center-5">
     <!-- 赛博朋克主题 -->
     <link rel="stylesheet" href="/static/css/cyberpunk.css">
     <!-- 午夜主题 -->
@@ -60,24 +60,26 @@
     <div class="app">
         {% set nav_current = '自选股' if request.url.path == '/' else
             '持仓' if request.url.path == '/portfolio' else
-            'AI分析台' if request.url.path == '/ai' else
-            '报告库' if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') or request.url.path.startswith('/daily-decision-reports/') else
+            '智能盯盘' if request.url.path == '/ai' else
+            'AI投研中心' if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') or request.url.path.startswith('/daily-decision-reports/') else
             '热点主线' if request.url.path == '/hotspots' else
             '对话台' if request.url.path == '/hermes' else
             'AI绩效' if request.url.path in ['/shadow', '/performance'] else
             '运营中心' if request.url.path == '/ops' else
+            '账户管理' if request.url.path == '/account' else
             '设置' if request.url.path == '/settings' else '导航' %}
         <header class="banner">
             <a href="/" class="logo"><span class="logo-mark">股</span><span>炒股小牛马</span></a>
             <nav class="nav-tabs">
                 <a href="/" class="tab-btn {% if request.url.path == '/' %}active{% endif %}" title="自选股"><span class="ui-glyph" data-icon="选"></span>自选股</a>
                 <a href="/portfolio" class="tab-btn {% if request.url.path == '/portfolio' %}active{% endif %}" title="持仓"><span class="ui-glyph" data-icon="仓"></span>持仓</a>
-                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}" title="AI分析台"><span class="ui-glyph" data-icon="析"></span>AI分析台</a>
-                <a href="/reports" class="tab-btn {% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') or request.url.path.startswith('/daily-decision-reports/') %}active{% endif %}" title="报告库"><span class="ui-glyph" data-icon="报"></span>报告库</a>
+                <a href="/ai" class="tab-btn {% if request.url.path == '/ai' %}active{% endif %}" title="智能盯盘"><span class="ui-glyph" data-icon="盯"></span>智能盯盘</a>
+                <a href="/reports" class="tab-btn {% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') or request.url.path.startswith('/holding-reviews/') or request.url.path.startswith('/daily-decision-reports/') %}active{% endif %}" title="AI投研中心"><span class="ui-glyph" data-icon="研"></span>AI投研中心</a>
                 <a href="/hotspots" class="tab-btn {% if request.url.path == '/hotspots' %}active{% endif %}" title="热点主线"><span class="ui-glyph" data-icon="热"></span>热点主线</a>
                 <a href="/hermes" class="tab-btn {% if request.url.path == '/hermes' %}active{% endif %}" title="对话台"><span class="ui-glyph" data-icon="聊"></span>对话台</a>
                 <a href="/shadow" class="tab-btn {% if request.url.path in ['/shadow', '/performance'] %}active{% endif %}" title="AI绩效"><span class="ui-glyph" data-icon="绩"></span>AI绩效</a>
                 <a href="/ops" class="tab-btn {% if request.url.path == '/ops' %}active{% endif %}" title="运营中心"><span class="ui-glyph" data-icon="控"></span>运营中心</a>
+                <a href="/account" class="tab-btn {% if request.url.path == '/account' %}active{% endif %}" title="账户管理"><span class="ui-glyph" data-icon="户"></span>账户管理</a>
                 <a href="/settings" class="tab-btn {% if request.url.path == '/settings' %}active{% endif %}" title="设置"><span class="ui-glyph" data-icon="设"></span>设置</a>
             </nav>
             <details class="nav-menu">
@@ -85,18 +87,24 @@
                 <div class="nav-menu-panel">
                     <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">自选股</a>
                     <a href="/portfolio" class="{% if request.url.path == '/portfolio' %}active{% endif %}">持仓</a>
-                    <a href="/ai" class="{% if request.url.path == '/ai' %}active{% endif %}">AI分析台</a>
-                    <a href="/reports" class="{% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') %}active{% endif %}">报告库</a>
+                    <a href="/ai" class="{% if request.url.path == '/ai' %}active{% endif %}">智能盯盘</a>
+                    <a href="/reports" class="{% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') %}active{% endif %}">AI投研中心</a>
                     <a href="/hotspots" class="{% if request.url.path == '/hotspots' %}active{% endif %}">热点主线</a>
                     <a href="/hermes" class="{% if request.url.path == '/hermes' %}active{% endif %}">对话台</a>
                     <a href="/shadow" class="{% if request.url.path in ['/shadow', '/performance'] %}active{% endif %}">AI绩效</a>
                     <a href="/ops" class="{% if request.url.path == '/ops' %}active{% endif %}">运营中心</a>
+                    <a href="/account" class="{% if request.url.path == '/account' %}active{% endif %}">账户管理</a>
                     <a href="/settings" class="{% if request.url.path == '/settings' %}active{% endif %}">设置</a>
                 </div>
             </details>
-            <select id="accountSwitcher" style="margin-left:auto;padding:4px 14px;border-radius:20px;font-size:0.75rem;font-weight:600;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);cursor:pointer;transition:all 0.2s;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22 fill=%22%23888%22><polygon points=%220,0 10,0 5,6%22/></svg>');background-repeat:no-repeat;background-position:right 8px center;padding-right:24px;">
+            <span id="loginUserBadge" class="login-user-badge" title="登录账户">登录账户：本机账户</span>
+            <select id="accountSwitcher" title="证券账户" style="margin-left:6px;padding:4px 14px;border-radius:20px;font-size:0.75rem;font-weight:600;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);cursor:pointer;transition:all 0.2s;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22 fill=%22%23888%22><polygon points=%220,0 10,0 5,6%22/></svg>');background-repeat:no-repeat;background-position:right 8px center;padding-right:24px;">
               <option value="default">默认账户</option>
             </select>
+            <button class="theme-switcher" id="logoutLoginUserBtn" title="退出登录" onclick="logoutLoginUser()">
+                <span class="theme-icon ui-glyph" data-icon="退"></span>
+                <span class="theme-name">退出</span>
+            </button>
             <div class="bell-wrapper" id="bellWrapper">
               <div class="notify-badge" id="bellBtn" onclick="toggleBellPanel()" title="异动监控">
                 <span class="ui-glyph" data-icon="警"></span><span class="notify-label">异动</span><span id="bellBadge">0</span>
@@ -130,12 +138,12 @@
                 <span>持仓</span>
             </a>
             <a href="/ai" class="mobile-tab-item {% if request.url.path == '/ai' %}active{% endif %}">
-                <span class="tab-icon" data-icon="析"></span>
-                <span>AI分析台</span>
+                <span class="tab-icon" data-icon="盯"></span>
+                <span>智能盯盘</span>
             </a>
             <a href="/reports" class="mobile-tab-item {% if request.url.path == '/reports' or request.url.path.startswith('/reports/') or request.url.path.startswith('/position-plans/') %}active{% endif %}">
-                <span class="tab-icon" data-icon="报"></span>
-                <span>报告库</span>
+                <span class="tab-icon" data-icon="研"></span>
+                <span>AI投研中心</span>
             </a>
             <a href="/hotspots" class="mobile-tab-item {% if request.url.path == '/hotspots' %}active{% endif %}">
                 <span class="tab-icon" data-icon="热"></span>
@@ -152,6 +160,10 @@
             <a href="/ops" class="mobile-tab-item {% if request.url.path == '/ops' %}active{% endif %}">
                 <span class="tab-icon" data-icon="控"></span>
                 <span>运营中心</span>
+            </a>
+            <a href="/account" class="mobile-tab-item {% if request.url.path == '/account' %}active{% endif %}">
+                <span class="tab-icon" data-icon="户"></span>
+                <span>账户</span>
             </a>
             <a href="/settings" class="mobile-tab-item {% if request.url.path == '/settings' %}active{% endif %}">
                 <span class="tab-icon" data-icon="设"></span>

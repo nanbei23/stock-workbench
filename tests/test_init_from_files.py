@@ -46,7 +46,7 @@ TRADE_MD = """
 |------|------|
 | 当前现金 | 253,375.68元 |
 
-## 待建仓条件单
+## 待建仓计划
 
 | 标的 | 代码 | 买入价 | 数量 | 金额 | 止盈 | 止损 |
 |------|------|--------|------|------|------|------|
@@ -77,7 +77,7 @@ class InitFromFilesTests(unittest.TestCase):
         self.assertEqual(sell_etf.transfer_fee, 0.0)
         self.assertEqual(sell_etf.stamp_tax, 0.0)
 
-    def test_parse_trade_history_builds_trades_cash_and_orders(self):
+    def test_parse_trade_history_builds_trades_cash_and_plans(self):
         parsed = parse_trade_history(TRADE_MD)
         trades = build_trade_records(parsed.closed_trades, FeeConfig())
 
@@ -88,10 +88,10 @@ class InitFromFilesTests(unittest.TestCase):
         self.assertEqual(trades[1].direction, "sell")
         self.assertEqual(trades[0].trade_time, "2026-05-20 09:30:00")
         self.assertEqual(trades[2].transfer_fee, 0.404)
-        self.assertEqual(len(parsed.conditional_orders), 2)
-        self.assertEqual(parsed.conditional_orders[1].target_price, 290.0)
+        self.assertEqual(len(parsed.trading_plans), 2)
+        self.assertEqual(parsed.trading_plans[1].target_price, 290.0)
 
-    def test_initialize_database_writes_watchlist_trades_cash_and_orders(self):
+    def test_initialize_database_writes_watchlist_trades_cash_and_plans(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "workbench.db"
             watchlist_path = Path(tmp) / "watchlist.md"
@@ -118,10 +118,11 @@ class InitFromFilesTests(unittest.TestCase):
                 trade_count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
                 position_count = conn.execute("SELECT COUNT(*) FROM portfolio").fetchone()[0]
                 cash = conn.execute("SELECT value FROM settings WHERE key='cash_balance_default'").fetchone()[0]
-                order_count = conn.execute("SELECT COUNT(*) FROM conditional_orders").fetchone()[0]
+                plan_count = conn.execute("SELECT COUNT(*) FROM trading_plans").fetchone()[0]
 
             self.assertEqual(summary["watchlist"]["imported"], 3)
             self.assertEqual(summary["trades"]["imported"], 4)
+            self.assertEqual(summary["trading_plans"]["imported"], 2)
             self.assertEqual(summary["cash"]["balance"], 253375.68)
             self.assertLess(summary["cash"]["inferred_initial_capital"], 253375.68)
             self.assertNotEqual(summary["cash"]["inferred_initial_capital"], 300000.0)
@@ -130,7 +131,7 @@ class InitFromFilesTests(unittest.TestCase):
             self.assertEqual(trade_count, 4)
             self.assertEqual(position_count, 0)
             self.assertEqual(float(cash), 253375.68)
-            self.assertEqual(order_count, 2)
+            self.assertEqual(plan_count, 2)
 
 
 if __name__ == "__main__":

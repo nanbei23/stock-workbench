@@ -112,23 +112,6 @@ export interface GbrainSaveResponse {
   message?: string | null;
 }
 
-export interface GenerateConditionalOrderRequest {
-  code: string;
-  name?: string;
-  action: "buy" | "sell";
-  price: number;
-  shares?: number;
-  condition_type?: "price_lte" | "price_gte" | "change_pct_gte" | "change_pct_lte";
-  notes?: string;
-  expires_at?: string | null;
-}
-
-export interface GenerateConditionalOrderResponse {
-  success: boolean;
-  id?: number | null;
-  message: string;
-}
-
 export interface AnalysisTaskListItem {
   task_id: string;
   code?: string | null;
@@ -150,30 +133,4 @@ export interface AnalysisTaskListResponse {
   count: number;
   queue: QueueStatusResponse;
   tasks: AnalysisTaskListItem[];
-}
-
-export interface ConditionalOrderDraftRequest {
-  report_id: number;
-  shares?: number;
-  expires_at?: string | null;
-}
-
-export interface ConditionalOrderDraft {
-  code: string;
-  name: string;
-  action: "buy" | "sell";
-  condition_type: "price_lte" | "price_gte" | "change_pct_gte" | "change_pct_lte";
-  target_price: number;
-  shares: number;
-  notes: string;
-  expires_at?: string | null;
-  source_report_id: number;
-  source_task_id?: string | null;
-  signal?: string | null;
-  confidence?: number | null;
-  warnings: string[];
-}
-
-export interface ConditionalOrderDraftResponse {
-  draft: ConditionalOrderDraft;
 }

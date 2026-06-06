@@ -120,11 +120,11 @@ class PerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
             result = await performance_service.position_plan_performance(limit=10)
 
         self.assertIn("WITH recent_plans", db.calls[0][0])
-        self.assertIn("adoption_status = 'adopted'", db.calls[0][0])
+        self.assertIn("adoption_status IN ('adopted', 'partially_adopted')", db.calls[0][0])
         self.assertEqual(db.calls[0][1], (10,))
         self.assertIn("FROM daily_pnl", db.calls[1][0])
         self.assertEqual(result["count"], 1)
-        self.assertEqual(result["scope"], "adopted_position_plans")
+        self.assertEqual(result["scope"], "position_plan_items")
         plan_a = next(item for item in result["plans"] if item["plan_id"] == "plan-a")
         self.assertEqual(plan_a["items"], 2)
         self.assertEqual(plan_a["actionable_items"], 2)
@@ -149,6 +149,120 @@ class PerformanceServiceTests(unittest.IsolatedAsyncioTestCase):
         model_bucket = next(item for item in result["by_model_strategy"] if item["model_strategy"] == "dual")
         self.assertEqual(model_bucket["avg_portfolio_return_pct"], 2.444)
         db.close.assert_awaited_once()
+
+    async def test_position_plan_performance_includes_partially_adopted_items(self):
+        db = FakePerformanceDb(
+            [
+                {
+                    "plan_id": "plan-c",
+                    "title": "逐项采纳计划",
+                    "stage": "final",
+                    "model_strategy": "single",
+                    "context_strategy": "summary_plus_evidence",
+                    "adoption_status": "partially_adopted",
+                    "item_adoption_status": "adopted",
+                    "confirmed_at": "2026-06-05T16:10:00",
+                    "cash_snapshot_json": '{"total_cash": 30000}',
+                    "created_at": "2026-06-05T16:00:00",
+                    "code": "000001",
+                    "name": "平安银行",
+                    "action": "BUY",
+                    "suggested_amount": 10000,
+                    "position_pct": 0.1,
+                    "suggested_shares": 1000,
+                    "source_report_id": 1,
+                    "real_shares": 1000,
+                    "real_current_price": 10,
+                    "real_market_value": 10000,
+                    "shadow_shares": 0,
+                    "shadow_market_value": 0,
+                    "pnl_pct": 5.0,
+                    "excess_return": 1.0,
+                    "tracking_entry_price": 10,
+                    "tracking_current_price": 10.5,
+                    "tracking_status": "closed",
+                }
+            ],
+            price_rows=[],
+        )
+        with patch("services.performance_service.get_db", new=AsyncMock(return_value=db)):
+            result = await performance_service.position_plan_performance(limit=10)
+
+        self.assertIn("partially_adopted", db.calls[0][0])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["scope"], "position_plan_items")
+        self.assertEqual(result["plans"][0]["adoption_status"], "partially_adopted")
+        self.assertEqual(result["plans"][0]["tracked"], 1)
+
+    async def test_daily_decision_performance_is_separate_from_position_plans(self):
+        db = FakePerformanceDb(
+            [
+                {
+                    "review_id": "hr-1",
+                    "date": "2026-06-04",
+                    "status": "completed",
+                    "item_id": 1,
+                    "item_type": "holding",
+                    "code": "000001",
+                    "name": "平安银行",
+                    "decision_action": "reduce",
+                    "decision_status": "executed",
+                    "holding_pnl_pct": -4.0,
+                    "change_pct": -2.0,
+                    "latest_report_id": 10,
+                    "pnl_pct": 3.0,
+                    "excess_return": 1.2,
+                    "tracking_status": "closed",
+                },
+                {
+                    "review_id": "hr-1",
+                    "date": "2026-06-04",
+                    "status": "completed",
+                    "item_id": 2,
+                    "item_type": "candidate",
+                    "code": "000002",
+                    "name": "万科A",
+                    "decision_action": "watch",
+                    "decision_status": "watching",
+                    "holding_pnl_pct": 0.0,
+                    "change_pct": 1.0,
+                    "latest_report_id": None,
+                    "pnl_pct": None,
+                    "excess_return": None,
+                    "tracking_status": None,
+                },
+            ],
+        )
+        with patch("services.performance_service.get_db", new=AsyncMock(return_value=db)):
+            result = await performance_service.daily_decision_performance(limit=10)
+
+        self.assertIn("FROM holding_daily_reviews", db.calls[0][0])
+        self.assertEqual(result["scope"], "daily_decision_items")
+        self.assertEqual(result["summary"]["reviews"], 1)
+        self.assertEqual(result["summary"]["items"], 2)
+        self.assertEqual(result["by_action"]["reduce"]["count"], 1)
+        self.assertEqual(result["by_status"]["executed"]["count"], 1)
+        self.assertEqual(result["tracked"]["tracked"], 1)
+        self.assertEqual(result["tracked"]["avg_pnl_pct"], 3.0)
+
+    async def test_overview_includes_suggestion_execution_review(self):
+        with patch("services.performance_service.signal_tracking_service.get_stats", return_value={}), patch(
+            "services.performance_service.signal_tracking_service.list_tracking", return_value=[]
+        ), patch("services.performance_service.shadow_portfolio_service.summary", new=AsyncMock(return_value={})), patch(
+            "services.performance_service.shadow_portfolio_service.list_positions", new=AsyncMock(return_value=[])
+        ), patch("services.performance_service.shadow_portfolio_service.comparison", new=AsyncMock(return_value={})), patch(
+            "services.performance_service.shadow_portfolio_service.list_orders", new=AsyncMock(return_value=[])
+        ), patch("services.performance_service.shadow_portfolio_service.calibration", new=AsyncMock(return_value={})), patch(
+            "services.performance_service.shadow_portfolio_service.execution_deviation", new=AsyncMock(return_value={})
+        ), patch("services.performance_service.position_plan_performance", new=AsyncMock(return_value={})), patch(
+            "services.performance_service.daily_decision_performance", new=AsyncMock(return_value={})
+        ), patch("services.performance_service.execution_review_service.overview", new=AsyncMock(return_value={"scope": "suggestion_execution_review", "summary": {"items": 3}})), patch(
+            "services.performance_service.filter_options", new=AsyncMock(return_value={})
+        ):
+            result = await performance_service.overview(limit=20)
+
+        self.assertEqual(result["execution_review"]["scope"], "suggestion_execution_review")
+        self.assertEqual(result["execution_review"]["summary"]["items"], 3)
 
 
 if __name__ == "__main__":

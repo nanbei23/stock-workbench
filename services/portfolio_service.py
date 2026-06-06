@@ -105,6 +105,41 @@ def _summary_from_positions(positions: list[dict], cash_and_fees: dict) -> dict:
     }
 
 
+async def _trade_fee_settings(db) -> dict:
+    rows = await db.execute_fetchall(
+        "SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?)",
+        ("commission_rate", "commission_min", "stamp_tax_rate", "transfer_fee_rate"),
+    )
+    settings = {row["key"]: row["value"] for row in rows}
+
+    def _num(key: str, default: float) -> float:
+        try:
+            return float(settings.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "commission_rate": _num("commission_rate", 0.0003),
+        "commission_min": _num("commission_min", 5),
+        "stamp_tax_rate": _num("stamp_tax_rate", 0.0005),
+        "transfer_fee_rate": _num("transfer_fee_rate", 0.00001),
+    }
+
+
+async def _apply_default_trade_fees(db, req):
+    amount = round(float(req.price or 0) * float(req.shares or 0), 3)
+    if amount <= 0:
+        return req
+    fees = await _trade_fee_settings(db)
+    if getattr(req, "commission", None) is None:
+        req.commission = round(max(amount * fees["commission_rate"], fees["commission_min"]), 3)
+    if getattr(req, "stamp_tax", None) is None:
+        req.stamp_tax = round(amount * fees["stamp_tax_rate"], 3) if str(req.direction).lower() == "sell" else 0
+    if getattr(req, "transfer_fee", None) is None:
+        req.transfer_fee = round(amount * fees["transfer_fee_rate"], 3)
+    return req
+
+
 def _realized_pnl_from_trades(trades: list[dict]) -> float:
     states = {}
     realized = 0.0
@@ -166,26 +201,52 @@ async def _portfolio_snapshot(account_id=None):
     return positions, summary
 
 
-async def list_accounts():
-    return {"accounts": await _with_db(repo.fetch_accounts)}
+async def list_accounts(login_user_id: str | None = None):
+    async def _load(db):
+        return await repo.fetch_accounts(db, login_user_id)
+
+    return {"accounts": await _with_db(_load)}
 
 
-async def create_account(name: str, broker: str = "", account_id: str | None = None):
+async def create_account(name: str, broker: str = "", account_id: str | None = None, login_user_id: str | None = None):
     if not name:
         raise HTTPException(status_code=400, detail="name required")
     aid = account_id or str(uuid.uuid4())[:8]
 
     async def _create(db):
-        await repo.create_account(db, aid, name, broker)
+        await repo.create_account(db, aid, name, broker, login_user_id or "admin")
 
     await _with_db(_create)
     return {"success": True, "id": aid}
 
 
-async def get_watchlist():
+async def update_account(account_id: str, login_user_id: str, values: dict):
+    async def _update(db):
+        rowcount = await repo.update_account(db, account_id, login_user_id or "admin", values)
+        if rowcount == 0:
+            raise HTTPException(status_code=404, detail="证券账户不存在")
+        return {"success": True, "id": account_id}
+
+    return await _with_db(_update)
+
+
+async def archive_account(account_id: str, login_user_id: str):
+    if account_id == "default":
+        raise HTTPException(status_code=400, detail="默认证券账户不能删除")
+
+    async def _archive(db):
+        rowcount = await repo.archive_account(db, account_id, login_user_id or "admin")
+        if rowcount == 0:
+            raise HTTPException(status_code=404, detail="证券账户不存在")
+        return {"success": True, "id": account_id}
+
+    return await _with_db(_archive)
+
+
+async def get_watchlist(login_user_id: str = "admin"):
     async def _load(db):
-        stocks, portfolio_map = await repo.fetch_watchlist_and_positions(db)
-        latest_reports = await repo.fetch_latest_report_map(db, [stock["code"] for stock in stocks])
+        stocks, portfolio_map = await repo.fetch_watchlist_and_positions(db, login_user_id)
+        latest_reports = await repo.fetch_latest_report_map(db, [stock["code"] for stock in stocks], login_user_id)
         return stocks, portfolio_map, latest_reports
 
     stocks, portfolio_map, latest_reports = await _with_db(_load)
@@ -225,7 +286,7 @@ async def get_watchlist():
     return {"count": len(stocks), "stocks": stocks}
 
 
-async def add_to_watchlist(req):
+async def add_to_watchlist(req, login_user_id: str = "admin"):
     clean_code = _clean_watchlist_code(req.code)
     if not clean_code:
         raise HTTPException(status_code=400, detail="请输入 6 位股票代码")
@@ -250,8 +311,8 @@ async def add_to_watchlist(req):
     )
 
     async def _add(db):
-        sort_order = await repo.next_watchlist_sort_order(db)
-        return await repo.insert_watchlist_stock(db, req, sort_order)
+        sort_order = await repo.next_watchlist_sort_order(db, login_user_id)
+        return await repo.insert_watchlist_stock(db, req, sort_order, login_user_id)
 
     stock = await _with_db(_add)
     return {"status": "ok", "stock": stock}
@@ -348,7 +409,7 @@ def parse_watchlist_markdown(content: str):
     return {"items": items, "duplicates": duplicates, "invalid_lines": invalid_lines}
 
 
-async def import_watchlist_markdown(content: str, group_name: str = "默认"):
+async def import_watchlist_markdown(content: str, group_name: str = "默认", login_user_id: str = "admin"):
     parsed = parse_watchlist_markdown(content)
     items = [
         {"code": _clean_watchlist_code(item["code"]), "name": _clean_watchlist_name(item.get("name") or "")}
@@ -368,8 +429,8 @@ async def import_watchlist_markdown(content: str, group_name: str = "默认"):
     quotes = await get_batch_quotes([item["code"] for item in items])
 
     async def _import(db):
-        existing = await repo.fetch_watchlist_codes(db, [item["code"] for item in items])
-        sort_order = await repo.next_watchlist_sort_order(db)
+        existing = await repo.fetch_watchlist_codes(db, [item["code"] for item in items], login_user_id)
+        sort_order = await repo.next_watchlist_sort_order(db, login_user_id)
         imported = []
         duplicate_count = parsed["duplicates"]
         invalid_lines = list(parsed["invalid_lines"])
@@ -396,7 +457,7 @@ async def import_watchlist_markdown(content: str, group_name: str = "默认"):
                 stop_loss_price=None,
                 notes="初始化向导 Markdown 导入",
             )
-            stock = await repo.insert_watchlist_stock(db, req, sort_order)
+            stock = await repo.insert_watchlist_stock(db, req, sort_order, login_user_id)
             imported.append(stock)
             existing.add(item["code"])
             sort_order += 1
@@ -413,9 +474,9 @@ async def import_watchlist_markdown(content: str, group_name: str = "默认"):
     }
 
 
-async def remove_from_watchlist(code: str):
+async def remove_from_watchlist(code: str, login_user_id: str = "admin"):
     async def _remove(db):
-        return await repo.delete_watchlist_stock(db, code)
+        return await repo.delete_watchlist_stock(db, code, login_user_id)
 
     rowcount = await _with_db(_remove)
     if rowcount == 0:
@@ -435,19 +496,19 @@ def _clean_watchlist_codes(codes):
     return cleaned
 
 
-async def remove_watchlist_batch(codes: list[str]):
+async def remove_watchlist_batch(codes: list[str], login_user_id: str = "admin"):
     clean_codes = _clean_watchlist_codes(codes)
     if not clean_codes:
         raise HTTPException(status_code=400, detail="请选择要删除的自选股")
 
     async def _remove(db):
-        return await repo.delete_watchlist_stocks(db, clean_codes)
+        return await repo.delete_watchlist_stocks(db, clean_codes, login_user_id)
 
     deleted = await _with_db(_remove)
     return {"status": "ok", "deleted": deleted, "codes": clean_codes}
 
 
-async def update_watchlist(code: str, req):
+async def update_watchlist(code: str, req, login_user_id: str = "admin"):
     updates = {
         key: value
         for key, value in {
@@ -464,7 +525,7 @@ async def update_watchlist(code: str, req):
         raise HTTPException(status_code=400, detail="没有要更新的字段")
 
     async def _update(db):
-        return await repo.update_watchlist_stock(db, code, updates)
+        return await repo.update_watchlist_stock(db, code, updates, login_user_id)
 
     rowcount = await _with_db(_update)
     if rowcount == 0:
@@ -472,9 +533,9 @@ async def update_watchlist(code: str, req):
     return {"status": "ok", "code": code}
 
 
-async def reorder_watchlist(req):
+async def reorder_watchlist(req, login_user_id: str = "admin"):
     async def _reorder(db):
-        await repo.reorder_watchlist(db, req.items)
+        await repo.reorder_watchlist(db, req.items, login_user_id)
 
     await _with_db(_reorder)
     return {"status": "ok", "updated": len(req.items)}
@@ -490,6 +551,7 @@ async def get_trades(code=None, account_id=None):
 
 async def add_trade(req):
     async def _add(db):
+        await _apply_default_trade_fees(db, req)
         trade = await repo.insert_trade(db, req)
         await repo.apply_trade_cash_effect(db, trade)
         return await repo.recalc_portfolio(db, req.code, getattr(req, "account_id", None) or "default")
@@ -497,52 +559,61 @@ async def add_trade(req):
     return {"status": "ok", "trade": await _with_db(_add)}
 
 
-async def get_trade_stats(code: str):
+async def get_trade_stats(code: str, account_id: str | None = "default"):
     async def _load(db):
-        return await repo.fetch_trade_stats(db, code)
+        return await repo.fetch_trade_stats(db, code, account_id)
 
     stats = await _with_db(_load)
-    return {"code": code, **stats}
+    return {"code": code, "account_id": account_id or "default", **stats}
 
 
-async def delete_trade(trade_id: int):
+async def delete_trade(trade_id: int, account_id: str | None = None):
     async def _delete(db):
         trade = await repo.fetch_trade(db, trade_id)
         if not trade:
             raise HTTPException(status_code=404, detail="未找到交易记录")
+        trade_account_id = trade.get("account_id") or "default"
+        requested_account_id = account_id or trade_account_id
+        if trade_account_id != requested_account_id:
+            raise HTTPException(status_code=403, detail="交易记录不属于当前证券账户")
         await repo.delete_trade(db, trade_id)
         await repo.apply_trade_cash_effect(db, trade, reverse=True)
-        portfolio = await repo.recalc_portfolio(db, trade["code"], trade.get("account_id") or "default")
-        return trade, portfolio
+        portfolio = await repo.recalc_portfolio(db, trade["code"], requested_account_id)
+        return portfolio
 
-    _, portfolio = await _with_db(_delete)
+    portfolio = await _with_db(_delete)
     return {"status": "ok", "deleted_id": trade_id, "portfolio": portfolio}
 
 
-async def clear_stock_trades(code: str):
+async def clear_stock_trades(code: str, account_id: str | None = None):
     async def _clear(db):
-        trades = await repo.fetch_trades(db, code)
-        count = await repo.count_stock_trades(db, code)
+        aid = account_id or "default"
+        trades = await repo.fetch_trades(db, code, aid)
+        count = len(trades)
         if count == 0:
             raise HTTPException(status_code=404, detail=f"未找到 {code} 的交易记录")
-        await repo.delete_stock_trades(db, code)
+        await repo.delete_stock_trades(db, code, aid)
         affected_accounts = {trade.get("account_id") or "default" for trade in trades}
         for trade in trades:
             await repo.apply_trade_cash_effect(db, trade, reverse=True)
-        portfolio = await repo.recalc_portfolio(db, code)
-        for account_id in affected_accounts - {"default"}:
-            await repo.recalc_portfolio(db, code, account_id)
+        portfolio = await repo.recalc_portfolio(db, code, aid)
+        for affected_account in affected_accounts - {aid}:
+            await repo.recalc_portfolio(db, code, affected_account)
         return count, portfolio
 
     count, portfolio = await _with_db(_clear)
     return {"status": "ok", "deleted_count": count, "code": code, "portfolio": portfolio}
 
 
-async def edit_trade(trade_id: int, req):
+async def edit_trade(trade_id: int, req, account_id: str | None = None):
     async def _edit(db):
         trade = await repo.fetch_trade(db, trade_id)
         if not trade:
             raise HTTPException(status_code=404, detail="未找到交易记录")
+        trade_account_id = trade.get("account_id") or "default"
+        requested_account_id = account_id or trade_account_id
+        if trade_account_id != requested_account_id:
+            raise HTTPException(status_code=403, detail="交易记录不属于当前证券账户")
         values = {
             "price": req.price if req.price is not None else trade["price"],
             "shares": req.shares if req.shares is not None else trade["shares"],
@@ -564,7 +635,7 @@ async def edit_trade(trade_id: int, req):
         updated = await repo.fetch_trade(db, trade_id)
         await repo.apply_trade_cash_effect(db, trade, reverse=True)
         await repo.apply_trade_cash_effect(db, updated)
-        return await repo.recalc_portfolio(db, trade["code"], trade.get("account_id") or "default")
+        return await repo.recalc_portfolio(db, trade["code"], requested_account_id)
 
     portfolio = await _with_db(_edit)
     return {"status": "ok", "trade_id": trade_id, "portfolio": portfolio}
@@ -580,12 +651,12 @@ async def get_portfolio_overview(account_id=None):
     return summary
 
 
-async def get_account_dashboard():
-    accounts = (await list_accounts()).get("accounts", [])
+async def get_account_dashboard(login_user_id: str | None = None):
+    accounts = (await list_accounts(login_user_id)).get("accounts", [])
     if not any(account.get("id") == "default" for account in accounts):
-        accounts = [{"id": "default", "name": "默认账户", "broker": ""}, *accounts]
+        if not login_user_id:
+            accounts = [{"id": "default", "name": "默认账户", "broker": ""}, *accounts]
 
-    combined = await get_portfolio_overview()
     items = []
     for account in accounts:
         overview = await get_portfolio_overview(account.get("id"))
@@ -597,6 +668,24 @@ async def get_account_dashboard():
             "position_count": positions.get("count", 0),
             **overview,
         })
+
+    combined = {
+        "total_assets": round(sum(float(item.get("total_assets") or 0) for item in items), 3),
+        "market_value": round(sum(float(item.get("market_value") or 0) for item in items), 3),
+        "cash": round(sum(float(item.get("cash") or 0) for item in items), 3),
+        "total_cost": round(sum(float(item.get("total_cost") or 0) for item in items), 3),
+        "daily_pnl": round(sum(float(item.get("daily_pnl") or 0) for item in items), 3),
+        "unrealized_pnl": round(sum(float(item.get("unrealized_pnl") or 0) for item in items), 3),
+        "realized_pnl": round(sum(float(item.get("realized_pnl") or 0) for item in items), 3),
+        "historical_pnl": round(sum(float(item.get("historical_pnl") or 0) for item in items), 3),
+        "total_commission": round(sum(float(item.get("total_commission") or 0) for item in items), 3),
+        "total_stamp_tax": round(sum(float(item.get("total_stamp_tax") or 0) for item in items), 3),
+    }
+    previous_market_value = combined["market_value"] - combined["daily_pnl"]
+    combined["daily_pnl_pct"] = round(combined["daily_pnl"] / previous_market_value * 100, 3) if previous_market_value else 0
+    combined["unrealized_pnl_pct"] = round(combined["unrealized_pnl"] / combined["total_cost"] * 100, 3) if combined["total_cost"] else 0
+    combined["total_pnl"] = round(combined["realized_pnl"] + combined["unrealized_pnl"], 3)
+    combined["cash_source"] = "manual" if any((item.get("cash_source") == "manual") for item in items) else "unset"
 
     return {
         "combined": combined,
@@ -716,22 +805,23 @@ async def ensure_daily_pnl_snapshot(day=None, account_id=None) -> dict:
     total_pnl_pct = round(total_pnl / total_cost * 100, 3) if total_cost else 0.0
 
     async def _write(db):
+        aid = account_id or "default"
         for item in items:
             await db.execute(
                 """
-                INSERT OR REPLACE INTO daily_pnl (date, code6, pnl, close_price, shares)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO daily_pnl (date, account_id, code6, pnl, close_price, shares)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (target_day.isoformat(), item["code6"], item["pnl"], item["close_price"], item["shares"]),
+                (target_day.isoformat(), aid, item["code6"], item["pnl"], item["close_price"], item["shares"]),
             )
         await db.execute(
             """
             INSERT OR REPLACE INTO daily_pnl (
-                date, code6, total_assets, cash, market_value, realized_pnl,
+                date, account_id, code6, total_assets, cash, market_value, realized_pnl,
                 unrealized_pnl, total_pnl, total_pnl_pct
-            ) VALUES (?, '', ?, ?, ?, 0, ?, ?, ?)
+            ) VALUES (?, ?, '', ?, ?, ?, 0, ?, ?, ?)
             """,
-            (target_day.isoformat(), total_assets, cash, market_value, total_pnl, total_pnl, total_pnl_pct),
+            (target_day.isoformat(), aid, total_assets, cash, market_value, total_pnl, total_pnl, total_pnl_pct),
         )
         await db.commit()
 
@@ -746,7 +836,7 @@ async def ensure_daily_pnl_snapshot(day=None, account_id=None) -> dict:
     }
 
 
-async def _ensure_recent_pnl_snapshots_for_calendar(year: int, month: int):
+async def _ensure_recent_pnl_snapshots_for_calendar(year: int, month: int, account_id: str | None = "default"):
     today = datetime.now().date()
     recent_days = [today - timedelta(days=1)]
     if datetime.now().hour >= 15:
@@ -754,28 +844,28 @@ async def _ensure_recent_pnl_snapshots_for_calendar(year: int, month: int):
     for day in recent_days:
         if day.year == year and day.month == month:
             async def _has_rows(db, target=day.isoformat()):
-                rows = await repo.fetch_daily_pnl_day(db, target)
+                rows = await repo.fetch_daily_pnl_day(db, target, account_id)
                 return bool(rows)
 
             try:
                 exists = await _with_db(_has_rows)
                 if not exists:
-                    await ensure_daily_pnl_snapshot(day)
+                    await ensure_daily_pnl_snapshot(day, account_id)
             except Exception:
                 # Calendar reads must remain available even if a backfill data source is temporarily down.
                 continue
 
 
-async def get_pnl_calendar(year=None, month=None, code=None):
+async def get_pnl_calendar(year=None, month=None, code=None, account_id: str | None = "default"):
     now = datetime.now()
     y = year or now.year
     m = month or now.month
 
     if y == now.year and m == now.month:
-        await _ensure_recent_pnl_snapshots_for_calendar(y, m)
+        await _ensure_recent_pnl_snapshots_for_calendar(y, m, account_id)
 
     async def _load(db):
-        return await repo.fetch_daily_pnl(db, y, m, code)
+        return await repo.fetch_daily_pnl(db, y, m, code, account_id)
 
     rows = await _with_db(_load)
     if code:
@@ -820,41 +910,6 @@ async def get_pnl_calendar(year=None, month=None, code=None):
         "trade_days": trade_days,
         "win_rate": win_rate,
     }
-
-
-async def get_conditional_orders(status=None, account_id=None):
-    async def _load(db):
-        return await repo.fetch_conditional_orders(db, status, account_id)
-
-    orders = await _with_db(_load)
-    if orders:
-        quotes = await get_batch_quotes(list({order["code"] for order in orders}))
-        for order in orders:
-            quote = quotes.get(order["code"], {})
-            order["current_price"] = quote.get("price", 0)
-            order["change_pct"] = quote.get("change_pct", 0)
-            if order["current_price"] and order["target_price"]:
-                order["distance_pct"] = round(
-                    (order["target_price"] - order["current_price"]) / order["current_price"] * 100,
-                    2,
-                )
-    return {"count": len(orders), "orders": orders}
-
-
-async def create_conditional_order(req):
-    async def _create(db):
-        return await repo.insert_conditional_order(db, req)
-
-    order_id = await _with_db(_create)
-    return {"status": "ok", "id": order_id}
-
-
-async def cancel_conditional_order(order_id: int):
-    async def _cancel(db):
-        return await repo.cancel_conditional_order(db, order_id)
-
-    await _with_db(_cancel)
-    return {"status": "ok", "id": order_id}
 
 
 async def get_pending_positions(account_id=None):
@@ -902,9 +957,9 @@ async def update_pending_position(position_id: int, req):
     return {"status": "ok", "id": position_id}
 
 
-async def delete_pending_position(position_id: int):
+async def delete_pending_position(position_id: int, account_id: str | None = None):
     async def _delete(db):
-        return await repo.delete_pending_position(db, position_id)
+        return await repo.delete_pending_position(db, position_id, account_id)
 
     rowcount = await _with_db(_delete)
     if rowcount == 0:
@@ -935,11 +990,11 @@ async def delete_buy_point(point_id: int):
     return {"status": "ok", "id": point_id}
 
 
-async def get_pnl_day_detail(day: str):
+async def get_pnl_day_detail(day: str, account_id: str | None = "default"):
     async def _load(db):
-        trades = await repo.fetch_day_trades(db, day)
-        daily_pnl = await repo.fetch_daily_pnl_day(db, day)
-        daily_rows = await repo.fetch_daily_pnl_stock_rows_day(db, day)
+        trades = await repo.fetch_day_trades(db, day, account_id)
+        daily_pnl = await repo.fetch_daily_pnl_day(db, day, account_id)
+        daily_rows = await repo.fetch_daily_pnl_stock_rows_day(db, day, account_id)
         return trades, daily_pnl, daily_rows
 
     trades, daily_pnl, daily_rows = await _with_db(_load)
@@ -958,6 +1013,7 @@ async def get_pnl_day_detail(day: str):
     ]
     return {
         "date": day,
+        "account_id": account_id or "default",
         "daily_pnl": daily_pnl,
         "stock_pnl": stock_pnl,
         "trades": trades,
@@ -1007,9 +1063,9 @@ async def update_trading_plan(plan_id: int, req):
     return {"status": "ok", "id": plan_id}
 
 
-async def delete_trading_plan(plan_id: int):
+async def delete_trading_plan(plan_id: int, account_id: str | None = None):
     async def _delete(db):
-        return await repo.delete_trading_plan(db, plan_id)
+        return await repo.delete_trading_plan(db, plan_id, account_id)
 
     rowcount = await _with_db(_delete)
     if rowcount == 0:

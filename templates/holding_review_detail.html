@@ -6,7 +6,7 @@
 <div class="report-detail-page" data-review-id="{{ review_id }}">
   <div class="report-detail-header">
     <div>
-      <a class="btn btn-sm" href="/reports?tab=daily-decision">返回报告库</a>
+      <a class="btn btn-sm" href="/reports?tab=daily-decision">返回 AI投研中心</a>
       <h1 id="holdingReviewTitle">每日 AI 决策报告详情</h1>
       <p id="holdingReviewMeta">正在加载...</p>
     </div>
@@ -34,11 +34,15 @@
             <th>涨跌幅</th>
             <th>持仓盈亏</th>
             <th>最新信号</th>
-            <th>动作提示</th>
+            <th>每日动作</th>
+            <th>状态</th>
+            <th>实际执行</th>
+            <th>执行偏差</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody id="holdingReviewHoldings">
-          <tr><td colspan="8" class="empty-row">正在加载...</td></tr>
+          <tr><td colspan="12" class="empty-row">正在加载...</td></tr>
         </tbody>
       </table>
     </div>
@@ -64,10 +68,10 @@
     <div class="report-table-wrap">
       <table class="report-library-table">
         <thead>
-          <tr><th>股票</th><th>分组</th><th>现价</th><th>涨跌幅</th><th>最新信号</th><th>说明</th></tr>
+          <tr><th>股票</th><th>分组</th><th>现价</th><th>涨跌幅</th><th>最新信号</th><th>每日动作</th><th>状态</th><th>实际执行</th><th>执行偏差</th><th>操作</th><th>说明</th></tr>
         </thead>
         <tbody id="holdingReviewCandidates">
-          <tr><td colspan="6" class="empty-row">未加入候选池</td></tr>
+          <tr><td colspan="11" class="empty-row">未加入候选池</td></tr>
         </tbody>
       </table>
     </div>
@@ -81,5 +85,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/holding-review-detail.js?v=2.9.11-holding-review"></script>
+<script src="/static/js/holding-review-detail.js?v=2.9.24-daily-item-status"></script>
 {% endblock %}

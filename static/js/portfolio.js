@@ -33,10 +33,6 @@ const _tabLoaded = {};
 let _stopLossPct = 8; // 默认值，将从API加载
 let _portfolioPositionsCache = [];
 let _portfolioFilterText = '';
-let _holdingReviewCandidatesCache = [];
-let _holdingReviewCandidateSearch = '';
-const _selectedHoldingReviewCandidateCodes = new Set();
-let _visibleHoldingReviewCandidateCodes = [];
 
 function selectedAccountId() {
   return localStorage.getItem('accountId') || 'default';
@@ -352,22 +348,36 @@ async function loadHoldingReviewSummary() {
     const data = await portfolioGet(withAccount('/api/daily-decision-reports?limit=1'));
     const review = (data.reviews || [])[0];
     if (!review) {
-      el.innerHTML = '<div class="empty-state"><p>暂无每日 AI 决策报告。点击生成后可在报告库回看详情。</p></div>';
+      el.innerHTML = `<div class="portfolio-decision-empty">
+        <p>暂无每日 AI 决策报告。生成、补跑持仓报告和候选选择请进入 AI投研中心。</p>
+        <a class="btn btn-sm btn-primary" href="/reports?tab=holding-reviews">去 AI投研中心生成</a>
+      </div>`;
       return;
     }
     const asset = review.asset_snapshot || {};
-    el.innerHTML = `<div class="holding-review-grid">
-      <div><span>日期</span><strong>${esc(review.date || '--')}</strong></div>
+    const today = new Date().toISOString().slice(0, 10);
+    const isToday = String(review.date || '') === today;
+    const statusText = isToday ? '今日已生成' : '非今日报告';
+    const statusClass = isToday ? 'status-ok' : 'status-warn';
+    el.innerHTML = `<div class="portfolio-decision-summary-head">
+      <div>
+        <span class="status-pill ${statusClass}">${statusText}</span>
+        <strong>${esc(review.date || '--')}</strong>
+      </div>
+      <a class="btn btn-xs" href="/reports?tab=holding-reviews">查看历史</a>
+    </div>
+    <div class="holding-review-grid portfolio-decision-grid">
       <div><span>持仓</span><strong>${formatReviewCount(review.holding_count)} 只</strong></div>
       <div><span>候选池</span><strong>${formatReviewCount(review.candidate_count)} 只</strong></div>
       <div><span>触发项</span><strong class="${Number(review.critical_count || 0) ? 'down' : ''}">${formatReviewCount(review.trigger_count)} / 高风险 ${formatReviewCount(review.critical_count)}</strong></div>
       <div><span>可用资金</span><strong>${formatMoney(asset.cash || 0)}</strong></div>
       <div><span>仓位使用率</span><strong>${Number(asset.position_usage_pct || 0).toFixed(3)}%</strong></div>
     </div>
-    <div class="holding-review-text">${esc(review.summary || '')}</div>
-    <div class="library-action-row" style="margin-top:8px;">
+    <div class="holding-review-text">${esc(review.summary || '暂无摘要')}</div>
+    <div class="library-action-row portfolio-decision-actions" style="margin-top:8px;">
       <a class="btn btn-sm btn-primary" href="/daily-decision-reports/${encodeURIComponent(review.review_id)}">打开详情</a>
       <a class="btn btn-sm" href="/api/daily-decision-reports/${encodeURIComponent(review.review_id)}/markdown">Markdown</a>
+      <a class="btn btn-sm" href="/reports?tab=holding-reviews">AI投研中心</a>
     </div>`;
   } catch (e) {
     el.innerHTML = `<div class="empty-state"><p>每日 AI 决策报告加载失败：${esc(e.message)}</p></div>`;
@@ -385,160 +395,6 @@ function holdingReviewSignalLabel(value) {
     STRONG_SELL: '强烈卖出'
   };
   return labels[String(value || '').toUpperCase()] || '无报告';
-}
-
-function updateHoldingReviewCandidateCount() {
-  const el = document.getElementById('holdingReviewCandidateCount');
-  if (el) el.textContent = `已选 ${_selectedHoldingReviewCandidateCodes.size} 只`;
-}
-
-function holdingReviewCandidateVisible(stock, query, includePool, holdingCodes) {
-  const code = String(stock.code || '').slice(0, 6);
-  if (!code || holdingCodes.has(code)) return false;
-  const group = stock.group_name || '默认';
-  if (!includePool && group === '观察池') return false;
-  if (!query) return true;
-  return [stock.code, stock.name, stock.group_name, stock.last_report_signal]
-    .some(value => String(value || '').toLowerCase().includes(query));
-}
-
-function renderHoldingReviewCandidateList() {
-  const listEl = document.getElementById('holdingReviewCandidateList');
-  if (!listEl) return;
-  const includePool = Boolean(document.getElementById('holdingReviewIncludePool')?.checked);
-  const query = String(_holdingReviewCandidateSearch || '').trim().toLowerCase();
-  const holdingCodes = new Set(_portfolioPositionsCache.map(position => String(position.code || '').slice(0, 6)));
-  const visible = _holdingReviewCandidatesCache.filter(stock => holdingReviewCandidateVisible(stock, query, includePool, holdingCodes));
-  _visibleHoldingReviewCandidateCodes = visible.map(stock => String(stock.code || '').slice(0, 6)).filter(Boolean);
-
-  if (!visible.length) {
-    const message = query ? '没有匹配的候选股' : '暂无可加入的自选股候选';
-    listEl.innerHTML = `<div class="empty-state"><p>${message}</p></div>`;
-    updateHoldingReviewCandidateCount();
-    return;
-  }
-
-  listEl.innerHTML = visible.map(stock => {
-    const code = String(stock.code || '').slice(0, 6);
-    const checked = _selectedHoldingReviewCandidateCodes.has(code) ? 'checked' : '';
-    const group = stock.group_name || '默认';
-    const signal = holdingReviewSignalLabel(stock.last_report_signal);
-    const price = Number(stock.price || 0);
-    const changePct = Number(stock.change_pct || 0);
-    return `<label class="holding-review-candidate-row">
-      <input type="checkbox" ${checked} onchange="setHoldingReviewCandidateSelection('${jsArg(code)}', this.checked)">
-      <span class="holding-review-candidate-main">
-        <strong>${esc(stock.name || code)} <small>${esc(code)}</small></strong>
-        <em>${esc(group)} · 上次 ${esc(signal)}</em>
-      </span>
-      <span class="holding-review-candidate-meta ${priceClass(changePct)}">
-        ${price ? price.toFixed(3) : '--'} / ${formatPct(changePct)}
-      </span>
-    </label>`;
-  }).join('');
-  updateHoldingReviewCandidateCount();
-}
-
-async function loadHoldingReviewCandidates() {
-  const enabled = Boolean(document.getElementById('holdingReviewIncludeWatchlist')?.checked);
-  const panel = document.getElementById('holdingReviewCandidatePanel');
-  const listEl = document.getElementById('holdingReviewCandidateList');
-  if (!enabled) {
-    _selectedHoldingReviewCandidateCodes.clear();
-    _visibleHoldingReviewCandidateCodes = [];
-    if (panel) panel.style.display = 'none';
-    updateHoldingReviewCandidateCount();
-    return;
-  }
-  if (panel) panel.style.display = 'block';
-  if (listEl) listEl.innerHTML = '<div class="empty-state"><p>正在加载候选股...</p></div>';
-  try {
-    const data = await portfolioGet('/api/watchlist');
-    _holdingReviewCandidatesCache = data.stocks || [];
-    const includePool = Boolean(document.getElementById('holdingReviewIncludePool')?.checked);
-    if (!includePool) {
-      for (const code of Array.from(_selectedHoldingReviewCandidateCodes)) {
-        const stock = _holdingReviewCandidatesCache.find(item => String(item.code || '').slice(0, 6) === code);
-        if ((stock?.group_name || '默认') === '观察池') _selectedHoldingReviewCandidateCodes.delete(code);
-      }
-    }
-    renderHoldingReviewCandidateList();
-  } catch (e) {
-    if (listEl) listEl.innerHTML = `<div class="empty-state"><p>候选股加载失败：${esc(e.message)}</p></div>`;
-  }
-}
-
-function toggleHoldingReviewCandidatePanel() {
-  loadHoldingReviewCandidates();
-}
-
-function filterHoldingReviewCandidates(value) {
-  _holdingReviewCandidateSearch = value || '';
-  renderHoldingReviewCandidateList();
-}
-
-function setHoldingReviewCandidateSelection(code, checked) {
-  const cleanCode = String(code || '').slice(0, 6);
-  if (!cleanCode) return;
-  if (checked) {
-    _selectedHoldingReviewCandidateCodes.add(cleanCode);
-  } else {
-    _selectedHoldingReviewCandidateCodes.delete(cleanCode);
-  }
-  updateHoldingReviewCandidateCount();
-}
-
-function selectVisibleHoldingReviewCandidates() {
-  _visibleHoldingReviewCandidateCodes.forEach(code => _selectedHoldingReviewCandidateCodes.add(code));
-  renderHoldingReviewCandidateList();
-}
-
-function clearHoldingReviewCandidates() {
-  _selectedHoldingReviewCandidateCodes.clear();
-  renderHoldingReviewCandidateList();
-}
-
-async function runHoldingReview() {
-  const includeWatchlist = Boolean(document.getElementById('holdingReviewIncludeWatchlist')?.checked);
-  const includePool = Boolean(document.getElementById('holdingReviewIncludePool')?.checked);
-  const forceRefreshHoldings = Boolean(document.getElementById('holdingReviewForceHoldings')?.checked);
-  const forceRefreshCandidates = Boolean(document.getElementById('holdingReviewForceCandidates')?.checked);
-  const refreshSnapshots = Boolean(document.getElementById('holdingReviewRefreshSnapshots')?.checked);
-  const candidateCodes = includeWatchlist ? Array.from(_selectedHoldingReviewCandidateCodes) : [];
-  if (forceRefreshCandidates && !includeWatchlist) {
-    showToast('请先勾选“从自选股选择候选”并选择候选股，再补跑候选报告。', 'warn');
-    return;
-  }
-  if (refreshSnapshots && !forceRefreshHoldings && !forceRefreshCandidates) {
-    showToast('刷新七层快照需要配合持仓或候选报告补跑使用。', 'warn');
-    return;
-  }
-  if (includeWatchlist && candidateCodes.length === 0) {
-    showToast('请先勾选要加入候选池的自选股，或取消候选池选项。', 'warn');
-    return;
-  }
-  const el = document.getElementById('holdingReviewSummary');
-  if (el) el.innerHTML = '<div class="empty-state"><p>正在生成每日 AI 决策报告...</p></div>';
-  try {
-    const review = await portfolioPost('/api/daily-decision-reports/run', {
-      account_id: selectedAccountId(),
-      include_watchlist_candidates: candidateCodes.length > 0,
-      include_observation_pool: includePool,
-      candidate_codes: candidateCodes,
-      force_refresh_holdings: forceRefreshHoldings,
-      force_refresh_candidates: forceRefreshCandidates,
-      refresh_snapshots_for_reports: refreshSnapshots
-    });
-    await loadHoldingReviewSummary();
-    if (review.status === 'waiting_reports') {
-      showToast(`已进入补报告队列：${(review.rerun_report_codes || []).length}只，完成后自动生成每日 AI 决策报告`, 'success');
-    } else {
-      showToast(`每日 AI 决策报告已生成：持仓${review.holding_count || 0}只，触发${review.trigger_count || 0}项`, 'success');
-    }
-  } catch (e) {
-    if (el) el.innerHTML = `<div class="empty-state"><p>生成失败：${esc(e.message)}</p></div>`;
-    showToast('每日 AI 决策报告生成失败: ' + e.message, 'error');
-  }
 }
 
 // ── 持仓列表（左侧） ────────────────────────────────────
@@ -670,7 +526,7 @@ async function loadHoldingsTable() {
   }
 }
 
-// ── 交易计划（合并 待持仓 + 条件单） ─────────────────────
+// ── 交易计划 ─────────────────────
 async function loadTradingPlans() {
   try {
     const data = await portfolioGet(withAccount('/api/trading-plans'));
@@ -765,7 +621,8 @@ async function submitPlan(e) {
 
   try {
     await portfolioPost('/api/trading-plans', {
-      code, name, direction, plan_type, target_price, condition_type, plan_shares, reason, expires_at
+      code, name, direction, plan_type, target_price, condition_type, plan_shares, reason, expires_at,
+      account_id: selectedAccountId()
     });
     closePlanModal();
     await loadTradingPlans();
@@ -779,7 +636,7 @@ async function submitPlan(e) {
 async function deletePlan(pid) {
   if (!confirm('确认删除此交易计划？')) return;
   try {
-    await apiDelete(`/api/trading-plans/${pid}`);
+    await apiDelete(withAccount(`/api/trading-plans/${pid}`));
     await loadTradingPlans();
   } catch (e) {
     console.error('deletePlan error:', e);
@@ -829,7 +686,7 @@ async function loadTrades() {
 // ── 交易管理 ──────────────────────────────────────────────
 async function loadTradeStats(code) {
   try {
-    const data = await portfolioGet(`/api/trades/stats/${code}`);
+    const data = await portfolioGet(withAccount(`/api/trades/stats/${code}`));
     document.getElementById('lowestBuyPrice').textContent = data.lowest_buy_price ? data.lowest_buy_price.toFixed(3) : '--';
     document.getElementById('latestBuyPrice').textContent = data.latest_buy_price ? data.latest_buy_price.toFixed(3) : '--';
   } catch (e) {
@@ -876,7 +733,7 @@ async function clearStockTrades() {
   }
   if (!confirm(`确认清空 ${_selectedStockCode} 的所有交易记录？此操作不可恢复！`)) return;
   try {
-    await apiDelete(`/api/trades/stock/${_selectedStockCode}`);
+    await apiDelete(withAccount(`/api/trades/stock/${_selectedStockCode}`));
     closeStockActionPanel();
     await refreshAll();
   } catch (e) {
@@ -920,7 +777,7 @@ async function refreshAll() {
 // ── 持仓盈亏日历 ──────────────────────────────────────────
 async function loadCalendar() {
   try {
-    const data = await portfolioGet(`/api/pnl/calendar?year=${calendarYear}&month=${calendarMonth}`);
+    const data = await portfolioGet(withAccount(`/api/pnl/calendar?year=${calendarYear}&month=${calendarMonth}`));
     
     // 更新标题
     document.getElementById('calendarTitle').textContent = `${calendarYear}年${calendarMonth}月`;
@@ -1043,7 +900,7 @@ function showDayDetail(day) {
 
 async function loadDayDetailData(dateStr, popup) {
   try {
-    const data = await portfolioGet(`/api/pnl/calendar/day/${dateStr}`);
+    const data = await portfolioGet(withAccount(`/api/pnl/calendar/day/${dateStr}`));
     const dailyPnl = data.daily_pnl;
     const stockPnl = data.stock_pnl || [];
     const trades = data.trades || [];

@@ -31,9 +31,11 @@ class BatchResearchCreatePayload(BaseModel):
     timeout_seconds: int = Field(default=3600, ge=60, le=28800)
     role_retry_attempts: int = Field(default=3, ge=1, le=8)
     role_retry_backoff_seconds: float = Field(default=2.0, ge=0, le=120)
-    max_consecutive_failures: int = Field(default=5, ge=0, le=50)
-    max_failure_rate: float = Field(default=0.25, ge=0, le=1)
-    min_failure_rate_items: int = Field(default=5, ge=1, le=500)
+    max_consecutive_failures: int = Field(default=20, ge=0, le=50)
+    max_failure_rate: float = Field(default=0.6, ge=0, le=1)
+    min_failure_rate_items: int = Field(default=20, ge=1, le=500)
+    guard_window_items: int = Field(default=20, ge=1, le=500)
+    resilience_mode: str = "robust"
     model_fallback_enabled: bool = True
     fallback_provider_ids: list[str] = Field(default_factory=list)
     plan_top_n: int = Field(default=10, ge=1, le=50)
@@ -46,7 +48,15 @@ class BatchResearchCreatePayload(BaseModel):
     allowed_worker_ids: list[str] = Field(default_factory=list)
     primary_provider_ids: list[str] = Field(default_factory=list)
     quota_exhausted_action: str = "switch_model"
-    failure_retry_mode: str = "manual"
+    quota_pause_scope: str = "item"
+    failure_retry_mode: str = "auto_switch_model"
+    selection_id: Optional[str] = None
+    source_page: Optional[str] = None
+    source_label: Optional[str] = None
+    max_auto_item_retries: int = Field(default=2, ge=0, le=10)
+    auto_retry_delay_seconds: int = Field(default=60, ge=0, le=3600)
+    max_auto_retry_delay_seconds: int = Field(default=900, ge=0, le=7200)
+    max_runtime_cooldown_seconds: int = Field(default=300, ge=0, le=3600)
     title: Optional[str] = None
     trade_date: Optional[str] = None
     output_dir: Optional[Path] = None

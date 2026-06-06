@@ -8,10 +8,9 @@ import json
 import logging
 import time
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from scheduler.ta_bridge import (
@@ -29,7 +28,7 @@ from services import ai_task_service
 from services import ai_report_service
 from services import ai_fact_service
 from services import ai_signal_service
-from services import portfolio_service
+from services import auth_service
 from schemas.ai_task import (
     ActiveTaskResponse,
     AnalysisResultResponse,
@@ -39,12 +38,7 @@ from schemas.ai_task import (
     BatchAnalyzeRequest,
     BatchAnalyzeResponse,
     AnalysisTaskListResponse,
-    ConditionalOrderDraftRequest,
-    ConditionalOrderDraftResponse,
-    ConfirmConditionalOrderDraftRequest,
     GbrainSaveRequest,
-    GenerateConditionalOrderRequest,
-    GenerateConditionalOrderResponse,
     QueueStatusResponse,
     TaskActionResponse,
 )
@@ -214,15 +208,23 @@ async def list_reports(
     depth: Optional[str] = None,
     model_mode: Optional[str] = None,
     limit: int = Query(default=20, le=500),
+    user: dict = Depends(auth_service.require_login_user),
 ):
     """历史分析报告列表"""
-    return await ai_report_service.list_reports(code=code, signal=signal, depth=depth, model_mode=model_mode, limit=limit)
+    return await ai_report_service.list_reports(
+        code=code,
+        signal=signal,
+        depth=depth,
+        model_mode=model_mode,
+        limit=limit,
+        login_user_id=user.get("id") or "admin",
+    )
 
 
 @router.get("/ai/reports/{report_id}")
-async def get_report(report_id: int):
+async def get_report(report_id: int, user: dict = Depends(auth_service.require_login_user)):
     """单份报告详情"""
-    return await ai_report_service.get_report(report_id)
+    return await ai_report_service.get_report(report_id, login_user_id=user.get("id") or "admin")
 
 
 # ============================================================
@@ -261,106 +263,6 @@ async def gbrain_search(q: str = Query(..., min_length=1)):
 async def gbrain_save(req: GbrainSaveRequest):
     """存入gbrain知识库"""
     return await gbrain_api_save(req.slug, req.title, req.content)
-
-
-@router.post("/ai/generate-cond-order", response_model=GenerateConditionalOrderResponse)
-async def generate_cond_order(req_body: GenerateConditionalOrderRequest):
-    """从AI分析结果生成条件单"""
-    if not req_body.code or not req_body.price:
-        raise HTTPException(status_code=400, detail="code and price required")
-
-    req = SimpleNamespace(
-        code=req_body.code,
-        name=req_body.name,
-        condition_type=req_body.condition_type,
-        target_price=req_body.price,
-        action=req_body.action,
-        shares=req_body.shares,
-        notes=req_body.notes,
-        expires_at=req_body.expires_at,
-    )
-    result = await portfolio_service.create_conditional_order(req)
-    return {
-        'success': True,
-        'id': result.get('id'),
-        'message': f'条件单已创建: {req_body.code} {req_body.action} @{req_body.price} x{req_body.shares}',
-    }
-
-
-def _order_action_for_signal(signal: str) -> str | None:
-    sig = (signal or "HOLD").upper()
-    if sig in {"STRONG_BUY", "BUY", "OVERWEIGHT"}:
-        return "buy"
-    if sig in {"STRONG_SELL", "SELL", "UNDERWEIGHT"}:
-        return "sell"
-    return None
-
-
-@router.post("/ai/conditional-order/draft", response_model=ConditionalOrderDraftResponse)
-async def create_conditional_order_draft(req: ConditionalOrderDraftRequest):
-    """从AI报告生成条件单草稿，等待用户确认后写入"""
-    report = await ai_report_service.get_report(req.report_id)
-    raw = report.get("result") if isinstance(report.get("result"), dict) else {}
-    signal = report.get("signal") or raw.get("signal") or "HOLD"
-    action = _order_action_for_signal(signal)
-    if not action:
-        raise HTTPException(status_code=400, detail="持有/中性报告不生成条件单")
-    target_price = raw.get("target_price")
-    if not target_price:
-        raise HTTPException(status_code=400, detail="报告没有可回溯的目标价，不能生成条件单草稿")
-
-    warnings = [
-        "条件单由AI报告生成，提交前请核对价格、数量和账户风险。",
-        "AI信号不构成投资建议；成交后请自行承担风险。",
-    ]
-    if report.get("_fact_check"):
-        acc = report["_fact_check"].get("overall_accuracy") or report["_fact_check"].get("accuracy")
-        try:
-            if acc is not None and float(acc or 0) < 80:
-                warnings.append(f"事实核对通过率较低：{acc}%，建议先复核报告。")
-        except (TypeError, ValueError):
-            pass
-
-    draft = {
-        "code": report.get("code"),
-        "name": report.get("name") or raw.get("name") or "",
-        "action": action,
-        "condition_type": "price_lte" if action == "buy" else "price_gte",
-        "target_price": float(target_price),
-        "shares": req.shares,
-        "notes": f"来源AI报告 #{req.report_id}，信号 {signal}，置信度 {report.get('confidence') or raw.get('confidence') or '—'}",
-        "expires_at": req.expires_at,
-        "source_report_id": req.report_id,
-        "source_task_id": report.get("task_id"),
-        "signal": signal,
-        "confidence": report.get("confidence") or raw.get("confidence"),
-        "warnings": warnings,
-    }
-    return {"draft": draft}
-
-
-@router.post("/ai/conditional-order/confirm", response_model=GenerateConditionalOrderResponse)
-async def confirm_conditional_order_draft(req_body: ConfirmConditionalOrderDraftRequest):
-    """确认条件单草稿并写入订单表"""
-    req = SimpleNamespace(
-        code=req_body.code,
-        name=req_body.name,
-        condition_type=req_body.condition_type,
-        target_price=req_body.target_price,
-        action=req_body.action,
-        shares=req_body.shares,
-        notes=(
-            f"{req_body.notes}\n"
-            f"source_report_id={req_body.source_report_id}; source_task_id={req_body.source_task_id or ''}"
-        ),
-        expires_at=req_body.expires_at,
-    )
-    result = await portfolio_service.create_conditional_order(req)
-    return {
-        "success": True,
-        "id": result.get("id"),
-        "message": f"条件单草稿已确认: {req_body.code} {req_body.action} @{req_body.target_price} x{req_body.shares}",
-    }
 
 
 # ============================================================

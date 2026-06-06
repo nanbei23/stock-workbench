@@ -93,6 +93,32 @@ class SchedulerJobTests(unittest.IsolatedAsyncioTestCase):
         exists.assert_awaited_once_with(date_text="2026-06-04", account_id="default")
         run_review.assert_not_awaited()
 
+    async def test_self_evolution_job_runs_at_configured_time(self):
+        settings = {
+            "self_evolution_auto_enabled": "true",
+            "self_evolution_auto_time": "15:45",
+        }
+
+        def fake_get_setting(key):
+            return {"key": key, "value": settings.get(key, "")}
+
+        with (
+            patch("scheduler.jobs.settings_service.get_setting", side_effect=fake_get_setting),
+            patch("scheduler.jobs.self_evolution_service.run_cycle", return_value={"snapshot_id": "sev3-1"}) as run_cycle,
+        ):
+            await jobs.self_evolution_job(now=datetime(2026, 6, 4, 15, 45))
+
+        run_cycle.assert_called_once_with()
+
+    async def test_self_evolution_job_skips_when_disabled(self):
+        with (
+            patch("scheduler.jobs.settings_service.get_setting", return_value={"key": "self_evolution_auto_enabled", "value": "false"}),
+            patch("scheduler.jobs.self_evolution_service.run_cycle") as run_cycle,
+        ):
+            await jobs.self_evolution_job(now=datetime(2026, 6, 4, 15, 45))
+
+        run_cycle.assert_not_called()
+
     def test_setup_scheduler_registers_daily_pnl_snapshot_job(self):
         with patch.object(jobs.scheduler, "start"):
             scheduler = jobs.setup_scheduler()
@@ -104,6 +130,12 @@ class SchedulerJobTests(unittest.IsolatedAsyncioTestCase):
             scheduler = jobs.setup_scheduler()
 
         self.assertIsNotNone(scheduler.get_job("daily_decision_report_guard"))
+
+    def test_setup_scheduler_registers_self_evolution_guard_job(self):
+        with patch.object(jobs.scheduler, "start"):
+            scheduler = jobs.setup_scheduler()
+
+        self.assertIsNotNone(scheduler.get_job("self_evolution_guard"))
 
     async def test_signal_tracking_job_uses_open_tracking_codes(self):
         async def fake_quotes(codes):

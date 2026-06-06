@@ -7,13 +7,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from scheduler.conditional_order_checker import check_conditional_orders
 from scheduler.anomaly_checker import check_anomalies
 from scheduler.report_runner import run_scheduled_report
 from scheduler.signal_tracker import get_open_tracking_codes, update_prices
 from services import ai_report_service
 from services import holding_review_service
 from services import portfolio_service
+from services import self_evolution_service
 from services import settings_service
 
 logger = logging.getLogger(__name__)
@@ -42,13 +42,6 @@ def _is_trading_hours():
     return False
 
 
-async def conditional_order_job():
-    """条件单检查任务（带交易时间过滤）"""
-    if not _is_trading_hours():
-        return
-    await check_conditional_orders()
-
-
 async def anomaly_job():
     """异动检测任务（带交易时间过滤 + 开关检查）"""
     if not _is_trading_hours():
@@ -56,7 +49,8 @@ async def anomaly_job():
     # 检查异动监控开关
     try:
         enabled = settings_service.get_setting("anomaly_monitor_enabled")["value"]
-        if enabled != "true":
+        realtime_enabled = settings_service.get_setting("schedule_anomaly_realtime")["value"]
+        if enabled != "true" or realtime_enabled != "true":
             return
     except Exception:
         pass
@@ -147,6 +141,23 @@ async def daily_decision_report_job(now: datetime | None = None):
         logger.error("每日 AI 决策报告调度失败: %s", e)
 
 
+async def self_evolution_job(now: datetime | None = None):
+    """Run the self-evolution feedback loop once per configured trading day."""
+    now = now or datetime.now(CN_TZ)
+    if now.weekday() >= 5:
+        return
+    if not _setting_enabled("self_evolution_auto_enabled", True):
+        return
+    target_time = _setting_value("self_evolution_auto_time", "15:45").strip() or "15:45"
+    if now.strftime("%H:%M") != target_time:
+        return
+    try:
+        snapshot = self_evolution_service.run_cycle()
+        logger.info("AI 自我进化调度完成: %s score=%s", snapshot.get("snapshot_id"), snapshot.get("system_score"))
+    except Exception as e:
+        logger.error("AI 自我进化调度失败: %s", e)
+
+
 async def report_job(report_type: str):
     """定时报告任务"""
     logger.info("⏰ 触发定时报告: %s", report_type)
@@ -155,15 +166,6 @@ async def report_job(report_type: str):
 
 def setup_scheduler():
     """注册所有定时任务并启动调度器"""
-    # ── 条件单检查：每30秒（交易时段内） ──
-    scheduler.add_job(
-        conditional_order_job,
-        trigger=IntervalTrigger(seconds=30),
-        id="conditional_order_checker",
-        name="条件单检查",
-        replace_existing=True,
-    )
-
     # ── 异动检测：每60秒（交易时段内） ──
     scheduler.add_job(
         anomaly_job,
@@ -239,6 +241,15 @@ def setup_scheduler():
         trigger=IntervalTrigger(minutes=1),
         id="daily_decision_report_guard",
         name="每日 AI 决策报告调度检查",
+        replace_existing=True,
+    )
+
+    # ── AI 自我进化：每分钟检查一次设置，到点后生成最新进化画像 ──
+    scheduler.add_job(
+        self_evolution_job,
+        trigger=IntervalTrigger(minutes=1),
+        id="self_evolution_guard",
+        name="AI 自我进化调度检查",
         replace_existing=True,
     )
 

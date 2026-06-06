@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% set active = "settings" %}
+{% block title %}登录账户 - 炒股小牛马{% endblock %}
+{% block content %}
+<div class="detail-area" style="max-width:520px;margin:48px auto;">
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">登录账户</div>
+        <div class="cash-source-line">登录账户决定数据归属；证券账户决定资金、持仓和交易动作。</div>
+      </div>
+    </div>
+    <form id="loginForm" onsubmit="submitLogin(event)" class="form-grid" style="margin-top:12px;">
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" id="loginUsername" value="admin" autocomplete="username" required>
+      </div>
+      <div class="form-group">
+        <label>密码</label>
+        <input type="password" id="loginPassword" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" type="submit">登录</button>
+    </form>
+  </div>
+</div>
+<script>
+async function submitLogin(event) {
+  event.preventDefault();
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const resp = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username, password})
+  });
+  if (!resp.ok) {
+    alert('登录失败');
+    return;
+  }
+  const data = await resp.json();
+  location.href = data.user?.must_change_credentials ? '/account' : '/portfolio';
+}
+</script>
+{% endblock %}

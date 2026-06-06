@@ -4,6 +4,31 @@
 
 No unreleased changes.
 
+## 3.0.0 - 2026-06-06
+
+### Added
+
+- Added the self-evolution memory layer with trade memories, recommendation attributions, semantic-search storage, rule extraction, and a dedicated `/self-evolution` page.
+- Added login-user and securities-account separation so app identity and brokerage account scope are explicit across watchlist, reports, portfolio, and daily decisions.
+- Added `scripts/migrate_to_3_0.py`, a backup-first database migration and verification entry point for upgrading existing deployment SQLite databases to the 3.0 schema.
+
+### Changed
+
+- Rebuilt the settings page around top-level model provider, worker, task, tool-permission, backup, notification, and migration sections.
+- Reframed `/ai` as "智能盯盘" for single-stock monitoring and account-aware analysis, while moving batch report creation, seven-layer prefetch, report filtering, task recovery, and portfolio research plans into `/reports` as "AI投研中心".
+- Clarified the decision boundary between stock research signals and account action signals across reports, holding reviews, position plans, and AI performance.
+- Updated release metadata, package metadata, README, and deployment migration flow to `3.0.0`.
+
+### Fixed
+
+- Fixed global aiohttp session reuse across closed asyncio event loops, removing intermittent `Event loop is closed` quote warnings and unclosed session leakage during tests.
+- Removed active conditional-order API/client/schema remnants after the feature was downlined from the 3.0 UI surface, while preserving the legacy database table for non-destructive upgrades.
+
+### Deployment
+
+- Run `.venv312/bin/python scripts/migrate_to_3_0.py` before or through `scripts/deploy_macos_x86.sh`; the script creates a pre-upgrade database backup and verifies 3.0 tables and columns.
+- Restart the web process and worker services after pulling the release so scheduler, worker-pool, identity, and self-evolution changes take effect.
+
 ## 2.9.15 - 2026-06-05
 
 ### Added

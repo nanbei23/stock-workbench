@@ -198,14 +198,14 @@ build_and_check() {
   run node --check static/js/app.js
   run node --check static/js/hermes.js
   run node --check static/js/stock.js
-  run "$VENV_DIR/bin/python" -m py_compile scripts/init_from_files.py scripts/batch_research.py
+  run "$VENV_DIR/bin/python" -m py_compile scripts/init_from_files.py scripts/batch_research.py scripts/migrate_to_3_0.py
   run node -e "const fs=require('fs'); const html=fs.readFileSync('installer/macos_x86/index.html','utf8'); const scripts=[...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)].map(m=>m[1]).join('\\n'); new Function(scripts);"
   run npm run typecheck
   run npm run build
 }
 
 init_database() {
-  run "$VENV_DIR/bin/python" "$ROOT_DIR/scripts/migrate_2_8_1_to_2_9.py" --db-path "$DB_PATH_VALUE"
+  run "$VENV_DIR/bin/python" "$ROOT_DIR/scripts/migrate_to_3_0.py" --db-path "$DB_PATH_VALUE"
 }
 
 install_batch_worker() {
@@ -322,7 +322,7 @@ main() {
   install_node_deps
   build_and_check
   init_database
-  chmod +x "$ROOT_DIR/scripts/run_macos_x86.sh" "$ROOT_DIR/scripts/init_from_files.py" "$ROOT_DIR/scripts/batch_research.py" "$ROOT_DIR/scripts/migrate_2_8_1_to_2_9.py"
+  chmod +x "$ROOT_DIR/scripts/run_macos_x86.sh" "$ROOT_DIR/scripts/init_from_files.py" "$ROOT_DIR/scripts/batch_research.py" "$ROOT_DIR/scripts/migrate_to_3_0.py" "$ROOT_DIR/scripts/migrate_2_8_1_to_2_9.py"
   chmod +x "$ROOT_DIR/scripts/worker_install_launchd.sh" "$ROOT_DIR/scripts/worker_start.sh" "$ROOT_DIR/scripts/worker_stop.sh" "$ROOT_DIR/scripts/worker_status.sh" "$ROOT_DIR/scripts/worker_logs.sh"
 
   if [[ "$INSTALL_SERVICE" -eq 1 ]]; then

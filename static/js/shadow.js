@@ -63,6 +63,56 @@ function actionText(action) {
   return action === 'sell' ? '卖出' : '买入';
 }
 
+function dailyDecisionActionText(action) {
+  const map = {
+    buy: '买入',
+    hold: '持有',
+    reduce: '减仓',
+    sell: '卖出',
+    add: '加仓',
+    overweight: '增持',
+    underweight: '减持',
+    take_profit: '止盈',
+    forbid_buy: '禁止买入',
+    watch: '观察',
+    avoid: '回避',
+  };
+  return map[String(action || '').toLowerCase()] || action || '--';
+}
+
+function dailyDecisionStatusText(status) {
+  const map = {
+    executed: '已执行',
+    not_executed: '未执行',
+    ignored: '忽略',
+    watching: '观察中',
+  };
+  return map[String(status || '').toLowerCase()] || status || '未执行';
+}
+
+function executionClassText(value) {
+  const map = {
+    full_executed: '完全执行',
+    partial_executed: '部分执行',
+    over_executed: '超额执行',
+    not_executed: '未执行',
+    reverse_executed: '反向执行',
+    mixed_execution: '混合执行',
+    complied_no_trade: '遵守不交易',
+    discretionary_trade: '自主交易',
+    violated: '违反建议',
+  };
+  return map[String(value || '').toLowerCase()] || value || '--';
+}
+
+function executionSourceText(value) {
+  return String(value || '') === 'position_plan' ? '组合研究' : '每日决策';
+}
+
+function itemTypeText(type) {
+  return String(type || '').toLowerCase() === 'candidate' ? '候选' : '持仓';
+}
+
 function planStageText(stage) {
   const map = {
     screening: '初筛',
@@ -425,7 +475,7 @@ function renderPositionPlanPerformance(data = {}) {
   const body = document.getElementById('positionPlanPerformanceBody');
   if (!body) return;
   if (!plans.length) {
-    body.innerHTML = '<tr><td colspan="15"><div class="shadow-empty">暂无已整份采纳的最终组合研究方案。先在 AI报告库生成方案，并整份采纳为 AI 绩效基准。</div></td></tr>';
+    body.innerHTML = '<tr><td colspan="15"><div class="shadow-empty">暂无已采纳的组合研究建议。先在 AI投研中心整份采纳方案，或逐项采纳建议。</div></td></tr>';
     return;
   }
   body.innerHTML = plans.map(plan => `
@@ -447,6 +497,110 @@ function renderPositionPlanPerformance(data = {}) {
       <td>${allocationWarningText(plan.allocation)}</td>
     </tr>
   `).join('');
+}
+
+function renderDailyDecisionPerformance(data = {}) {
+  const summary = data.summary || {};
+  const tracked = data.tracked || {};
+  const summaryEl = document.getElementById('dailyDecisionPerformanceSummary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div><span>报告数</span><strong>${Number(summary.reviews || 0).toLocaleString()}</strong></div>
+      <div><span>建议条目</span><strong>${Number(summary.items || 0).toLocaleString()}</strong></div>
+      <div><span>持仓建议</span><strong>${Number(summary.holding_items || 0).toLocaleString()}</strong></div>
+      <div><span>候选建议</span><strong>${Number(summary.candidate_items || 0).toLocaleString()}</strong></div>
+      <div><span>已跟踪</span><strong>${Number(tracked.tracked || 0).toLocaleString()}</strong></div>
+      <div><span>平均收益</span><strong class="${shadowClass(tracked.avg_pnl_pct)}">${tracked.avg_pnl_pct == null ? '--' : shadowPct(tracked.avg_pnl_pct)}</strong></div>
+    `;
+  }
+
+  const actionRows = Object.entries(data.by_action || {}).map(([action, item]) => ({
+    label: dailyDecisionActionText(action),
+    count: Number(item.count || 0),
+    wins: Number(item.executed || 0),
+    hit_rate: item.count ? Number(item.executed || 0) / Number(item.count || 1) * 100 : 0,
+    avg_return_pct: item.avg_pnl_pct,
+    calibration_gap: null,
+  }));
+  const statusRows = Object.entries(data.by_status || {}).map(([status, item]) => ({
+    label: `状态：${dailyDecisionStatusText(status)}`,
+    count: Number(item.count || 0),
+    wins: Number(item.count || 0),
+    hit_rate: 100,
+    avg_return_pct: null,
+    calibration_gap: null,
+  }));
+  const actionEl = document.getElementById('dailyDecisionActionRows');
+  if (actionEl) {
+    actionEl.innerHTML = renderStatRows([...actionRows, ...statusRows], '暂无每日决策动作样本');
+  }
+
+  const body = document.getElementById('dailyDecisionPerformanceBody');
+  if (!body) return;
+  const items = data.items || [];
+  if (!items.length) {
+    body.innerHTML = '<tr><td colspan="7"><div class="shadow-empty">暂无每日决策建议样本。</div></td></tr>';
+    return;
+  }
+  body.innerHTML = items.slice(0, 120).map(item => `
+    <tr>
+      <td>${escapeHtml(item.date || '')}<br><span class="muted">${escapeHtml(item.review_id || '')}</span></td>
+      <td><b>${escapeHtml(item.name || item.code || '--')}</b><br><span class="muted">${escapeHtml(item.code || '')}</span></td>
+      <td>${escapeHtml(itemTypeText(item.item_type))}</td>
+      <td>${escapeHtml(dailyDecisionActionText(item.decision_action))}</td>
+      <td>${escapeHtml(dailyDecisionStatusText(item.decision_status))}</td>
+      <td class="${shadowClass(item.pnl_pct)}">${item.pnl_pct == null ? '<span class="muted">--</span>' : shadowPct(item.pnl_pct)}</td>
+      <td>${escapeHtml(item.tracking_status || '--')}</td>
+    </tr>
+  `).join('');
+}
+
+function renderExecutionReview(data = {}) {
+  const summary = data.summary || {};
+  const items = Number(summary.items || 0);
+  const followed = Number(summary.followed_items || 0);
+  const matched = Number(summary.matched_items || 0);
+  const summaryEl = document.getElementById('executionReviewSummary');
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div><span>建议条目</span><strong>${items.toLocaleString()}</strong></div>
+      <div><span>匹配交易</span><strong>${matched.toLocaleString()}</strong></div>
+      <div><span>跟随执行</span><strong>${followed.toLocaleString()}</strong></div>
+      <div><span>未执行/偏离</span><strong>${Math.max(0, items - followed).toLocaleString()}</strong></div>
+    `;
+  }
+  const breakdown = Object.entries(summary.by_classification || {}).map(([key, count]) => ({
+    label: executionClassText(key),
+    count: Number(count || 0),
+    wins: Number(count || 0),
+    hit_rate: items ? Number(count || 0) / items * 100 : 0,
+    avg_return_pct: 0,
+    calibration_gap: null,
+  }));
+  const breakdownEl = document.getElementById('executionReviewBreakdown');
+  if (breakdownEl) {
+    breakdownEl.innerHTML = renderStatRows(breakdown, '暂无执行闭环样本');
+  }
+  const body = document.getElementById('executionReviewBody');
+  if (!body) return;
+  const rows = data.rows || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6"><div class="shadow-empty">暂无可匹配的建议和交易。</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.slice(0, 160).map(row => {
+    const execution = row.execution || {};
+    return `
+      <tr>
+        <td>${escapeHtml(executionSourceText(row.source))}<br><span class="muted">${escapeHtml(row.review_id || row.plan_id || '')}</span></td>
+        <td><b>${escapeHtml(row.name || row.code || '--')}</b><br><span class="muted">${escapeHtml(row.code || '')}</span></td>
+        <td>${escapeHtml(dailyDecisionActionText(row.decision_action || row.action))}</td>
+        <td>${escapeHtml(execution.label || executionClassText(execution.classification))}<br><span class="muted">${shadowMoney(execution.matched_amount || 0)}</span></td>
+        <td class="${shadowClass(execution.deviation_amount)}">${shadowMoney(execution.deviation_amount || 0)}</td>
+        <td>${(execution.matched_trade_ids || []).length ? (execution.matched_trade_ids || []).map(id => `#${Number(id)}`).join(' ') : '<span class="muted">--</span>'}</td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function setSignalTrackingFilter(filter) {
@@ -521,7 +675,7 @@ function renderShadowOrders(data) {
     return `
       <tr>
         <td>${escapeHtml((order.created_at || '').slice(0, 16))}</td>
-        <td><a href="/ai" title="到AI分析台查看报告">#${Number(order.report_id || 0)}</a></td>
+        <td><a href="/ai" title="到智能盯盘查看报告">#${Number(order.report_id || 0)}</a></td>
         <td><b>${escapeHtml(order.name || order.code)}</b><br><span class="muted">${escapeHtml(order.code)}</span></td>
         <td><span class="shadow-signal ${action}">${actionText(order.action)}</span></td>
         <td>${escapeHtml(signalText(order.signal))}</td>
@@ -553,6 +707,8 @@ async function loadShadowPage() {
     renderShadowCalibration(calibration);
     renderSignalPerformance(signalStats, signalTracking);
     renderModelCalibration(signalStats, calibration);
+    renderDailyDecisionPerformance(overview.daily_decisions || {});
+    renderExecutionReview(overview.execution_review || {});
     renderPositionPlanPerformance(overview.position_plans || {});
     renderDeviation(shadow.deviation || {});
     renderShadowPositions(positions);

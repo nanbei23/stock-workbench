@@ -179,6 +179,86 @@ class BatchResearchScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("account_signal", debate_prompt)
         self.assertIn("position_action", state_prompt)
 
+    def test_snapshot_llm_config_resolves_model_library_reference(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO model_providers
+                    (id, name, base_url, api_key, models_json, quick_model, deep_model, default_model, context_length, usage_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "provider-ai",
+                    "Provider AI",
+                    "https://provider.example.com/v1",
+                    "sk-provider",
+                    json.dumps(["provider-fast-ref", "provider-deep-ref"], ensure_ascii=False),
+                    "provider-fast-ref",
+                    "provider-deep-ref",
+                    "provider-deep-ref",
+                    "128000",
+                    json.dumps(["ai"], ensure_ascii=False),
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("ai_primary_provider_id", "provider-ai"),
+                    ("ai_quick_model", "stale-fast-ref"),
+                    ("ai_deep_model", "stale-deep-ref"),
+                    ("custom_endpoint", "https://legacy.example.com/v1"),
+                    ("api_key", "sk-legacy"),
+                    ("quick_think_model", "legacy-fast"),
+                    ("deep_think_model", "legacy-deep"),
+                ],
+            )
+            conn.commit()
+
+        deep = batch_research._snapshot_llm_config(self.db_path, model_tier="deep")
+        quick = batch_research._snapshot_llm_config(self.db_path, model_tier="quick")
+
+        self.assertEqual(deep["base_url"], "https://provider.example.com/v1")
+        self.assertEqual(deep["api_key"], "sk-provider")
+        self.assertEqual(deep["model"], "provider-deep-ref")
+        self.assertEqual(quick["model"], "provider-fast-ref")
+
+    def test_verification_llm_config_resolves_model_library_reference(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO model_providers
+                    (id, name, base_url, api_key, models_json, quick_model, deep_model, default_model, usage_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "provider-verify",
+                    "Provider Verify",
+                    "https://verify.example.com/v1",
+                    "sk-verify",
+                    json.dumps(["provider-verify-model"], ensure_ascii=False),
+                    "",
+                    "provider-verify-model",
+                    "provider-verify-model",
+                    json.dumps(["verification"], ensure_ascii=False),
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("verification_provider_id", "provider-verify"),
+                    ("verification_model", "stale-verify-model"),
+                    ("verification_endpoint", "https://legacy-verify.example.com/v1"),
+                    ("verification_api_key", "sk-legacy-verify"),
+                ],
+            )
+            conn.commit()
+
+        config = batch_research._verification_llm_config(self.db_path)
+
+        self.assertEqual(config["base_url"], "https://verify.example.com/v1")
+        self.assertEqual(config["api_key"], "sk-verify")
+        self.assertEqual(config["model"], "provider-verify-model")
+
     def test_save_snapshot_report_persists_account_signal_and_holding_context(self):
         snapshot_row = {
             "id": 8,

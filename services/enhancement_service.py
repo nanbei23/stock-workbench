@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import sqlite3
 import uuid
 from datetime import datetime, time
 
@@ -73,15 +74,180 @@ def _settings():
     return settings_repository.fetch_settings()
 
 
+def _db_path():
+    return settings_repository.DB_PATH
+
+
+def _ensure_model_provider_table():
+    with sqlite3.connect(str(_db_path())) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_providers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key TEXT DEFAULT '',
+                models_json TEXT DEFAULT '[]',
+                quick_model TEXT DEFAULT '',
+                deep_model TEXT DEFAULT '',
+                default_model TEXT DEFAULT '',
+                context_length TEXT DEFAULT '',
+                embedding_model TEXT DEFAULT '',
+                embedding_dimensions INTEGER DEFAULT 1536,
+                usage_json TEXT DEFAULT '[]',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_providers_updated ON model_providers(updated_at DESC)"
+        )
+        conn.commit()
+
+
 def _provider_name(base_url: str) -> str:
     host = re.sub(r"^https?://", "", base_url or "").split("/")[0].split(":")[0]
     host = re.sub(r"^api\.", "", host)
     return f"{host.split('.')[0]} analysis" if host else "custom analysis"
 
 
+def _normalize_usage(value) -> list[str]:
+    allowed = {"ai", "verification", "embedding"}
+    items = value if isinstance(value, list) else []
+    return [item for item in [str(raw).strip() for raw in items] if item in allowed]
+
+
+def _normalize_provider_payload(payload: dict, *, existing: dict | None = None, provider_id: str | None = None) -> dict:
+    provider_id = provider_id or payload.get("id") or (existing or {}).get("id") or str(uuid.uuid4())[:8]
+    base_url = (payload.get("base_url") or (existing or {}).get("base_url") or "").strip()
+    if not base_url:
+        raise HTTPException(400, "Base URL required")
+    raw_key = payload.get("api_key")
+    if raw_key in (None, "", "********") and existing:
+        api_key = existing.get("api_key", "")
+    else:
+        api_key = raw_key or ""
+    models = payload.get("models")
+    if models is None and existing:
+        models = existing.get("models", [])
+    models = [str(item).strip() for item in (models or []) if str(item).strip()]
+    embedding_dimensions = _safe_int(
+        payload.get("embedding_dimensions", (existing or {}).get("embedding_dimensions", 1536)),
+        1536,
+    )
+    return {
+        "id": provider_id,
+        "name": payload.get("name") or (existing or {}).get("name") or _provider_name(base_url),
+        "base_url": base_url,
+        "api_key": api_key,
+        "models": models,
+        "quick_model": payload.get("quick_model", (existing or {}).get("quick_model", "")) or payload.get("default_model", "") or "",
+        "deep_model": payload.get("deep_model", (existing or {}).get("deep_model", "")) or payload.get("default_model", "") or "",
+        "default_model": payload.get("default_model", (existing or {}).get("default_model", "")) or "",
+        "context_length": str(payload.get("context_length", (existing or {}).get("context_length", "")) or ""),
+        "embedding_model": payload.get("embedding_model", (existing or {}).get("embedding_model", "")) or "",
+        "embedding_dimensions": embedding_dimensions or 1536,
+        "usage": _normalize_usage(payload.get("usage", (existing or {}).get("usage", []))),
+    }
+
+
+def _provider_from_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "base_url": row["base_url"],
+        "api_key": row["api_key"] or "",
+        "models": _loads(row["models_json"], []),
+        "quick_model": row["quick_model"] or "",
+        "deep_model": row["deep_model"] or "",
+        "default_model": row["default_model"] or "",
+        "context_length": row["context_length"] or "",
+        "embedding_model": row["embedding_model"] or "",
+        "embedding_dimensions": _safe_int(row["embedding_dimensions"], 1536),
+        "usage": _loads(row["usage_json"], []),
+        "created_at": row["created_at"] or "",
+        "updated_at": row["updated_at"] or "",
+    }
+
+
+def _upsert_model_provider(provider: dict):
+    _ensure_model_provider_table()
+    now = datetime.now().isoformat(timespec="seconds")
+    with sqlite3.connect(str(_db_path())) as conn:
+        conn.execute(
+            """
+            INSERT INTO model_providers (
+                id, name, base_url, api_key, models_json, quick_model, deep_model,
+                default_model, context_length, embedding_model, embedding_dimensions,
+                usage_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                base_url=excluded.base_url,
+                api_key=excluded.api_key,
+                models_json=excluded.models_json,
+                quick_model=excluded.quick_model,
+                deep_model=excluded.deep_model,
+                default_model=excluded.default_model,
+                context_length=excluded.context_length,
+                embedding_model=excluded.embedding_model,
+                embedding_dimensions=excluded.embedding_dimensions,
+                usage_json=excluded.usage_json,
+                updated_at=excluded.updated_at
+            """,
+            (
+                provider["id"],
+                provider["name"],
+                provider["base_url"],
+                provider.get("api_key", ""),
+                _dumps(provider.get("models") or []),
+                provider.get("quick_model", ""),
+                provider.get("deep_model", ""),
+                provider.get("default_model", ""),
+                provider.get("context_length", ""),
+                provider.get("embedding_model", ""),
+                _safe_int(provider.get("embedding_dimensions"), 1536) or 1536,
+                _dumps(provider.get("usage") or []),
+                provider.get("created_at") or now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def _load_table_model_providers() -> list[dict]:
+    _ensure_model_provider_table()
+    with sqlite3.connect(str(_db_path())) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM model_providers ORDER BY datetime(updated_at) DESC, rowid DESC"
+        ).fetchall()
+    return [_provider_from_row(row) for row in rows]
+
+
+def _migrate_legacy_model_providers_if_needed() -> list[dict]:
+    providers = _load_table_model_providers()
+    if providers:
+        return providers
+    legacy = _loads(_settings().get(MODEL_PROVIDERS_KEY), [])
+    if not legacy:
+        return providers
+    for item in legacy:
+        if isinstance(item, dict):
+            _upsert_model_provider(_normalize_provider_payload(item))
+    settings_repository.upsert_settings({MODEL_PROVIDERS_KEY: ""})
+    return _load_table_model_providers()
+
+
+def _get_model_provider(provider_id: str) -> dict | None:
+    providers = _migrate_legacy_model_providers_if_needed()
+    return next((item for item in providers if item.get("id") == provider_id), None)
+
+
 def list_model_providers():
-    settings = _settings()
-    providers = _loads(settings.get(MODEL_PROVIDERS_KEY), [])
+    providers = _migrate_legacy_model_providers_if_needed()
     return {"count": len(providers), "providers": [_public_provider(item) for item in providers]}
 
 
@@ -97,6 +263,8 @@ def _public_settings(settings: dict):
         public["api_key"] = "********" if public["api_key"] else ""
     if "verification_api_key" in public:
         public["verification_api_key"] = "********" if public["verification_api_key"] else ""
+    if "embedding_api_key" in public:
+        public["embedding_api_key"] = "********" if public["embedding_api_key"] else ""
     return public
 
 
@@ -130,50 +298,44 @@ def save_worker_pool_config(payload: dict):
 
 
 def save_model_provider(payload: dict):
-    settings = _settings()
-    providers = _loads(settings.get(MODEL_PROVIDERS_KEY), [])
-    provider_id = payload.get("id") or str(uuid.uuid4())[:8]
-    base_url = (payload.get("base_url") or "").strip()
-    if not base_url:
-        raise HTTPException(400, "Base URL required")
-    provider = {
-        "id": provider_id,
-        "name": payload.get("name") or _provider_name(base_url),
-        "base_url": base_url,
-        "api_key": payload.get("api_key") or "",
-        "models": payload.get("models") or [],
-        "quick_model": payload.get("quick_model") or payload.get("default_model") or "",
-        "deep_model": payload.get("deep_model") or payload.get("default_model") or "",
-        "default_model": payload.get("default_model") or "",
-        "context_length": payload.get("context_length") or "",
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    providers = [item for item in providers if item.get("id") != provider_id]
-    providers.insert(0, provider)
-    settings_repository.upsert_settings({MODEL_PROVIDERS_KEY: _dumps(providers)})
+    _migrate_legacy_model_providers_if_needed()
+    provider = _normalize_provider_payload(payload)
+    _upsert_model_provider(provider)
+    providers = _load_table_model_providers()
     result = {"status": "ok", "provider": _public_provider(provider), "count": len(providers)}
     apply_to = payload.get("apply_to")
-    if apply_to in {"ai", "verification"}:
-        result["applied"] = apply_model_provider(provider_id, apply_to)
+    if apply_to in {"ai", "verification", "embedding"}:
+        result["applied"] = apply_model_provider(provider["id"], apply_to)
     return result
 
 
+def update_model_provider(provider_id: str, payload: dict):
+    existing = _get_model_provider(provider_id)
+    if not existing:
+        raise HTTPException(404, "模型配置不存在")
+    provider = _normalize_provider_payload(payload, existing=existing, provider_id=provider_id)
+    provider["created_at"] = existing.get("created_at", "")
+    _upsert_model_provider(provider)
+    return {"status": "ok", "provider": _public_provider(_get_model_provider(provider_id) or provider)}
+
+
 def delete_model_provider(provider_id: str):
-    settings = _settings()
-    providers = _loads(settings.get(MODEL_PROVIDERS_KEY), [])
-    kept = [item for item in providers if item.get("id") != provider_id]
-    settings_repository.upsert_settings({MODEL_PROVIDERS_KEY: _dumps(kept)})
-    return {"status": "ok", "deleted": len(providers) - len(kept), "count": len(kept)}
+    providers = _migrate_legacy_model_providers_if_needed()
+    with sqlite3.connect(str(_db_path())) as conn:
+        cursor = conn.execute("DELETE FROM model_providers WHERE id = ?", (provider_id,))
+        conn.commit()
+    remaining = max(0, len(providers) - int(cursor.rowcount or 0))
+    return {"status": "ok", "deleted": int(cursor.rowcount or 0), "count": remaining}
 
 
 def apply_model_provider(provider_id: str, target: str = "ai"):
-    providers = _loads(_settings().get(MODEL_PROVIDERS_KEY), [])
-    provider = next((item for item in providers if item.get("id") == provider_id), None)
+    provider = _get_model_provider(provider_id)
     if not provider:
         raise HTTPException(404, "模型配置不存在")
     models = provider.get("models") or []
     if target == "verification":
         updates = {
+            "verification_provider_id": provider["id"],
             "verification_name": provider.get("name", ""),
             "verification_endpoint": provider.get("base_url", ""),
             "verification_api_key": provider.get("api_key", ""),
@@ -181,11 +343,22 @@ def apply_model_provider(provider_id: str, target: str = "ai"):
             "verification_model_options": _dumps(models),
             "verification_context_length": provider.get("context_length", ""),
         }
+    elif target == "embedding":
+        updates = {
+            "embedding_provider_id": provider["id"],
+            "embedding_endpoint": provider.get("base_url", ""),
+            "embedding_api_key": provider.get("api_key", ""),
+            "embedding_model": provider.get("embedding_model") or provider.get("default_model") or provider.get("quick_model") or "text-embedding-v4",
+            "embedding_dimensions": str(provider.get("embedding_dimensions") or 1536),
+        }
     else:
         updates = {
+            "ai_primary_provider_id": provider["id"],
             "llm_name": provider.get("name", ""),
             "custom_endpoint": provider.get("base_url", ""),
             "api_key": provider.get("api_key", ""),
+            "ai_quick_model": provider.get("quick_model") or provider.get("default_model") or "",
+            "ai_deep_model": provider.get("deep_model") or provider.get("default_model") or "",
             "quick_think_model": provider.get("quick_model") or provider.get("default_model") or "",
             "deep_think_model": provider.get("deep_model") or provider.get("default_model") or "",
             "llm_model_options": _dumps(models),
@@ -205,9 +378,7 @@ def _model_url(base_url: str) -> str:
 
 
 async def refresh_model_provider(provider_id: str):
-    settings = _settings()
-    providers = _loads(settings.get(MODEL_PROVIDERS_KEY), [])
-    provider = next((item for item in providers if item.get("id") == provider_id), None)
+    provider = _get_model_provider(provider_id)
     if not provider:
         raise HTTPException(404, "模型配置不存在")
     url = _model_url(provider.get("base_url", ""))
@@ -227,16 +398,15 @@ async def refresh_model_provider(provider_id: str):
     elif isinstance(data, list):
         models = [item if isinstance(item, str) else item.get("id", "") for item in data]
         models = [item for item in models if item]
-    provider["models"] = sorted(set(models))
-    provider["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    settings_repository.upsert_settings({MODEL_PROVIDERS_KEY: _dumps(providers)})
-    return {"status": "ok", "provider": _public_provider(provider), "models": provider["models"]}
+    updated = dict(provider)
+    updated["models"] = sorted(set(models))
+    _upsert_model_provider(updated)
+    saved = _get_model_provider(provider_id) or updated
+    return {"status": "ok", "provider": _public_provider(saved), "models": saved["models"]}
 
 
 async def test_model_provider(provider_id: str):
-    settings = _settings()
-    providers = _loads(settings.get(MODEL_PROVIDERS_KEY), [])
-    provider = next((item for item in providers if item.get("id") == provider_id), None)
+    provider = _get_model_provider(provider_id)
     if not provider:
         raise HTTPException(404, "模型配置不存在")
     model = provider.get("default_model") or provider.get("quick_model") or provider.get("deep_model")
@@ -319,47 +489,6 @@ def _num(value):
         return 0.0
 
 
-async def condition_backtest(payload: dict):
-    code = (payload.get("code") or "").strip()[:6]
-    if not code:
-        raise HTTPException(400, "code required")
-    condition_type = payload.get("condition_type") or "price_lte"
-    target = _num(payload.get("target_price"))
-    rows = await _fetchall(
-        """
-        SELECT date, close_price
-        FROM daily_pnl
-        WHERE code6 = ? AND close_price IS NOT NULL
-        ORDER BY date DESC
-        LIMIT ?
-        """,
-        (code, int(payload.get("days") or 90)),
-    )
-    rows = list(reversed(rows))
-    triggers = []
-    for row in rows:
-        price = _num(row.get("close_price"))
-        hit = (
-            condition_type == "price_lte" and price <= target
-            or condition_type == "price_gte" and price >= target
-        )
-        if hit:
-            triggers.append({"date": row.get("date"), "price": price})
-    first = triggers[0] if triggers else None
-    last_price = _num(rows[-1].get("close_price")) if rows else 0
-    return {
-        "code": code,
-        "condition_type": condition_type,
-        "target_price": target,
-        "sample_days": len(rows),
-        "trigger_count": len(triggers),
-        "first_trigger": first,
-        "last_price": last_price,
-        "post_trigger_return_pct": round((last_price - first["price"]) / first["price"] * 100, 3) if first and first["price"] else None,
-        "triggers": triggers[:20],
-    }
-
-
 async def risk_exposure():
     rows = await _fetchall(
         """
@@ -426,8 +555,8 @@ async def risk_center():
     )
     pending_rows = await _fetchall(
         """
-        SELECT code, name, action, shares, target_price, expires_at
-        FROM conditional_orders
+        SELECT code, name, direction, plan_shares, target_price, expires_at
+        FROM trading_plans
         WHERE status = 'pending'
         ORDER BY created_at DESC
         LIMIT 20
@@ -509,7 +638,7 @@ async def risk_center():
 
     oversize_orders = []
     for row in pending_rows:
-        amount = _safe_float(row.get("shares")) * _safe_float(row.get("target_price"))
+        amount = _safe_float(row.get("plan_shares")) * _safe_float(row.get("target_price"))
         if amount > thresholds["max_pending_order_amount"]:
             oversize_orders.append({**row, "amount": round(amount, 3)})
     checks.append({
@@ -613,8 +742,6 @@ async def notification_digest():
         """
         SELECT type, COUNT(*) AS count
         FROM (
-          SELECT 'order_trigger' AS type FROM conditional_orders WHERE status = 'triggered' AND triggered_at > datetime('now', '-1 day')
-          UNION ALL
           SELECT 'analysis_done' AS type FROM analysis_reports WHERE created_at > datetime('now', '-1 day')
           UNION ALL
           SELECT 'strategy_change' AS type FROM watchlist WHERE strategy_state_updated_at IS NOT NULL AND strategy_state_updated_at > datetime('now', '-1 day')
@@ -629,7 +756,6 @@ async def notification_digest():
         "browser": settings.get("browser_notify_enabled") == "true",
         "digest": settings.get("notification_digest_enabled", "true") == "true",
         "strategy_change": settings.get("notify_strategy_change", "true") == "true",
-        "order_trigger": settings.get("notify_order_trigger", "true") == "true",
         "anomaly": settings.get("notify_anomaly", "true") == "true",
         "analysis_done": settings.get("notify_analysis_done", "true") == "true",
     }
@@ -1117,7 +1243,7 @@ async def hotspot_detail(topic_name: str):
         "playbook": [
             "先确认主题是否同时有新闻催化、异动和持仓/自选关联。",
             "只把高热度作为候选池，不直接替代买卖纪律。",
-            "若主题升温但风控分下降，优先降低单票仓位和条件单金额。",
+            "若主题升温但风控分下降，优先降低单票仓位和待执行计划金额。",
         ],
     }
 
@@ -1126,10 +1252,10 @@ def research_pulse():
     now = datetime.now()
     current = now.time()
     phases = [
-        {"key": "pre_market", "label": "盘前准备", "time": "09:00-09:25", "status": _phase_status(current, time(9, 0), time(9, 25)), "focus": "热点预热、隔夜消息、条件单复核"},
+        {"key": "pre_market", "label": "盘前准备", "time": "09:00-09:25", "status": _phase_status(current, time(9, 0), time(9, 25)), "focus": "热点预热、隔夜消息、交易计划复核"},
         {"key": "morning", "label": "早盘确认", "time": "09:30-11:30", "status": _phase_status(current, time(9, 30), time(11, 30)), "focus": "量价确认、异动股票、主线强弱"},
         {"key": "midday", "label": "午间复盘", "time": "11:30-13:00", "status": _phase_status(current, time(11, 30), time(13, 0)), "focus": "更新 AI 报告、复核风险、梳理下午计划"},
-        {"key": "afternoon", "label": "尾盘执行", "time": "13:00-15:00", "status": _phase_status(current, time(13, 0), time(15, 0)), "focus": "条件单确认、仓位微调、收盘前纪律"},
+        {"key": "afternoon", "label": "尾盘执行", "time": "13:00-15:00", "status": _phase_status(current, time(13, 0), time(15, 0)), "focus": "交易计划确认、仓位微调、收盘前纪律"},
         {"key": "post_market", "label": "收盘归档", "time": "15:00-17:30", "status": _phase_status(current, time(15, 0), time(17, 30)), "focus": "记录交易、生成复盘、更新策略生命周期"},
     ]
     active = next((item for item in phases if item["status"] == "active"), phases[-1] if current > time(17, 30) else phases[0])
@@ -1137,7 +1263,7 @@ def research_pulse():
 
 
 async def strategy_lifecycle():
-    portfolio_rows, watch_rows, plan_rows, order_rows, signal_rows = await asyncio.gather(
+    portfolio_rows, watch_rows, plan_rows, signal_rows = await asyncio.gather(
         _fetchall(
             """
             SELECT code, name, total_shares, market_value, unrealized_pnl_pct, updated_at
@@ -1161,14 +1287,6 @@ async def strategy_lifecycle():
             """
             SELECT code, name, direction, plan_type, target_price, plan_shares, status, reason, created_at, expires_at
             FROM trading_plans
-            ORDER BY created_at DESC
-            LIMIT 80
-            """
-        ),
-        _fetchall(
-            """
-            SELECT code, name, action, condition_type, target_price, shares, status, created_at, expires_at
-            FROM conditional_orders
             ORDER BY created_at DESC
             LIMIT 80
             """
@@ -1209,20 +1327,6 @@ async def strategy_lifecycle():
         if row.get("status") in ("cancelled", "expired"):
             columns["invalidated"]["items"].append(item)
         elif row.get("status") in ("filled", "triggered"):
-            columns["holding"]["items"].append(item)
-        else:
-            columns["planned"]["items"].append(item)
-    for row in order_rows:
-        item = {
-            "code": row.get("code"),
-            "name": row.get("name") or row.get("code"),
-            "source": "conditional_order",
-            "detail": f"{row.get('action')} 条件 {row.get('condition_type')} {row.get('target_price')}",
-            "updated_at": row.get("created_at"),
-        }
-        if row.get("status") in ("cancelled", "expired"):
-            columns["invalidated"]["items"].append(item)
-        elif row.get("status") == "triggered":
             columns["holding"]["items"].append(item)
         else:
             columns["planned"]["items"].append(item)
@@ -1318,23 +1422,10 @@ async def events():
         LIMIT 20
         """
     )
-    orders = await _fetchall(
-        """
-        SELECT id, code, name, expires_at, status
-        FROM conditional_orders
-        WHERE status = 'pending' AND expires_at IS NOT NULL
-        ORDER BY expires_at ASC
-        LIMIT 10
-        """
-    )
     items = [
         {"type": "news_event", "code": row.get("code6"), "title": row.get("title"), "time": row.get("published_at") or row.get("cached_at"), "source": row.get("source")}
         for row in news
     ]
-    items.extend(
-        {"type": "order_expiry", "code": row.get("code"), "title": f"条件单即将到期：{row.get('name') or row.get('code')}", "time": row.get("expires_at"), "source": "conditional_order"}
-        for row in orders
-    )
     return {"count": len(items), "events": sorted(items, key=lambda item: item.get("time") or "", reverse=True)}
 
 
@@ -1357,9 +1448,6 @@ async def data_health():
         """
     )
     checks.append({"key": "duplicate_trades", "label": "重复交易", "status": "warning" if duplicate_trades else "ok", "message": f"{len(duplicate_trades)} 组疑似重复交易"})
-    expired_orders = await _fetchall("SELECT COUNT(*) AS c FROM conditional_orders WHERE status='pending' AND expires_at IS NOT NULL AND expires_at < datetime('now')")
-    expired_count = int(expired_orders[0]["c"] if expired_orders else 0)
-    checks.append({"key": "expired_orders", "label": "过期条件单", "status": "warning" if expired_count else "ok", "message": f"{expired_count} 个过期未取消条件单"})
     no_fact = await _fetchall("SELECT COUNT(*) AS c FROM analysis_reports WHERE fact_check IS NULL OR fact_check = ''")
     no_fact_count = int(no_fact[0]["c"] if no_fact else 0)
     checks.append({"key": "report_fact_check", "label": "报告事实核对", "status": "warning" if no_fact_count else "ok", "message": f"{no_fact_count} 份报告尚未事实核对"})
@@ -1378,6 +1466,14 @@ async def data_health():
         "label": "账户引用",
         "status": "warning" if invalid_accounts else "ok",
         "message": f"{len(invalid_accounts)} 处账户引用不存在",
+        "details": invalid_accounts[:8],
+        "fixable": bool(invalid_accounts),
+    })
+    checks.append({
+        "key": "identity_integrity",
+        "label": "登录账户完整性",
+        "status": "warning" if invalid_accounts else "ok",
+        "message": f"{len(invalid_accounts)} 处证券账户引用缺失",
         "details": invalid_accounts[:8],
         "fixable": bool(invalid_accounts),
     })
@@ -1404,7 +1500,6 @@ async def data_audit():
           (SELECT COUNT(*) FROM watchlist) AS watchlist_count,
           (SELECT COUNT(*) FROM portfolio WHERE total_shares > 0) AS position_count,
           (SELECT COUNT(*) FROM trades) AS trade_count,
-          (SELECT COUNT(*) FROM conditional_orders WHERE status = 'pending') AS pending_order_count,
           (SELECT COUNT(*) FROM cash_ledger) AS cash_ledger_count,
           (SELECT COUNT(*) FROM analysis_reports) AS report_count,
           (SELECT COUNT(*) FROM hermes_tool_runs WHERE status = 'ok') AS hermes_write_count
@@ -1459,12 +1554,8 @@ async def data_audit():
 async def fix_data_health():
     db = await get_db()
     try:
-        cursor = await db.execute(
-            "UPDATE conditional_orders SET status='expired' WHERE status='pending' AND expires_at IS NOT NULL AND expires_at < datetime('now')"
-        )
-        expired_orders = cursor.rowcount
         account_fixes = 0
-        for table in ("portfolio", "trades", "conditional_orders"):
+        for table in ("portfolio", "trades"):
             cursor = await db.execute(
                 f"""
                 UPDATE {table}
@@ -1483,7 +1574,6 @@ async def fix_data_health():
         await db.commit()
         return {
             "status": "ok",
-            "expired_orders": expired_orders,
             "account_refs_fixed": account_fixes,
             "portfolio_recalculated": recalculated,
         }
@@ -1545,14 +1635,14 @@ async def _portfolio_mismatches():
 
 async def _invalid_account_refs():
     invalid = []
-    for table in ("portfolio", "trades", "conditional_orders"):
+    for table in ("portfolio", "trades", "cash_ledger", "daily_pnl"):
         rows = await _fetchall(
             f"""
             SELECT '{table}' AS table_name, account_id, COUNT(*) AS count
             FROM {table}
             WHERE account_id IS NULL
                OR account_id = ''
-               OR account_id NOT IN (SELECT id FROM accounts)
+               OR account_id NOT IN (SELECT id FROM securities_accounts)
             GROUP BY account_id
             """
         )

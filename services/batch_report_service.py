@@ -32,7 +32,18 @@ FAILED_STATUSES = {"failed", "timeout", "cancelled"}
 PAUSE_STATUSES = {"pausing", "paused"}
 RESUMABLE_ITEM_STATUS = {"pending", "failed", "running", "quota_paused"}
 RATE_LIMIT_MARKERS = ("rate limit", "429", "too many requests", "max retries", "proxyerror", "timeout", "限流", "频繁")
-NETWORK_MARKERS = ("network", "connection", "connect", "proxyerror", "max retries", "timeout", "read timed out", "网络")
+NETWORK_MARKERS = (
+    "network",
+    "connection",
+    "connect",
+    "server disconnected",
+    "proxyerror",
+    "max retries",
+    "timeout",
+    "read timed out",
+    "网络",
+)
+AUTH_MARKERS = ("401", "unauthorized", "authentication", "invalid api key", "invalid key", "api key", "鉴权", "认证")
 QUOTA_MARKERS = (
     "insufficient_quota",
     "quota_exceeded",
@@ -53,6 +64,7 @@ ERROR_TYPE_LABELS = {
     "network": "网络失败",
     "rate_limit": "限流失败",
     "context_limit": "上下文过长",
+    "auth_error": "认证失败",
     "snapshot_incomplete": "快照不完整",
     "json_parse": "模型 JSON 输出失败",
     "role_failure": "单角色失败",
@@ -87,6 +99,23 @@ def _loads(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, ValueError):
         return default
+
+
+def _model_provider_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "base_url": row["base_url"],
+        "api_key": row["api_key"],
+        "models": _loads(row["models_json"], []),
+        "quick_model": row["quick_model"],
+        "deep_model": row["deep_model"],
+        "default_model": row["default_model"],
+        "context_length": row["context_length"],
+        "embedding_model": row["embedding_model"],
+        "embedding_dimensions": row["embedding_dimensions"],
+        "usage": _loads(row["usage_json"], []),
+    }
 
 
 def record_worker_heartbeat(
@@ -716,7 +745,14 @@ def _claim_runnable_items(
             FROM batch_job_items
             WHERE job_id = ?
               AND (
-                status IN ('pending', 'quota_paused')
+                (
+                  status IN ('pending', 'quota_paused')
+                  AND (
+                    next_retry_at IS NULL
+                    OR next_retry_at = ''
+                    OR datetime(next_retry_at) <= datetime('now')
+                  )
+                )
                 OR (
                   status = 'running'
                   AND lease_until IS NOT NULL
@@ -868,6 +904,8 @@ def _is_rate_limit_error(error: str) -> bool:
 
 def _llm_error_type(error: str) -> str:
     lower = (error or "").lower()
+    if any(marker in lower for marker in AUTH_MARKERS):
+        return "auth_error"
     if any(marker in lower for marker in QUOTA_MARKERS):
         return "quota_exhausted"
     if any(marker in lower for marker in CONTEXT_LIMIT_MARKERS):
@@ -1013,8 +1051,133 @@ def _retry_after_seconds(error_type: str, consecutive_failures: int) -> int:
     return min(300, 10 * failures)
 
 
+def _max_runtime_cooldown_seconds(payload: dict[str, Any] | None) -> int | None:
+    if not payload or "max_runtime_cooldown_seconds" not in payload:
+        return None
+    try:
+        return max(0, int(payload.get("max_runtime_cooldown_seconds") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def _auto_retry_mode(payload: dict[str, Any]) -> str:
+    mode = str(payload.get("failure_retry_mode") or "manual").strip().lower()
+    return mode if mode in {"manual", "auto_switch_model", "auto_downgrade"} else "manual"
+
+
+def _auto_retry_delay_seconds(error_type: str, retry_count: int, payload: dict[str, Any]) -> int:
+    if "auto_retry_delay_seconds" in payload:
+        try:
+            return max(0, int(float(payload.get("auto_retry_delay_seconds") or 0)))
+        except (TypeError, ValueError):
+            return 0
+    delay = _retry_after_seconds(error_type, retry_count)
+    max_delay = int(payload.get("max_auto_retry_delay_seconds") or 900)
+    return max(0, min(max_delay, delay))
+
+
+def _should_auto_retry_item(error_type: str, payload: dict[str, Any], retry_count: int) -> bool:
+    if _resilience_mode(payload) == "strict":
+        return False
+    if _auto_retry_mode(payload) == "manual":
+        return False
+    max_retries = max(0, int(payload.get("max_auto_item_retries") or 0))
+    if retry_count >= max_retries:
+        return False
+    return error_type in {"network", "rate_limit", "role_failure", "json_parse", "unknown"}
+
+
+def _schedule_item_auto_retry(
+    job_id: str,
+    item_id: int,
+    *,
+    code: str,
+    error: str,
+    error_type: str,
+    payload: dict[str, Any],
+) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT retry_count FROM batch_job_items WHERE id = ?", (item_id,)).fetchone()
+    retry_count = int(row["retry_count"] or 0) if row else 0
+    if not _should_auto_retry_item(error_type, payload, retry_count):
+        return False
+    next_retry_count = retry_count + 1
+    delay = _auto_retry_delay_seconds(error_type, next_retry_count, payload)
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE batch_job_items
+            SET status='pending',
+                error=?,
+                error_type=?,
+                retry_count=?,
+                next_retry_at=datetime('now', ?),
+                lease_owner=NULL,
+                lease_token=NULL,
+                lease_until=NULL,
+                completed_at=NULL,
+                updated_at=datetime('now')
+            WHERE id=?
+            """,
+            (f"等待自动重试: {error}", error_type, next_retry_count, f"+{delay} seconds", item_id),
+        )
+        conn.execute(
+            """
+            UPDATE batch_job_item_steps
+            SET status='pending',
+                error='',
+                retry_count=COALESCE(retry_count, 0) + 1,
+                started_at=NULL,
+                completed_at=NULL,
+                next_retry_at=datetime('now', ?),
+                updated_at=datetime('now')
+            WHERE item_id=?
+              AND status IN ('failed', 'timeout', 'quota_paused')
+            """,
+            (f"+{delay} seconds", item_id),
+        )
+        conn.commit()
+    runtime = _runtime_state(job_id)
+    auto_retry = runtime.setdefault("auto_retry", {"scheduled": 0})
+    auto_retry["scheduled"] = int(auto_retry.get("scheduled") or 0) + 1
+    auto_retry["latest"] = {
+        "at": _iso_now(),
+        "code": code,
+        "item_id": item_id,
+        "error_type": error_type,
+        "retry_count": next_retry_count,
+        "delay_seconds": delay,
+        "next_retry_at": (datetime.now() + timedelta(seconds=delay)).isoformat(timespec="seconds"),
+        "mode": _auto_retry_mode(payload),
+    }
+    _save_runtime_state(job_id, runtime)
+    log_job_event(
+        job_id,
+        "warning",
+        "item_auto_retry_scheduled",
+        f"{code} 已安排自动重试",
+        {"error": error, "error_type": error_type, "retry_count": next_retry_count, "delay_seconds": delay},
+        item_id=item_id,
+    )
+    return True
+
+
 def _load_model_providers() -> list[dict[str, Any]]:
     with _connect() as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, name, base_url, api_key, models_json, quick_model, deep_model,
+                       default_model, context_length, embedding_model, embedding_dimensions,
+                       usage_json
+                FROM model_providers
+                ORDER BY updated_at DESC, name ASC
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        if rows:
+            return [_model_provider_from_row(row) for row in rows]
         row = conn.execute("SELECT value FROM settings WHERE key = 'model_providers'").fetchone()
     providers = _loads(row["value"] if row else "[]", [])
     return [provider for provider in providers if isinstance(provider, dict)]
@@ -1197,6 +1360,7 @@ def _mark_quota_paused(
     model: str,
     step_order: int,
     resume_after: str = "",
+    pause_job: bool = True,
 ) -> None:
     upsert_item_step(
         item_id,
@@ -1208,19 +1372,53 @@ def _mark_quota_paused(
         status="quota_paused",
         error=error,
     )
-    _update_item_id(item_id, status="quota_paused", error=error, error_type=_classify_item_error("quota_paused", error), completed_at=None)
-    _update_job(
-        job_id,
-        status="quota_paused",
+    if pause_job:
+        _update_item_id(item_id, status="quota_paused", error=error, error_type=_classify_item_error("quota_paused", error), completed_at=None)
+        _update_job(
+            job_id,
+            status="quota_paused",
+            error=error,
+            pause_requested=1,
+            paused_at=_now_expr(),
+            current_code="",
+        )
+        _record_quota_event(job_id, role_key=role_key, model=model, error=error, status="paused", resume_after=resume_after)
+        return
+    _update_item_id(
+        item_id,
+        status="failed",
         error=error,
-        pause_requested=1,
-        paused_at=_now_expr(),
-        current_code="",
+        error_type="quota_exhausted",
+        completed_at=_now_expr(),
     )
-    _record_quota_event(job_id, role_key=role_key, model=model, error=error, status="paused", resume_after=resume_after)
+    runtime = _runtime_state(job_id)
+    quota = runtime.setdefault("quota", {})
+    events = quota.setdefault("events", [])
+    events.append(
+        {
+            "at": _iso_now(),
+            "role_key": role_key,
+            "model": model,
+            "error_type": "quota_exhausted",
+            "error": error,
+            "status": "item_isolated",
+        }
+    )
+    quota["state"] = "item_isolated"
+    quota["current_role"] = role_key
+    quota["model"] = model
+    _save_runtime_state(job_id, runtime)
+    log_job_event(job_id, "warning", "quota_item_isolated", "模型额度失败已隔离到单票", {"error": error, "model": model}, item_id=item_id)
 
 
-def _record_runtime_failure(job_id: str, source: str, error: str, *, base_concurrency: int = 1) -> None:
+def _record_runtime_failure(
+    job_id: str,
+    source: str,
+    error: str,
+    *,
+    base_concurrency: int = 1,
+    payload: dict[str, Any] | None = None,
+) -> None:
     runtime = _runtime_state(job_id)
     sources = runtime.setdefault("sources", {})
     state = sources.setdefault(source, {"consecutive_failures": 0, "current_concurrency": max(1, base_concurrency)})
@@ -1234,7 +1432,8 @@ def _record_runtime_failure(job_id: str, source: str, error: str, *, base_concur
         "retry_after_seconds": retry_after,
     }
     if error_type in {"rate_limit", "network"}:
-        cooldown_seconds = retry_after
+        cooldown_cap = _max_runtime_cooldown_seconds(payload)
+        cooldown_seconds = min(retry_after, cooldown_cap) if cooldown_cap is not None else retry_after
         state["cooldown_until"] = (datetime.now() + timedelta(seconds=cooldown_seconds)).isoformat(timespec="seconds")
         state["current_concurrency"] = max(1, int(state.get("current_concurrency") or base_concurrency) // 2)
         state["effective_concurrency"] = state["current_concurrency"]
@@ -1287,7 +1486,46 @@ def _mark_guard_paused(job_id: str, *, reason: str, error: str = "", data: dict[
     log_job_event(job_id, "warning", "guard_paused", reason, {"error": error, **(data or {})})
 
 
+def _resilience_mode(payload: dict[str, Any]) -> str:
+    mode = str(payload.get("resilience_mode") or "robust").strip().lower()
+    return mode if mode in {"strict", "balanced", "robust"} else "robust"
+
+
+def _guard_window(job_id: str, limit: int) -> dict[str, Any]:
+    limit = max(1, int(limit or 1))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT code, status, error_type, error, updated_at
+            FROM batch_job_items
+            WHERE job_id = ?
+              AND status IN ('completed', 'failed', 'timeout', 'cancelled', 'waiting_snapshot', 'skipped', 'quota_paused')
+            ORDER BY datetime(updated_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (job_id, limit),
+        ).fetchall()
+    failure_statuses = {"failed", "timeout", "cancelled", "quota_paused"}
+    items = [dict(row) for row in rows]
+    failures = [item for item in items if item["status"] in failure_statuses]
+    consecutive = 0
+    for item in items:
+        if item["status"] in failure_statuses:
+            consecutive += 1
+            continue
+        break
+    total = len(items)
+    return {
+        "items": items,
+        "total": total,
+        "failures": len(failures),
+        "failure_rate": round((len(failures) / total) if total else 0, 4),
+        "consecutive_failures": consecutive,
+    }
+
+
 def _maybe_guard_pause(job_id: str, payload: dict[str, Any], *, error: str = "") -> bool:
+    mode = _resilience_mode(payload)
     max_consecutive = int(payload.get("max_consecutive_failures") or 0)
     max_failure_rate = float(payload.get("max_failure_rate") or 0)
     min_failure_rate_items = max(1, int(payload.get("min_failure_rate_items") or 5))
@@ -1299,6 +1537,40 @@ def _maybe_guard_pause(job_id: str, payload: dict[str, Any], *, error: str = "")
         guard["last_error"] = error
     else:
         guard["consecutive_failures"] = 0
+    if mode == "robust":
+        window_size = max(min_failure_rate_items, int(payload.get("guard_window_items") or 20))
+        window = _guard_window(job_id, window_size)
+        guard["state"] = "degraded" if error else "normal"
+        guard["mode"] = mode
+        guard["window"] = {key: value for key, value in window.items() if key != "items"}
+        _save_runtime_state(job_id, runtime)
+        systemic_consecutive = max(max_consecutive, min_failure_rate_items)
+        if (
+            max_consecutive
+            and window["total"] >= min_failure_rate_items
+            and window["consecutive_failures"] >= systemic_consecutive
+        ):
+            _mark_guard_paused(
+                job_id,
+                reason="最近窗口连续失败数达到系统性故障阈值",
+                error=error,
+                data={"max_consecutive_failures": systemic_consecutive, "counts": counts, "window": guard["window"]},
+            )
+            return True
+        if (
+            max_failure_rate
+            and window["total"] >= min_failure_rate_items
+            and window["failure_rate"] >= max_failure_rate
+            and window["failures"] > 0
+        ):
+            _mark_guard_paused(
+                job_id,
+                reason="最近窗口失败率达到系统性故障阈值",
+                error=error,
+                data={"max_failure_rate": max_failure_rate, "counts": counts, "window": guard["window"]},
+            )
+            return True
+        return False
     _save_runtime_state(job_id, runtime)
     if max_consecutive and int(guard.get("consecutive_failures") or 0) >= max_consecutive:
         _mark_guard_paused(
@@ -1410,7 +1682,11 @@ async def _run_snapshot_tradingagents_graph_with_steps(
     item_id = int(item["id"])
     job_id = payload.get("job_id") or item["job_id"]
     state = batch_research._initial_snapshot_agent_state(ranked, snapshot)
-    investment_profile_context = batch_research.investment_profile_from_db(DB_PATH)["context"]
+    investment_profile_context = batch_research.investment_profile_from_db(
+        DB_PATH,
+        code=ranked.code,
+        report_text=ranked.name,
+    )["context"]
     role_discussion: list[dict[str, str]] = []
     completed = _completed_steps(item_id)
     max_attempts = int(payload.get("role_retry_attempts") or 3)
@@ -1487,6 +1763,7 @@ async def _run_snapshot_tradingagents_graph_with_steps(
                 payload=payload,
             )
         except ModelQuotaError as exc:
+            pause_job = payload.get("quota_pause_scope") == "job" or _resilience_mode(payload) == "strict"
             _mark_quota_paused(
                 job_id,
                 item_id,
@@ -1496,6 +1773,7 @@ async def _run_snapshot_tradingagents_graph_with_steps(
                 model=exc.model or config.get("model", ""),
                 step_order=step_order,
                 resume_after=exc.resume_after,
+                pause_job=pause_job,
             )
             raise
         except Exception as exc:
@@ -2561,7 +2839,7 @@ async def create_research_job(
     model_fallback_enabled: bool = True,
     fallback_provider_ids: list[str] | None = None,
     quota_exhausted_action: str = "switch_model",
-    failure_retry_mode: str = "manual",
+    failure_retry_mode: str = "auto_switch_model",
     title: str | None = None,
     trade_date: str | None = None,
     output_dir: Path | str | None = None,
@@ -2583,9 +2861,16 @@ async def create_research_job(
     if not stocks:
         raise HTTPException(400, "没有可执行的股票；请检查交易权限设置或重新选择标的")
     job_id = f"{job_type[:2]}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{str(uuid.uuid4())[:6]}"
-    max_consecutive_failures = int(extra.pop("max_consecutive_failures", 5) or 0)
-    max_failure_rate = float(extra.pop("max_failure_rate", 0.25) or 0)
-    min_failure_rate_items = int(extra.pop("min_failure_rate_items", 5) or 1)
+    resilience_mode = str(extra.pop("resilience_mode", "robust") or "robust")
+    max_consecutive_failures = int(extra.pop("max_consecutive_failures", 20) or 0)
+    max_failure_rate = float(extra.pop("max_failure_rate", 0.6) or 0)
+    min_failure_rate_items = int(extra.pop("min_failure_rate_items", 20) or 1)
+    guard_window_items = int(extra.pop("guard_window_items", 20) or 1)
+    quota_pause_scope = str(extra.pop("quota_pause_scope", "item") or "item")
+    max_auto_item_retries = int(extra.pop("max_auto_item_retries", 2) or 0)
+    auto_retry_delay_seconds = int(extra.pop("auto_retry_delay_seconds", 60) or 0)
+    max_auto_retry_delay_seconds = int(extra.pop("max_auto_retry_delay_seconds", 900) or 0)
+    max_runtime_cooldown_seconds = int(extra.pop("max_runtime_cooldown_seconds", 300) or 0)
     payload = {
         "job_type": job_type,
         "group": group,
@@ -2618,9 +2903,16 @@ async def create_research_job(
         "title": title,
         "trade_date": trade_date or date.today().isoformat(),
         "output_dir": str(output_dir) if output_dir else str(Path("data") / "batch_research"),
+        "resilience_mode": resilience_mode if resilience_mode in {"strict", "balanced", "robust"} else "robust",
+        "quota_pause_scope": quota_pause_scope if quota_pause_scope in {"job", "item"} else "item",
         "max_consecutive_failures": max_consecutive_failures,
         "max_failure_rate": max_failure_rate,
         "min_failure_rate_items": min_failure_rate_items,
+        "guard_window_items": guard_window_items,
+        "max_auto_item_retries": max_auto_item_retries,
+        "auto_retry_delay_seconds": auto_retry_delay_seconds,
+        "max_auto_retry_delay_seconds": max_auto_retry_delay_seconds,
+        "max_runtime_cooldown_seconds": max_runtime_cooldown_seconds,
         **extra,
     }
     _insert_job(job_id, job_type, payload, stocks)
@@ -2687,7 +2979,7 @@ async def _run_report_item(item: dict[str, Any], payload: dict[str, Any], recent
     report_depth = payload.get("analysis_depth") or "standard"
     report_model_mode = payload.get("model_mode") or "balanced"
     timeout_seconds = int(payload.get("timeout_seconds") or 3600)
-    investment_profile = batch_research.investment_profile_from_db(DB_PATH)
+    investment_profile = batch_research.investment_profile_from_db(DB_PATH, code=code, report_text=item.get("name") or code)
     started = datetime.now()
     if analysis_mode == "snapshot-tradingagents":
         result = await _run_snapshot_tradingagents_graph_with_steps(
@@ -3339,10 +3631,14 @@ async def run_research_job(
                         await _run_data_prefetch_item(item, payload)
                         _record_runtime_success(job_id, "snapshot", base_concurrency=requested_concurrency)
                     except Exception as exc:
-                        _record_runtime_failure(job_id, "snapshot", str(exc), base_concurrency=requested_concurrency)
+                        error = str(exc)
+                        error_type = _classify_item_error("failed", error)
+                        _record_runtime_failure(job_id, "snapshot", error, base_concurrency=requested_concurrency, payload=payload)
                         log_job_event(job_id, "error", "item_failed", f"{item['code']} 七层数据预取失败", {"error": str(exc)}, item_id=item["id"])
-                        _update_item_id(item["id"], status="failed", error=str(exc), error_type=_classify_item_error("failed", str(exc)), completed_at=_now_expr())
-                        _maybe_guard_pause(job_id, payload, error=str(exc))
+                        if _schedule_item_auto_retry(job_id, int(item["id"]), code=item["code"], error=error, error_type=error_type, payload=payload):
+                            return
+                        _update_item_id(item["id"], status="failed", error=error, error_type=error_type, completed_at=_now_expr())
+                        _maybe_guard_pause(job_id, payload, error=error)
                     finally:
                         _recount_job(job_id)
 
@@ -3382,10 +3678,14 @@ async def run_research_job(
                     except ModelQuotaError as exc:
                         log_job_event(job_id, "warning", "item_quota_paused", f"{item['code']} 因模型额度暂停", {"error": str(exc)}, item_id=item["id"])
                     except Exception as exc:
-                        _record_runtime_failure(job_id, "llm", str(exc), base_concurrency=requested_concurrency)
-                        log_job_event(job_id, "error", "item_failed", f"{item['code']} 报告生成失败", {"error": str(exc)}, item_id=item["id"])
-                        _update_item_id(item["id"], status="failed", error=str(exc), error_type=_classify_item_error("failed", str(exc)), completed_at=_now_expr())
-                        _maybe_guard_pause(job_id, payload, error=str(exc))
+                        error = str(exc)
+                        error_type = _classify_item_error("failed", error)
+                        _record_runtime_failure(job_id, "llm", error, base_concurrency=requested_concurrency, payload=payload)
+                        log_job_event(job_id, "error", "item_failed", f"{item['code']} 报告生成失败", {"error": error}, item_id=item["id"])
+                        if _schedule_item_auto_retry(job_id, int(item["id"]), code=item["code"], error=error, error_type=error_type, payload=payload):
+                            return
+                        _update_item_id(item["id"], status="failed", error=error, error_type=error_type, completed_at=_now_expr())
+                        _maybe_guard_pause(job_id, payload, error=error)
                     finally:
                         _recount_job(job_id)
 
@@ -3455,7 +3755,13 @@ async def resume_job(job_id: str) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE batch_job_items
-            SET status='pending', error='', updated_at=datetime('now')
+            SET status='pending',
+                error='',
+                next_retry_at=NULL,
+                lease_owner=NULL,
+                lease_token=NULL,
+                lease_until=NULL,
+                updated_at=datetime('now')
             WHERE job_id = ? AND status = 'quota_paused'
             """,
             (job_id,),
@@ -3463,7 +3769,11 @@ async def resume_job(job_id: str) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE batch_job_item_steps
-            SET status='pending', error='', completed_at=NULL, updated_at=datetime('now')
+            SET status='pending',
+                error='',
+                next_retry_at=NULL,
+                completed_at=NULL,
+                updated_at=datetime('now')
             WHERE job_id = ? AND status = 'quota_paused'
             """,
             (job_id,),
@@ -3512,7 +3822,14 @@ async def retry_failed(
         cursor = conn.execute(
             f"""
             UPDATE batch_job_items
-            SET status='pending', error='', retry_count=COALESCE(retry_count, 0) + 1, updated_at=datetime('now')
+            SET status='pending',
+                error='',
+                retry_count=COALESCE(retry_count, 0) + 1,
+                next_retry_at=NULL,
+                lease_owner=NULL,
+                lease_token=NULL,
+                lease_until=NULL,
+                updated_at=datetime('now')
             WHERE job_id = ? AND status IN ('failed', 'timeout', 'cancelled', 'waiting_snapshot', 'quota_paused')
             {filters}
             """,
@@ -3524,6 +3841,7 @@ async def retry_failed(
             SET status='pending',
                 error='',
                 retry_count=COALESCE(retry_count, 0) + 1,
+                next_retry_at=NULL,
                 started_at=NULL,
                 completed_at=NULL,
                 updated_at=datetime('now')

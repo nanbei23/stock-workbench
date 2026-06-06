@@ -210,6 +210,38 @@ class PositionPlanServiceTests(unittest.TestCase):
         self.assertEqual(detail["status"], "active")
         self.assertIn("reference_only", detail["confirmed_snapshot_json"]["decision_policy"])
 
+    def test_adopt_single_position_plan_item_marks_plan_partially_adopted(self):
+        plan = position_plan_service.persist_position_plan(
+            {
+                "candidate_count": 2,
+                "selected_count": 2,
+                "summary": "组合研究方案",
+                "recommendations": [
+                    {"code": "000001", "name": "平安银行", "action": "buy", "suggested_amount": 10000, "position_pct": 3},
+                    {"code": "000002", "name": "万科A", "action": "watch", "suggested_amount": 0, "position_pct": 0},
+                ],
+            },
+            db_path=self.db_path,
+            payload={"stage": "final", "title": "组合研究方案 A"},
+        )
+        detail = position_plan_service.get_position_plan(plan["plan_id"], db_path=self.db_path)
+        first_item_id = detail["items"][0]["id"]
+
+        updated = position_plan_service.update_position_plan_item_adoption(
+            plan["plan_id"],
+            first_item_id,
+            "adopted",
+            db_path=self.db_path,
+            confirmed_by="user",
+        )
+        detail = position_plan_service.get_position_plan(plan["plan_id"], db_path=self.db_path)
+
+        self.assertEqual(updated["adoption_status"], "adopted")
+        self.assertEqual(detail["adoption_status"], "partially_adopted")
+        self.assertEqual(detail["items"][0]["adoption_status"], "adopted")
+        self.assertEqual(detail["items"][1]["adoption_status"], "pending")
+        self.assertIn("per_item", detail["confirmed_snapshot_json"]["decision_policy"])
+
     def test_list_data_snapshots_returns_validation_summary_without_full_payload(self):
         snapshot = {"market": {"quote": {"price": 10}}, "social": {}, "news": {}, "fundamentals": {}, "policy": {}, "hot_money": {}, "lockup": {}}
         validation = {"ok": True, "checked_layers": ["market", "social"]}

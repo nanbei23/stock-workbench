@@ -24,16 +24,8 @@ ACTION_LABELS = {
     "add_watchlist": "添加自选股",
     "record_trade": "记录交易",
     "set_position": "校准持仓",
-    "create_conditional_order": "创建条件单",
     "multi_step_plan": "多步任务计划",
     "query_position": "查询持仓",
-}
-
-CONDITION_LABELS = {
-    "price_lte": "价格低于等于",
-    "price_gte": "价格高于等于",
-    "change_pct_gte": "涨幅高于等于",
-    "change_pct_lte": "跌幅高于等于",
 }
 
 COMMON_STOCK_ALIASES = {
@@ -47,12 +39,20 @@ COMMON_STOCK_ALIASES = {
 }
 
 
-async def handle_message(message: str, session_id: str | None = None) -> dict[str, Any]:
+async def handle_message(
+    message: str,
+    session_id: str | None = None,
+    *,
+    login_user_id: str | None = None,
+    account_id: str | None = None,
+) -> dict[str, Any]:
     text = (message or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="message required")
     sid = session_id or f"hermes-{uuid.uuid4().hex[:12]}"
     intent = await _parse_message(text, sid)
+    intent["_login_user_id"] = login_user_id or "admin"
+    intent["_account_id"] = account_id or "default"
     await _log_event(sid, "user", text)
 
     if intent["action"] == "query_position":
@@ -75,7 +75,13 @@ async def handle_message(message: str, session_id: str | None = None) -> dict[st
     return {"session_id": sid, "answer": answer, "draft": draft, "parser": intent.get("parser", "rules")}
 
 
-async def confirm_draft(session_id: str, draft_id: str) -> dict[str, Any]:
+async def confirm_draft(
+    session_id: str,
+    draft_id: str,
+    *,
+    login_user_id: str | None = None,
+    account_id: str | None = None,
+) -> dict[str, Any]:
     draft = _DRAFTS.get(draft_id) or await _load_draft_from_history(session_id, draft_id)
     if not draft or draft.get("session_id") != session_id:
         raise HTTPException(status_code=404, detail="草稿不存在或已过期")
@@ -104,6 +110,8 @@ async def confirm_draft(session_id: str, draft_id: str) -> dict[str, Any]:
             tool_call["tool"],
             tool_call.get("args") or {},
             source_text=draft.get("source_text") or "",
+            login_user_id=login_user_id or draft.get("login_user_id"),
+            account_id=account_id or draft.get("account_id"),
         )
     except Exception as exc:
         await _log_tool_run(session_id, draft, "error", error=str(exc), run_id=tool_run_id)
@@ -153,7 +161,14 @@ async def cancel_draft(session_id: str, draft_id: str) -> dict[str, Any]:
     return result
 
 
-async def confirm_plan_step(session_id: str, draft_id: str, step_id: str) -> dict[str, Any]:
+async def confirm_plan_step(
+    session_id: str,
+    draft_id: str,
+    step_id: str,
+    *,
+    login_user_id: str | None = None,
+    account_id: str | None = None,
+) -> dict[str, Any]:
     draft = await _load_active_draft(session_id, draft_id)
     if draft.get("action") != "multi_step_plan":
         raise HTTPException(status_code=400, detail="不是多步任务草稿")
@@ -178,6 +193,8 @@ async def confirm_plan_step(session_id: str, draft_id: str, step_id: str) -> dic
             tool_call["tool"],
             tool_call.get("args") or {},
             source_text=draft.get("source_text") or "",
+            login_user_id=login_user_id or draft.get("login_user_id"),
+            account_id=account_id or draft.get("account_id"),
         )
     except Exception as exc:
         await _log_tool_run(session_id, step_draft, "error", error=str(exc), run_id=run_id)
@@ -361,7 +378,7 @@ async def undo_last_tool_run(session_id: str) -> dict[str, Any]:
                 FROM hermes_tool_runs r
                 WHERE r.session_id = ?
                   AND r.status = 'ok'
-                  AND r.tool IN ('add_watchlist', 'record_trade', 'set_position', 'create_conditional_order')
+                  AND r.tool IN ('add_watchlist', 'record_trade', 'set_position')
                   AND NOT EXISTS (
                     SELECT 1
                     FROM hermes_tool_runs u
@@ -404,21 +421,14 @@ async def _undo_tool_effect(tool: str, args: dict[str, Any], result: dict[str, A
         code = args.get("code")
         if not code:
             raise HTTPException(status_code=400, detail="撤销自选失败：缺少股票代码")
-        data = await portfolio_service.remove_from_watchlist(code)
+        data = await portfolio_service.remove_from_watchlist(code, login_user_id=args.get("login_user_id") or "admin")
         return {"summary": f"已从自选股移除 {code}", "data": data}
-
-    if tool == "create_conditional_order":
-        order_id = (((result.get("data") or {}).get("data") or {}).get("id") or (result.get("data") or {}).get("id") or result.get("id"))
-        if not order_id:
-            raise HTTPException(status_code=400, detail="撤销条件单失败：缺少条件单 ID")
-        data = await portfolio_service.cancel_conditional_order(int(order_id))
-        return {"summary": f"已取消条件单 #{order_id}", "data": data}
 
     if tool in {"record_trade", "set_position"}:
         trade_id = await _find_last_hermes_trade(args)
         if not trade_id:
             raise HTTPException(status_code=404, detail="未找到可撤销的 Hermes 交易记录")
-        data = await portfolio_service.delete_trade(trade_id)
+        data = await portfolio_service.delete_trade(trade_id, account_id=args.get("account_id") or "default")
         return {"summary": f"已撤销交易记录 #{trade_id} 并重算持仓", "data": data}
 
     raise HTTPException(status_code=400, detail=f"暂不支持撤销工具：{tool}")
@@ -439,6 +449,9 @@ async def _find_last_hermes_trade(args: dict[str, Any]) -> int | None:
         if args.get("price"):
             filters.append("ABS(price - ?) < 0.0001")
             params.append(float(args.get("price")))
+        if args.get("account_id"):
+            filters.append("account_id = ?")
+            params.append(args.get("account_id") or "default")
         row = await (
             await db.execute(
                 f"SELECT id FROM trades WHERE {' AND '.join(filters)} ORDER BY id DESC LIMIT 1",
@@ -798,18 +811,6 @@ async def _parse_message_with_rules(text: str) -> dict[str, Any]:
 
     if _looks_like_position_query(text):
         return {"action": "query_position", "parser": "rules", **stock}
-    if _contains_any(text, ("条件单", "触发")) and price:
-        action = "buy" if _contains_any(text, ("买入", "买", "加仓")) else "sell"
-        condition_type = _condition_from_text(text, action)
-        return {
-            "action": "create_conditional_order",
-            "parser": "rules",
-            **stock,
-            "trade_action": action,
-            "condition_type": condition_type,
-            "target_price": price,
-            "shares": shares or 0,
-        }
     if _contains_any(text, ("买入", "买了", "买", "加仓", "卖出", "卖了", "卖", "减仓")) and shares:
         direction = "sell" if _contains_any(text, ("卖出", "卖了", "卖", "减仓")) else "buy"
         return {
@@ -824,7 +825,7 @@ async def _parse_message_with_rules(text: str) -> dict[str, Any]:
         return {"action": "set_position", "parser": "rules", **stock, "shares": shares, "price": price}
     if _contains_any(text, ("新增", "添加", "加入")) and _contains_any(text, ("自选", "股票", "关注")):
         return {"action": "add_watchlist", "parser": "rules", **stock}
-    return {"action": "unknown", "parser": "rules", "reason": "暂时只能识别自选、持仓、交易和条件单类指令"}
+    return {"action": "unknown", "parser": "rules", "reason": "暂时只能识别自选、持仓和交易类指令"}
 
 
 async def _parse_multi_step_plan_with_rules(text: str) -> dict[str, Any] | None:
@@ -1025,15 +1026,12 @@ _LLM_SYSTEM_PROMPT = """你是股票工作台的 Hermes 自然语言操作解析
 
 def _llm_parse_prompt(text: str, context: list[dict[str, Any]], known_stocks: list[dict[str, str]]) -> str:
     schema = {
-        "action": "query_position | add_watchlist | record_trade | set_position | create_conditional_order | unknown",
+        "action": "query_position | add_watchlist | record_trade | set_position | unknown",
         "code": "6位A股代码；没有就空字符串",
         "name": "股票名称；没有就空字符串",
         "direction": "buy | sell，仅 record_trade",
-        "trade_action": "buy | sell，仅 create_conditional_order",
         "shares": "股数数字，最多三位小数；没有就 null",
         "price": "成交价/成本价，数字；没有就 null",
-        "target_price": "条件单触发价，数字；没有就 null",
-        "condition_type": "price_lte | price_gte | change_pct_gte | change_pct_lte",
         "reason": "无法识别或信息不足时的中文原因",
     }
     return json.dumps(
@@ -1041,7 +1039,7 @@ def _llm_parse_prompt(text: str, context: list[dict[str, Any]], known_stocks: li
             "instruction": "根据用户输入和最近会话上下文解析意图。单步写库请求返回 tool/args；复杂请求返回 plan.steps；查询类请求可返回 action=query_position。只返回一个 JSON object。",
             "schema": schema,
             "tool_call_schema": {
-                "tool": "add_watchlist | record_trade | set_position | create_conditional_order",
+                "tool": "add_watchlist | record_trade | set_position",
                 "args": "工具参数 object，必须符合 allowed_tools",
                 "confidence": "0到1",
                 "reason": "中文简述为什么这样解析",
@@ -1053,7 +1051,7 @@ def _llm_parse_prompt(text: str, context: list[dict[str, Any]], known_stocks: li
                         {
                             "title": "步骤标题",
                             "action": "query_position 用于只读查询；写库步骤用 tool/args",
-                            "tool": "add_watchlist | record_trade | set_position | create_conditional_order",
+                            "tool": "add_watchlist | record_trade | set_position",
                             "args": "工具参数 object",
                             "requires_confirmation": "写库步骤 true，只读查询 false",
                             "reason": "中文依据",
@@ -1067,11 +1065,10 @@ def _llm_parse_prompt(text: str, context: list[dict[str, Any]], known_stocks: li
                 "加入/关注/新增自选 => tool=add_watchlist。",
                 "买入/卖出/加仓/减仓且有股数 => tool=record_trade。",
                 "设置/校准/更新当前持仓为多少股 => tool=set_position。",
-                "条件单/触发/到价提醒 => tool=create_conditional_order。",
                 "股票代码缺失时可以利用 known_stocks 或最近上下文补全；仍不确定就 code 为空。",
                 "不要把用户没有说的价格、股数、股票代码编造出来。",
                 "不要返回 SQL，不要返回未列入 allowed_tools 的工具。",
-                "当用户一次说多个动作，例如查询持仓、加入自选、创建条件单、记录交易混合出现时，返回 plan.steps。",
+                "当用户一次说多个动作，例如查询持仓、加入自选、记录交易混合出现时，返回 plan.steps。",
                 "plan.steps 中只读查询可以 action=query_position；写库步骤必须用 tool/args。",
             ],
             "known_stocks": known_stocks,
@@ -1125,7 +1122,7 @@ async def _normalise_llm_intent(raw: dict[str, Any], text: str) -> dict[str, Any
         return intent
 
     action = str(raw.get("action") or "unknown").strip()
-    allowed = {"query_position", "add_watchlist", "record_trade", "set_position", "create_conditional_order", "unknown"}
+    allowed = {"query_position", "add_watchlist", "record_trade", "set_position", "unknown"}
     if action not in allowed:
         action = "unknown"
     stock = await _resolve_stock_from_llm(raw, text)
@@ -1136,7 +1133,6 @@ async def _normalise_llm_intent(raw: dict[str, Any], text: str) -> dict[str, Any
     }
     shares = _coerce_decimal(raw.get("shares"))
     price = _coerce_float(raw.get("price"))
-    target_price = _coerce_float(raw.get("target_price"))
     if action == "record_trade":
         direction = raw.get("direction")
         intent["direction"] = "sell" if direction == "sell" else "buy"
@@ -1145,18 +1141,6 @@ async def _normalise_llm_intent(raw: dict[str, Any], text: str) -> dict[str, Any
     elif action == "set_position":
         intent["shares"] = shares
         intent["price"] = price
-    elif action == "create_conditional_order":
-        trade_action = raw.get("trade_action") or raw.get("direction")
-        trade_action = "sell" if trade_action == "sell" else "buy"
-        condition_type = raw.get("condition_type") or _condition_from_text(text, trade_action)
-        if condition_type not in CONDITION_LABELS:
-            condition_type = _condition_from_text(text, trade_action)
-        intent.update({
-            "trade_action": trade_action,
-            "condition_type": condition_type,
-            "target_price": target_price or price,
-            "shares": shares or 0,
-        })
     return intent
 
 
@@ -1281,7 +1265,10 @@ async def _query_position(intent: dict[str, Any]) -> dict[str, Any]:
     db = await get_db()
     try:
         row = await (
-            await db.execute("SELECT * FROM portfolio WHERE code = ?", (code,))
+            await db.execute(
+                "SELECT * FROM portfolio WHERE code = ? AND account_id = ?",
+                (code, intent.get("_account_id") or "default"),
+            )
         ).fetchone()
         if not row:
             name = intent.get("name") or code
@@ -1316,6 +1303,10 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
     tool_call = tool_call_model.model_dump() if tool_call_model else None
     if tool_call and tool_validation:
         tool_call["args"] = tool_validation.normalized_args
+    if tool_call:
+        tool_call.setdefault("args", {})
+        tool_call["args"]["login_user_id"] = intent.get("_login_user_id") or "admin"
+        tool_call["args"]["account_id"] = intent.get("_account_id") or "default"
     payload = {
         k: v
         for k, v in intent.items()
@@ -1332,6 +1323,8 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
     }
     if tool_validation:
         payload.update({key: value for key, value in tool_validation.normalized_args.items() if value is not None})
+    payload["login_user_id"] = intent.get("_login_user_id") or "admin"
+    payload["account_id"] = intent.get("_account_id") or "default"
     risks = ["写库操作会改变本地 SQLite 数据，确认前请核对代码、数量和价格。"]
     if completion_sources:
         risks.append("部分信息由 AI/行情自动补全，请确认无误后再写入。")
@@ -1352,9 +1345,6 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
         executable = False
     if action == "set_position" and not payload.get("price"):
         risks.append("未提供价格时会优先使用现有持仓均价生成校准交易。")
-    if action == "create_conditional_order" and not payload.get("target_price"):
-        blockers.append("缺少触发价格")
-        executable = False
     if tool_validation:
         blockers.extend(item for item in tool_validation.blockers if item not in blockers)
         risks.extend(item for item in tool_validation.warnings if item not in risks)
@@ -1383,6 +1373,8 @@ async def _make_single_draft(session_id: str, source_text: str, intent: dict[str
         "label": ACTION_LABELS.get(action, action),
         "summary": summary,
         "payload": payload,
+        "login_user_id": payload["login_user_id"],
+        "account_id": payload["account_id"],
         "tool_call": tool_call,
         "impact_preview": impact_preview,
         "parser": intent.get("parser", "rules"),
@@ -1407,6 +1399,11 @@ async def _make_plan_draft(session_id: str, source_text: str, intent: dict[str, 
         step_action = step_intent.get("action")
         step_id = f"step-{index}"
         if step_action == "query_position":
+            step_intent = {
+                **step_intent,
+                "_login_user_id": intent.get("_login_user_id") or "admin",
+                "_account_id": intent.get("_account_id") or "default",
+            }
             result = await _query_position(step_intent)
             step_blockers = [] if step_intent.get("code") else ["缺少 6 位股票代码，无法查询持仓"]
             read_count += 1
@@ -1431,7 +1428,16 @@ async def _make_plan_draft(session_id: str, source_text: str, intent: dict[str, 
             blockers.extend(f"第 {index} 步：{item}" for item in step_blockers)
             continue
 
-        step_draft = await _make_single_draft(session_id, source_text, {**step_intent, "parser": intent.get("parser", "rules")})
+        step_draft = await _make_single_draft(
+            session_id,
+            source_text,
+            {
+                **step_intent,
+                "parser": intent.get("parser", "rules"),
+                "_login_user_id": intent.get("_login_user_id") or "admin",
+                "_account_id": intent.get("_account_id") or "default",
+            },
+        )
         write_count += 1
         step_blockers = step_draft.get("blockers") or []
         plan_steps.append(
@@ -1468,6 +1474,8 @@ async def _make_plan_draft(session_id: str, source_text: str, intent: dict[str, 
         "session_id": session_id,
         "source_text": source_text,
         "action": "multi_step_plan",
+        "login_user_id": intent.get("_login_user_id") or "admin",
+        "account_id": intent.get("_account_id") or "default",
         "label": ACTION_LABELS["multi_step_plan"],
         "summary": summary,
         "payload": {"title": title, "read_count": read_count, "write_count": write_count},
@@ -1499,6 +1507,8 @@ async def _confirm_plan_draft(session_id: str, draft: dict[str, Any]) -> dict[st
                 tool_call["tool"],
                 tool_call.get("args") or {},
                 source_text=draft.get("source_text") or "",
+                login_user_id=draft.get("login_user_id"),
+                account_id=draft.get("account_id"),
             )
         except Exception as exc:
             await _log_tool_run(session_id, step_draft, "error", error=str(exc), run_id=run_id)
@@ -1559,10 +1569,6 @@ def _draft_summary(action: str, payload: dict[str, Any]) -> str:
         return f"{direction} {stock} {_fmt_decimal(payload.get('shares'))} 股，价格 {payload.get('price') or '待补充'}"
     if action == "set_position":
         return f"将 {stock} 当前持仓校准为 {_fmt_decimal(payload.get('shares'))} 股"
-    if action == "create_conditional_order":
-        action_label = "买入" if payload.get("trade_action") == "buy" else "卖出"
-        cond = CONDITION_LABELS.get(payload.get("condition_type"), payload.get("condition_type"))
-        return f"为 {stock} 创建{action_label}条件单：{cond} {payload.get('target_price')}"
     if action == "query_position":
         return f"查询 {stock} 当前持仓"
     if action == "multi_step_plan":
@@ -1585,8 +1591,6 @@ def _draft_answer(draft: dict[str, Any]) -> str:
             return f"我先整理成自选股草稿：{summary}。{completion_note}确认后会加入自选。"
         if action == "set_position":
             return f"我理解为持仓校准：{summary}。{completion_note}这会通过差额交易调整，确认后再执行。"
-        if action == "create_conditional_order":
-            return f"我已经生成条件单草稿：{summary}。{completion_note}确认前请重点看触发价、方向和数量。"
         return f"我整理好了：{summary}。{completion_note}确认后再写入。"
 
     blockers = draft.get("blockers") or []
@@ -1853,6 +1857,5 @@ def _fallback_answer(reason: str | None = None) -> str:
     return (
         prefix
         + "你可以换成更接近交易动作的话，比如："
-        + "“查 600519 持仓”、“把贵州茅台加入自选”、“买入平安银行两手，10.5 成交”，"
-        + "或者“低于 1680 给茅台建一个买入条件单”。"
+        + "“查 600519 持仓”、“把贵州茅台加入自选”、“买入平安银行两手，10.5 成交”。"
     )

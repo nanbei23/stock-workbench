@@ -1,15 +1,15 @@
 """AI report and anomaly read queries."""
 
 
-async def list_reports(db, code=None, signal=None, limit=20, depth=None, model_mode=None):
+async def list_reports(db, code=None, signal=None, limit=20, depth=None, model_mode=None, login_user_id: str = "admin"):
     query = """
         SELECT id, task_id, code, signal, confidence, risk_score,
                duration_seconds, created_at, depth, model_mode, raw_state,
                fact_check, bystander_verify, market_snapshot
         FROM analysis_reports
-        WHERE 1=1
+        WHERE COALESCE(login_user_id, 'admin') = ?
     """
-    params = []
+    params = [login_user_id or "admin"]
     if code:
         query += " AND code = ?"
         params.append(code)
@@ -53,15 +53,34 @@ async def signal_tracking_summary(db):
     return [dict(row) for row in rows]
 
 
-async def watchlist_name_map(db):
+async def watchlist_name_map(db, login_user_id: str = "admin"):
     try:
-        rows = await db.execute_fetchall("SELECT code, name FROM watchlist")
+        rows = await db.execute_fetchall(
+            """
+            SELECT code, name
+            FROM watchlist
+            WHERE COALESCE(login_user_id, 'admin') = ?
+            """,
+            (login_user_id or "admin",),
+        )
     except Exception:
         return {}
     return {row["code"]: row["name"] for row in rows}
 
 
-async def get_report(db, report_id: int):
+async def get_report(db, report_id: int, login_user_id: str | None = None):
+    if login_user_id:
+        row = await (
+            await db.execute(
+                """
+                SELECT *
+                FROM analysis_reports
+                WHERE id = ? AND COALESCE(login_user_id, 'admin') = ?
+                """,
+                (report_id, login_user_id),
+            )
+        ).fetchone()
+        return dict(row) if row else None
     row = await (
         await db.execute("SELECT * FROM analysis_reports WHERE id = ?", (report_id,))
     ).fetchone()

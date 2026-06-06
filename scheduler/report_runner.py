@@ -291,14 +291,15 @@ async def _run_scheduled_report(report_type):
                 summary = json.dumps(review, ensure_ascii=False)
                 db.execute(
                     "INSERT INTO analysis_reports "
-                    "(code, task_id, signal, final_decision, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(code, task_id, signal, final_decision, created_at, login_user_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         stock["code"],
                         f"scheduled_review_{now}",
                         review["signal"],
                         summary,
                         now,
+                        "admin",
                     )
                 )
 
@@ -331,14 +332,15 @@ async def _run_scheduled_report(report_type):
                 summary = json.dumps(evaluation, ensure_ascii=False)
                 db.execute(
                     "INSERT INTO analysis_reports "
-                    "(code, task_id, signal, final_decision, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(code, task_id, signal, final_decision, created_at, login_user_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         stock["code"],
                         f"scheduled_{report_type}_{now}",
                         evaluation["signal"],
                         summary,
                         now,
+                        "admin",
                     )
                 )
 

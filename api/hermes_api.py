@@ -1,10 +1,13 @@
 """Hermes natural language operation console API."""
 
-from fastapi import APIRouter, Query
+import inspect
+
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from services import hermes_console_service
 from services import hermes_tool_registry
+from services import auth_service
 
 
 router = APIRouter(tags=["hermes-console"])
@@ -13,11 +16,13 @@ router = APIRouter(tags=["hermes-console"])
 class HermesMessageRequest(BaseModel):
     message: str
     session_id: str | None = None
+    account_id: str | None = None
 
 
 class HermesConfirmRequest(BaseModel):
     session_id: str
     draft_id: str
+    account_id: str | None = None
 
 
 class HermesStepRequest(HermesConfirmRequest):
@@ -29,13 +34,23 @@ class HermesToolPolicyRequest(BaseModel):
 
 
 @router.post("/hermes/message")
-async def send_hermes_message(req: HermesMessageRequest):
-    return await hermes_console_service.handle_message(req.message, req.session_id)
+async def send_hermes_message(req: HermesMessageRequest, user: dict = Depends(auth_service.require_login_user)):
+    account_id = await auth_service.resolve_securities_account_id(user, req.account_id)
+    fn = hermes_console_service.handle_message
+    if "login_user_id" not in inspect.signature(fn).parameters:
+        return await fn(req.message, req.session_id)
+    return await fn(req.message, req.session_id, login_user_id=user.get("id"), account_id=account_id)
 
 
 @router.post("/hermes/confirm")
-async def confirm_hermes_draft(req: HermesConfirmRequest):
-    return await hermes_console_service.confirm_draft(req.session_id, req.draft_id)
+async def confirm_hermes_draft(req: HermesConfirmRequest, user: dict = Depends(auth_service.require_login_user)):
+    account_id = await auth_service.resolve_securities_account_id(user, req.account_id)
+    return await hermes_console_service.confirm_draft(
+        req.session_id,
+        req.draft_id,
+        login_user_id=user.get("id"),
+        account_id=account_id,
+    )
 
 
 @router.post("/hermes/cancel")
@@ -44,8 +59,18 @@ async def cancel_hermes_draft(req: HermesConfirmRequest):
 
 
 @router.post("/hermes/step/confirm")
-async def confirm_hermes_plan_step(req: HermesStepRequest):
-    return await hermes_console_service.confirm_plan_step(req.session_id, req.draft_id, req.step_id)
+async def confirm_hermes_plan_step(req: HermesStepRequest, user: dict = Depends(auth_service.require_login_user)):
+    account_id = await auth_service.resolve_securities_account_id(user, req.account_id)
+    fn = hermes_console_service.confirm_plan_step
+    if "login_user_id" not in inspect.signature(fn).parameters:
+        return await fn(req.session_id, req.draft_id, req.step_id)
+    return await fn(
+        req.session_id,
+        req.draft_id,
+        req.step_id,
+        login_user_id=user.get("id"),
+        account_id=account_id,
+    )
 
 
 @router.post("/hermes/step/skip")

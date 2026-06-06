@@ -586,6 +586,7 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
                 role_retry_attempts=1,
                 role_retry_backoff_seconds=0,
                 model_fallback_enabled=False,
+                quota_pause_scope="job",
                 auto_start=False,
             )
             await batch_report_service.run_research_job(created["job_id"])
@@ -629,6 +630,7 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
                 role_retry_attempts=1,
                 role_retry_backoff_seconds=0,
                 analysis_concurrency=1,
+                failure_retry_mode="manual",
                 auto_start=False,
             )
             await batch_report_service.run_research_job(created["job_id"])
@@ -958,6 +960,7 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
                 role_retry_attempts=1,
                 role_retry_backoff_seconds=0,
                 max_consecutive_failures=1,
+                resilience_mode="strict",
                 auto_start=False,
             )
             await batch_report_service.run_research_job(created["job_id"])
@@ -970,6 +973,116 @@ class BatchResearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime["guard"]["reason"], "连续失败数达到上限")
         self.assertEqual(statuses["000001"], "failed")
         self.assertEqual(statuses["000002"], "pending")
+
+    async def test_auto_retry_requeues_transient_failure_without_manual_retry(self):
+        self._insert_snapshot("000001", "平安银行")
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.8,
+            "risk_score": 28,
+            "final_decision": "评级：BUY",
+            "trader_plan": "分批建仓",
+        }
+        with patch(
+            "services.batch_report_service.batch_research._call_snapshot_llm",
+            new=AsyncMock(side_effect=[Exception("network timeout"), llm_result]),
+        ) as call_llm:
+            created = await batch_report_service.create_research_job(
+                job_type="report_generation",
+                codes=["000001"],
+                skip_recent_days=0,
+                analysis_mode="snapshot",
+                role_retry_attempts=1,
+                role_retry_backoff_seconds=0,
+                failure_retry_mode="auto_switch_model",
+                max_auto_item_retries=2,
+                auto_retry_delay_seconds=0,
+                max_runtime_cooldown_seconds=0,
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        item = job["items"][0]
+        runtime = json.loads(job["runtime_json"])
+
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(item["status"], "completed")
+        self.assertEqual(item["retry_count"], 1)
+        self.assertEqual(runtime["auto_retry"]["scheduled"], 1)
+        self.assertEqual(call_llm.await_count, 2)
+
+    async def test_robust_resilience_keeps_batch_running_after_early_transient_failures(self):
+        self._insert_snapshot("000001", "平安银行")
+        self._insert_snapshot("000002", "万科A")
+        self._insert_snapshot("600519", "贵州茅台")
+        llm_result = {
+            "signal": "BUY",
+            "confidence": 0.8,
+            "risk_score": 28,
+            "final_decision": "评级：BUY",
+            "trader_plan": "分批建仓",
+        }
+        with patch(
+            "services.batch_report_service.batch_research._call_snapshot_llm",
+            new=AsyncMock(side_effect=[Exception("network timeout"), Exception("429 rate limit exceeded"), llm_result]),
+        ):
+            created = await batch_report_service.create_research_job(
+                job_type="report_generation",
+                codes=["000001", "000002", "600519"],
+                skip_recent_days=0,
+                analysis_mode="snapshot",
+                role_retry_attempts=1,
+                role_retry_backoff_seconds=0,
+                max_consecutive_failures=1,
+                max_failure_rate=0.25,
+                min_failure_rate_items=20,
+                resilience_mode="robust",
+                failure_retry_mode="manual",
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        runtime = json.loads(job["runtime_json"])
+        statuses = {item["code"]: item["status"] for item in job["items"]}
+
+        self.assertNotEqual(job["status"], "guard_paused")
+        self.assertEqual(statuses["000001"], "failed")
+        self.assertEqual(statuses["000002"], "failed")
+        self.assertEqual(statuses["600519"], "completed")
+        self.assertEqual(runtime["guard"]["state"], "degraded")
+        self.assertEqual(runtime["guard"]["window"]["total"], 2)
+
+    async def test_robust_resilience_isolates_quota_failure_without_pausing_job(self):
+        self._insert_snapshot("000001", "平安银行")
+        self._insert_snapshot("000002", "万科A")
+        with patch(
+            "services.batch_report_service.batch_research._call_snapshot_tradingagents_role_llm",
+            new=AsyncMock(side_effect=[Exception("quota_exceeded: daily limit reached"), *(["后续角色输出"] * 20)]),
+            create=True,
+        ):
+            created = await batch_report_service.create_research_job(
+                job_type="report_generation",
+                codes=["000001", "000002"],
+                skip_recent_days=0,
+                role_retry_attempts=1,
+                role_retry_backoff_seconds=0,
+                model_fallback_enabled=False,
+                quota_exhausted_action="switch_model",
+                resilience_mode="robust",
+                auto_start=False,
+            )
+            await batch_report_service.run_research_job(created["job_id"])
+
+        job = batch_report_service.get_research_job(created["job_id"])
+        runtime = json.loads(job["runtime_json"])
+        statuses = {item["code"]: item["status"] for item in job["items"]}
+
+        self.assertNotEqual(job["status"], "quota_paused")
+        self.assertEqual(statuses["000001"], "failed")
+        self.assertEqual(statuses["000002"], "completed")
+        self.assertEqual(runtime["quota"]["state"], "item_isolated")
 
     async def test_runtime_failure_records_error_type_and_next_retry_hint(self):
         created = await batch_report_service.create_research_job(

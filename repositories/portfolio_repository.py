@@ -1,22 +1,55 @@
 """Portfolio database access helpers."""
 
 
-async def fetch_accounts(db):
-    rows = await db.execute_fetchall("SELECT * FROM accounts ORDER BY created_at")
+async def fetch_accounts(db, login_user_id: str | None = None):
+    if login_user_id:
+        rows = await db.execute_fetchall(
+            """
+            SELECT id, name, broker, account_no_mask, is_default, status, notes,
+                   display_order, created_at, updated_at, login_user_id
+            FROM securities_accounts
+            WHERE login_user_id = ? AND status = 'active'
+            ORDER BY is_default DESC, display_order ASC, created_at ASC
+            """,
+            (login_user_id,),
+        )
+    else:
+        rows = await db.execute_fetchall(
+            """
+            SELECT id, name, broker, account_no_mask, is_default, status, notes,
+                   display_order, created_at, updated_at, login_user_id
+            FROM securities_accounts
+            WHERE status = 'active'
+            ORDER BY login_user_id ASC, is_default DESC, display_order ASC, created_at ASC
+            """
+        )
     return [dict(row) for row in rows]
 
 
-async def create_account(db, account_id: str, name: str, broker: str):
+async def create_account(db, account_id: str, name: str, broker: str, login_user_id: str = "admin"):
     await db.execute(
-        "INSERT INTO accounts (id, name, broker) VALUES (?, ?, ?)",
+        """
+        INSERT INTO securities_accounts (id, login_user_id, name, broker)
+        VALUES (?, ?, ?, ?)
+        """,
+        (account_id, login_user_id or "admin", name, broker),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO accounts (id, name, broker) VALUES (?, ?, ?)",
         (account_id, name, broker),
     )
     await db.commit()
 
 
-async def fetch_watchlist_and_positions(db):
+async def fetch_watchlist_and_positions(db, login_user_id: str = "admin"):
     rows = await db.execute_fetchall(
-        "SELECT * FROM watchlist ORDER BY sort_order ASC, added_at ASC"
+        """
+        SELECT *
+        FROM watchlist
+        WHERE COALESCE(login_user_id, 'admin') = ?
+        ORDER BY sort_order ASC, added_at ASC
+        """,
+        (login_user_id or "admin",),
     )
     stocks = [dict(row) for row in rows]
     portfolio_rows = await db.execute_fetchall(
@@ -30,14 +63,19 @@ async def fetch_watchlist_and_positions(db):
                 ELSE 0
             END AS avg_cost
         FROM portfolio
+        WHERE account_id IN (
+            SELECT id FROM securities_accounts
+            WHERE login_user_id = ? AND status = 'active'
+        )
         GROUP BY code
-        """
+        """,
+        (login_user_id or "admin",),
     )
     portfolio_map = {row["code"]: dict(row) for row in portfolio_rows}
     return stocks, portfolio_map
 
 
-async def fetch_latest_report_map(db, codes: list[str]):
+async def fetch_latest_report_map(db, codes: list[str], login_user_id: str = "admin"):
     if not codes:
         return {}
     placeholders = ",".join("?" for _ in codes)
@@ -45,10 +83,11 @@ async def fetch_latest_report_map(db, codes: list[str]):
         f"""
         SELECT id, code, signal, confidence, risk_score, created_at
         FROM analysis_reports
-        WHERE code IN ({placeholders})
+        WHERE COALESCE(login_user_id, 'admin') = ?
+          AND code IN ({placeholders})
         ORDER BY code ASC, datetime(created_at) DESC, id DESC
         """,
-        codes,
+        [login_user_id or "admin", *codes],
     )
     latest = {}
     for row in rows:
@@ -59,29 +98,43 @@ async def fetch_latest_report_map(db, codes: list[str]):
     return latest
 
 
-async def next_watchlist_sort_order(db):
-    row = await (await db.execute("SELECT COALESCE(MAX(sort_order), 0) FROM watchlist")).fetchone()
+async def next_watchlist_sort_order(db, login_user_id: str = "admin"):
+    row = await (
+        await db.execute(
+            """
+            SELECT COALESCE(MAX(sort_order), 0)
+            FROM watchlist
+            WHERE COALESCE(login_user_id, 'admin') = ?
+            """,
+            (login_user_id or "admin",),
+        )
+    ).fetchone()
     return (row[0] if row else 0) + 1
 
 
-async def fetch_watchlist_codes(db, codes: list[str]):
+async def fetch_watchlist_codes(db, codes: list[str], login_user_id: str = "admin"):
     if not codes:
         return set()
     placeholders = ",".join("?" for _ in codes)
     rows = await db.execute_fetchall(
-        f"SELECT code FROM watchlist WHERE code IN ({placeholders})",
-        codes,
+        f"""
+        SELECT code
+        FROM watchlist
+        WHERE COALESCE(login_user_id, 'admin') = ?
+          AND code IN ({placeholders})
+        """,
+        [login_user_id or "admin", *codes],
     )
     return {row["code"] for row in rows}
 
 
-async def insert_watchlist_stock(db, req, sort_order: int):
+async def insert_watchlist_stock(db, req, sort_order: int, login_user_id: str = "admin"):
     await db.execute(
         """
         INSERT OR IGNORE INTO watchlist (
             code, name, group_name, sort_order, strategy_state,
-            target_buy_price, target_sell_price, stop_loss_price, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            target_buy_price, target_sell_price, stop_loss_price, notes, login_user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             req.code,
@@ -93,48 +146,120 @@ async def insert_watchlist_stock(db, req, sort_order: int):
             req.target_sell_price,
             req.stop_loss_price,
             req.notes,
+            login_user_id or "admin",
         ),
     )
     await db.commit()
-    row = await (await db.execute("SELECT * FROM watchlist WHERE code = ?", (req.code,))).fetchone()
+    row = await (
+        await db.execute(
+            """
+            SELECT *
+            FROM watchlist
+            WHERE code = ? AND COALESCE(login_user_id, 'admin') = ?
+            """,
+            (req.code, login_user_id or "admin"),
+        )
+    ).fetchone()
     return dict(row) if row else {"code": req.code, "name": req.name}
 
 
-async def delete_watchlist_stock(db, code: str):
-    cursor = await db.execute("DELETE FROM watchlist WHERE code = ?", (code,))
+async def delete_watchlist_stock(db, code: str, login_user_id: str = "admin"):
+    cursor = await db.execute(
+        "DELETE FROM watchlist WHERE code = ? AND COALESCE(login_user_id, 'admin') = ?",
+        (code, login_user_id or "admin"),
+    )
     await db.commit()
     return cursor.rowcount
 
 
-async def delete_watchlist_stocks(db, codes: list[str]):
+async def delete_watchlist_stocks(db, codes: list[str], login_user_id: str = "admin"):
     if not codes:
         return 0
     placeholders = ",".join("?" for _ in codes)
-    cursor = await db.execute(f"DELETE FROM watchlist WHERE code IN ({placeholders})", codes)
+    cursor = await db.execute(
+        f"""
+        DELETE FROM watchlist
+        WHERE COALESCE(login_user_id, 'admin') = ?
+          AND code IN ({placeholders})
+        """,
+        [login_user_id or "admin", *codes],
+    )
     await db.commit()
     return cursor.rowcount
 
 
-async def update_watchlist_stock(db, code: str, updates: dict):
+async def update_watchlist_stock(db, code: str, updates: dict, login_user_id: str = "admin"):
     if not updates:
         return None
     columns = [f"{key} = ?" for key in updates]
-    params = list(updates.values()) + [code]
+    params = list(updates.values()) + [code, login_user_id or "admin"]
     cursor = await db.execute(
-        f"UPDATE watchlist SET {', '.join(columns)} WHERE code = ?",
+        f"""
+        UPDATE watchlist
+        SET {', '.join(columns)}
+        WHERE code = ? AND COALESCE(login_user_id, 'admin') = ?
+        """,
         params,
     )
     await db.commit()
     return cursor.rowcount
 
 
-async def reorder_watchlist(db, items):
+async def reorder_watchlist(db, items, login_user_id: str = "admin"):
     for item in items:
         await db.execute(
-            "UPDATE watchlist SET sort_order = ? WHERE code = ?",
-            (item.sort_order, item.code),
+            """
+            UPDATE watchlist
+            SET sort_order = ?
+            WHERE code = ? AND COALESCE(login_user_id, 'admin') = ?
+            """,
+            (item.sort_order, item.code, login_user_id or "admin"),
         )
     await db.commit()
+
+
+async def update_account(db, account_id: str, login_user_id: str, values: dict):
+    allowed = {
+        key: values[key]
+        for key in ("name", "broker", "account_no_mask", "notes", "display_order")
+        if key in values
+    }
+    if not allowed:
+        return 0
+    assignments = [f"{key} = ?" for key in allowed]
+    params = list(allowed.values()) + [account_id, login_user_id or "admin"]
+    cursor = await db.execute(
+        f"""
+        UPDATE securities_accounts
+        SET {', '.join(assignments)}, updated_at = datetime('now')
+        WHERE id = ? AND login_user_id = ?
+        """,
+        params,
+    )
+    if "name" in allowed or "broker" in allowed:
+        await db.execute(
+            """
+            UPDATE accounts
+            SET name = COALESCE(?, name), broker = COALESCE(?, broker)
+            WHERE id = ?
+            """,
+            (allowed.get("name"), allowed.get("broker"), account_id),
+        )
+    await db.commit()
+    return cursor.rowcount
+
+
+async def archive_account(db, account_id: str, login_user_id: str):
+    cursor = await db.execute(
+        """
+        UPDATE securities_accounts
+        SET status = 'archived', updated_at = datetime('now')
+        WHERE id = ? AND login_user_id = ? AND is_default = 0
+        """,
+        (account_id, login_user_id or "admin"),
+    )
+    await db.commit()
+    return cursor.rowcount
 
 
 async def fetch_trades(db, code=None, account_id=None):
@@ -236,17 +361,26 @@ async def apply_trade_cash_effect(db, trade: dict, *, reverse: bool = False):
     return {"account_id": aid, "cash": new_cash, "amount": delta, "direction": direction}
 
 
-async def fetch_trade_stats(db, code: str):
+async def fetch_trade_stats(db, code: str, account_id: str | None = "default"):
     lowest_row = await (
         await db.execute(
-            "SELECT MIN(price) as lowest_buy_price FROM trades WHERE code = ? AND direction = 'buy'",
-            (code,),
+            """
+            SELECT MIN(price) as lowest_buy_price
+            FROM trades
+            WHERE code = ? AND direction = 'buy' AND (? IS NULL OR account_id = ?)
+            """,
+            (code, account_id, account_id),
         )
     ).fetchone()
     latest_row = await (
         await db.execute(
-            "SELECT price FROM trades WHERE code = ? AND direction = 'buy' ORDER BY trade_time DESC LIMIT 1",
-            (code,),
+            """
+            SELECT price
+            FROM trades
+            WHERE code = ? AND direction = 'buy' AND (? IS NULL OR account_id = ?)
+            ORDER BY trade_time DESC LIMIT 1
+            """,
+            (code, account_id, account_id),
         )
     ).fetchone()
     return {
@@ -261,13 +395,21 @@ async def delete_trade(db, trade_id: int):
     return cursor.rowcount
 
 
-async def count_stock_trades(db, code: str):
-    row = await (await db.execute("SELECT COUNT(*) as cnt FROM trades WHERE code = ?", (code,))).fetchone()
+async def count_stock_trades(db, code: str, account_id: str | None = None):
+    row = await (
+        await db.execute(
+            "SELECT COUNT(*) as cnt FROM trades WHERE code = ? AND (? IS NULL OR account_id = ?)",
+            (code, account_id, account_id),
+        )
+    ).fetchone()
     return dict(row)["cnt"] if row else 0
 
 
-async def delete_stock_trades(db, code: str):
-    await db.execute("DELETE FROM trades WHERE code = ?", (code,))
+async def delete_stock_trades(db, code: str, account_id: str | None = None):
+    await db.execute(
+        "DELETE FROM trades WHERE code = ? AND (? IS NULL OR account_id = ?)",
+        (code, account_id, account_id),
+    )
     await db.commit()
 
 
@@ -464,12 +606,15 @@ async def fetch_cash_ledger(db, account_id: str | None = None, limit: int = 20):
     return [dict(row) for row in rows]
 
 
-async def fetch_daily_pnl(db, year: int, month: int, code: str | None = None):
+async def fetch_daily_pnl(db, year: int, month: int, code: str | None = None, account_id: str | None = "default"):
     params = [str(year), f"{month:02d}"]
     query = (
-        "SELECT date, code6, pnl, close_price, shares, total_pnl "
+        "SELECT date, account_id, code6, pnl, close_price, shares, total_pnl "
         "FROM daily_pnl WHERE strftime('%Y', date) = ? AND strftime('%m', date) = ?"
     )
+    if account_id:
+        query += " AND account_id = ?"
+        params.append(account_id)
     if code:
         query += " AND code6 = ?"
         params.append(code[:6])
@@ -489,47 +634,6 @@ def _where_clause(filters: dict):
     return where, params
 
 
-async def fetch_conditional_orders(db, status=None, account_id=None):
-    where, params = _where_clause({"status": status, "account_id": account_id})
-    rows = await db.execute_fetchall(
-        f"SELECT * FROM conditional_orders{where} ORDER BY created_at DESC",
-        params,
-    )
-    return [dict(row) for row in rows]
-
-
-async def insert_conditional_order(db, req):
-    await db.execute(
-        """
-        INSERT INTO conditional_orders
-            (code, name, condition_type, target_price, action, shares, notes, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            req.code,
-            req.name,
-            req.condition_type,
-            req.target_price,
-            req.action,
-            req.shares,
-            req.notes,
-            req.expires_at,
-        ),
-    )
-    await db.commit()
-    row = await (await db.execute("SELECT last_insert_rowid()")).fetchone()
-    return row[0]
-
-
-async def cancel_conditional_order(db, order_id: int):
-    cursor = await db.execute(
-        "UPDATE conditional_orders SET status = 'cancelled' WHERE id = ?",
-        (order_id,),
-    )
-    await db.commit()
-    return cursor.rowcount
-
-
 async def fetch_pending_positions(db, account_id=None):
     where, params = _where_clause({"account_id": account_id})
     rows = await db.execute_fetchall(
@@ -540,11 +644,12 @@ async def fetch_pending_positions(db, account_id=None):
 
 
 async def insert_pending_position(db, req, plan_total_cost):
+    account_id = getattr(req, "account_id", None) or "default"
     await db.execute(
         """
         INSERT INTO pending_positions
-            (code, name, target_buy_price, plan_shares, plan_total_cost, reason, strategy_state)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (code, name, target_buy_price, plan_shares, plan_total_cost, reason, strategy_state, account_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             req.code,
@@ -554,6 +659,7 @@ async def insert_pending_position(db, req, plan_total_cost):
             plan_total_cost,
             req.reason,
             req.strategy_state,
+            account_id,
         ),
     )
     await db.commit()
@@ -562,12 +668,13 @@ async def insert_pending_position(db, req, plan_total_cost):
 
 
 async def update_pending_position(db, position_id: int, req, plan_total_cost):
+    account_id = getattr(req, "account_id", None)
     cursor = await db.execute(
         """
         UPDATE pending_positions
         SET code=?, name=?, target_buy_price=?, plan_shares=?,
             plan_total_cost=?, reason=?, strategy_state=?
-        WHERE id=?
+        WHERE id=? AND (? IS NULL OR account_id = ?)
         """,
         (
             req.code,
@@ -578,14 +685,19 @@ async def update_pending_position(db, position_id: int, req, plan_total_cost):
             req.reason,
             req.strategy_state,
             position_id,
+            account_id,
+            account_id,
         ),
     )
     await db.commit()
     return cursor.rowcount
 
 
-async def delete_pending_position(db, position_id: int):
-    cursor = await db.execute("DELETE FROM pending_positions WHERE id=?", (position_id,))
+async def delete_pending_position(db, position_id: int, account_id: str | None = None):
+    cursor = await db.execute(
+        "DELETE FROM pending_positions WHERE id=? AND (? IS NULL OR account_id = ?)",
+        (position_id, account_id, account_id),
+    )
     await db.commit()
     return cursor.rowcount
 
@@ -614,23 +726,33 @@ async def delete_buy_point(db, point_id: int):
     return cursor.rowcount
 
 
-async def fetch_day_trades(db, day: str):
+async def fetch_day_trades(db, day: str, account_id: str | None = "default"):
+    params = [day]
+    where = "WHERE date(trade_time) = ?"
+    if account_id:
+        where += " AND account_id = ?"
+        params.append(account_id)
     rows = await db.execute_fetchall(
-        """
+        f"""
         SELECT code, name, direction, price, shares, amount
         FROM trades
-        WHERE date(trade_time) = ?
+        {where}
         ORDER BY trade_time ASC
         """,
-        (day,),
+        params,
     )
     return [dict(row) for row in rows]
 
 
-async def fetch_daily_pnl_day(db, day: str):
+async def fetch_daily_pnl_day(db, day: str, account_id: str | None = "default"):
+    params = [day]
+    where = "WHERE date = ?"
+    if account_id:
+        where += " AND account_id = ?"
+        params.append(account_id)
     rows = await db.execute_fetchall(
-        "SELECT * FROM daily_pnl WHERE date = ? ORDER BY code6",
-        (day,),
+        f"SELECT * FROM daily_pnl {where} ORDER BY code6",
+        params,
     )
     if not rows:
         return None
@@ -645,15 +767,20 @@ async def fetch_daily_pnl_day(db, day: str):
     return result
 
 
-async def fetch_daily_pnl_stock_rows_day(db, day: str):
+async def fetch_daily_pnl_stock_rows_day(db, day: str, account_id: str | None = "default"):
+    params = [day]
+    account_filter = ""
+    if account_id:
+        account_filter = "AND account_id = ?"
+        params.append(account_id)
     rows = await db.execute_fetchall(
-        """
-        SELECT date, code6, pnl, close_price, shares
+        f"""
+        SELECT date, account_id, code6, pnl, close_price, shares
         FROM daily_pnl
-        WHERE date = ? AND COALESCE(code6, '') <> ''
+        WHERE date = ? {account_filter} AND COALESCE(code6, '') <> ''
         ORDER BY code6
         """,
-        (day,),
+        params,
     )
     return [dict(row) for row in rows]
 
@@ -668,12 +795,13 @@ async def fetch_trading_plans(db, status=None, account_id=None):
 
 
 async def insert_trading_plan(db, req, plan_total_cost):
+    account_id = getattr(req, "account_id", None) or "default"
     await db.execute(
         """
         INSERT INTO trading_plans (
             code, name, direction, plan_type, target_price, condition_type,
-            plan_shares, plan_total_cost, reason, status, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            plan_shares, plan_total_cost, reason, status, expires_at, account_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             req.code,
@@ -687,6 +815,7 @@ async def insert_trading_plan(db, req, plan_total_cost):
             req.reason,
             req.status,
             req.expires_at,
+            account_id,
         ),
     )
     await db.commit()
@@ -695,13 +824,14 @@ async def insert_trading_plan(db, req, plan_total_cost):
 
 
 async def update_trading_plan(db, plan_id: int, req, plan_total_cost):
+    account_id = getattr(req, "account_id", None)
     cursor = await db.execute(
         """
         UPDATE trading_plans
         SET code=?, name=?, direction=?, plan_type=?, target_price=?,
             condition_type=?, plan_shares=?, plan_total_cost=?, reason=?,
             status=?, expires_at=?
-        WHERE id=?
+        WHERE id=? AND (? IS NULL OR account_id = ?)
         """,
         (
             req.code,
@@ -716,13 +846,18 @@ async def update_trading_plan(db, plan_id: int, req, plan_total_cost):
             req.status,
             req.expires_at,
             plan_id,
+            account_id,
+            account_id,
         ),
     )
     await db.commit()
     return cursor.rowcount
 
 
-async def delete_trading_plan(db, plan_id: int):
-    cursor = await db.execute("DELETE FROM trading_plans WHERE id=?", (plan_id,))
+async def delete_trading_plan(db, plan_id: int, account_id: str | None = None):
+    cursor = await db.execute(
+        "DELETE FROM trading_plans WHERE id=? AND (? IS NULL OR account_id = ?)",
+        (plan_id, account_id, account_id),
+    )
     await db.commit()
     return cursor.rowcount

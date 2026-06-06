@@ -21,6 +21,15 @@
     let modelProviders = [];
     let workerStatusCache = null;
     let selectedPositionPlanId = '';
+    let activeSelectionSet = null;
+    let selectedSelectionCodes = [];
+    let researchStockCache = [];
+    let researchStockSearchText = '';
+    let researchStockMarketFilter = 'tradable';
+    const selectedResearchStockCodes = new Set();
+    const researchStockSignalFilters = new Set();
+    const dailyDecisionSignalFilters = new Set();
+    let dailyDecisionSignalsBound = false;
     const selected = new Set();
     const selectedSignals = new Set();
     let reportMarketFilter = 'all';
@@ -35,13 +44,21 @@
     ];
 
     document.addEventListener('DOMContentLoaded', initReportLibrary);
+    document.addEventListener('DOMContentLoaded', () => setTimeout(loadSelectionIntake, 50));
+    if (document.readyState !== 'loading') setTimeout(loadSelectionIntake, 50);
 
     async function initReportLibrary() {
         if (window.StockMarketPermissions?.load) await window.StockMarketPermissions.load();
+        bindDailyDecisionSignalButtons();
         renderReportMarketFilterState();
+        renderResearchStockMarketFilterState();
+        renderResearchStockSignalFilterState();
+        switchResearchSidebarTab(new URLSearchParams(window.location.search).get('sidebar') || 'stocks');
+        await loadResearchStockPickerStocks();
         await loadReportLibrary();
         const tab = new URLSearchParams(window.location.search).get('tab');
         if (tab) switchReportTab(tab);
+        await loadSelectionIntake();
     }
 
     async function requestJson(url, options) {
@@ -54,12 +71,404 @@
         return data;
     }
 
+    function selectedAccountId() {
+        return localStorage.getItem('accountId') || 'default';
+    }
+
+    function withAccount(url) {
+        const accountId = selectedAccountId();
+        if (!accountId || accountId === 'all') return url;
+        const join = url.includes('?') ? '&' : '?';
+        return `${url}${join}account_id=${encodeURIComponent(accountId)}`;
+    }
+
+    async function loadSelectionIntake() {
+        const selectionId = new URLSearchParams(window.location.search).get('selection_id');
+        const banner = document.getElementById('selectionIntakeBanner');
+        if (!selectionId) {
+            if (banner) banner.style.display = 'none';
+            return;
+        }
+        try {
+            activeSelectionSet = await requestJson(`/api/report-selections/${encodeURIComponent(selectionId)}`);
+            selectedSelectionCodes = (activeSelectionSet.codes || []).map(code => String(code)).filter(Boolean);
+            selectedSelectionCodes.forEach(code => selectedResearchStockCodes.add(String(code)));
+            switchResearchSidebarTab('stocks');
+            renderResearchStockPicker();
+            renderSelectionIntake();
+            const targetTab = new URLSearchParams(window.location.search).get('tab') || activeSelectionSet.filters?.target_tab || 'jobs';
+            switchReportTab(targetTab);
+        } catch (err) {
+            activeSelectionSet = null;
+            selectedSelectionCodes = [];
+            if (banner) {
+                banner.style.display = 'flex';
+                banner.classList.add('selection-intake-error');
+            }
+            const text = document.getElementById('selectionIntakeText');
+            if (text) text.textContent = `选择集读取失败：${err.message}`;
+        }
+    }
+
+    function renderSelectionIntake() {
+        const banner = document.getElementById('selectionIntakeBanner');
+        const text = document.getElementById('selectionIntakeText');
+        if (!banner || !activeSelectionSet) return;
+        banner.classList.remove('selection-intake-error');
+        banner.style.display = 'flex';
+        const filters = activeSelectionSet.filters || {};
+        const signalText = (filters.last_report_signals || []).length
+            ? `上次信号：${filters.last_report_signals.map(sig => SIG_LABEL[sig] || sig).join('、')}`
+            : '未限制上次信号';
+        if (text) {
+            text.textContent = `${activeSelectionSet.source_label || '智能盯盘'} · ${selectedSelectionCodes.length} 只股票 · ${signalText}`;
+        }
+        const summary = document.getElementById('selectionTaskSummary');
+        if (summary) summary.textContent = `当前选择集 ${activeSelectionSet.selection_id}，共 ${selectedSelectionCodes.length} 只：${selectedSelectionCodes.slice(0, 12).join('、')}${selectedSelectionCodes.length > 12 ? '...' : ''}`;
+    }
+
+    function clearSelectionIntake() {
+        activeSelectionSet = null;
+        selectedSelectionCodes = [];
+        const banner = document.getElementById('selectionIntakeBanner');
+        if (banner) banner.style.display = 'none';
+    }
+
+    function openSelectionTaskModal(defaultType = 'report_generation') {
+        if (!selectedSelectionCodes.length) return alert('当前没有来自智能盯盘的选择集');
+        selectedSelectionCodes.forEach(code => selectedResearchStockCodes.add(String(code)));
+        switchResearchSidebarTab('stocks');
+        renderResearchStockPicker();
+        renderSelectionIntake();
+        openResearchStockTaskModal(defaultType);
+    }
+
+    function closeSelectionTaskModal() {
+        closeResearchStockTaskModal();
+    }
+
+    async function createBatchJobFromSelection(type) {
+        if (!selectedSelectionCodes.length) return alert('当前没有来自智能盯盘的选择集');
+        selectedSelectionCodes.forEach(code => selectedResearchStockCodes.add(String(code)));
+        switchResearchSidebarTab('stocks');
+        renderResearchStockPicker();
+        return createBatchJobFromResearchStocks(type);
+    }
+
+    async function createPositionPlanFromSelection() {
+        await createBatchJobFromSelection('position_plan');
+    }
+
+    async function submitSelectionTaskModal() {
+        const type = document.getElementById('researchStockTaskTypeInput')?.value || 'report_generation';
+        if (type === 'position_plan') return createPositionPlanFromSelection();
+        return createBatchJobFromSelection(type);
+    }
+
+    function showReportToast(message, type = 'info', duration = 3200) {
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.style.cssText = 'position:fixed;top:16px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:8px;';
+            document.body.appendChild(container);
+        }
+        const toast = document.createElement('div');
+        const colors = { success: '#52B788', error: '#E07A5F', info: '#4A90D9', warn: '#E9C46A', warning: '#E9C46A' };
+        toast.style.cssText = `padding:10px 16px;border-radius:8px;color:#fff;font-size:0.85rem;background:${colors[type] || colors.info};box-shadow:0 4px 12px rgba(0,0,0,0.3);opacity:0;transform:translateX(40px);transition:all 0.3s ease;max-width:360px;`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        requestAnimationFrame(() => {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateX(0)';
+        });
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(40px)';
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
+
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     }
 
     function escapeAttr(value) {
         return escapeHtml(value).replace(/`/g, '&#96;');
+    }
+
+    function switchResearchSidebarTab(tab) {
+        const target = tab === 'reports' ? 'reports' : 'stocks';
+        document.querySelectorAll('#researchSidebarTabs button').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.sidebarTab === target);
+        });
+        document.querySelectorAll('.research-sidebar-panel').forEach(panel => {
+            panel.classList.toggle('active', panel.dataset.sidebarPanel === target);
+        });
+    }
+
+    async function loadResearchStockPickerStocks() {
+        const box = document.getElementById('researchStockList');
+        if (box) box.innerHTML = '<div class="library-empty-state">正在加载自选股...</div>';
+        try {
+            const data = await requestJson('/api/watchlist');
+            researchStockCache = (data.stocks || []).slice();
+            renderResearchStockPicker();
+        } catch (err) {
+            if (box) box.innerHTML = `<div class="library-empty-state">自选股加载失败：${escapeHtml(err.message)}</div>`;
+        }
+    }
+
+    function normalizeResearchStockSearch(value) {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    function researchStockLastSignal(stock) {
+        return stock.last_report_signal || 'NO_REPORT';
+    }
+
+    function researchStockSignalRank(signal) {
+        return {
+            STRONG_BUY: 1,
+            BUY: 2,
+            OVERWEIGHT: 3,
+            HOLD: 4,
+            UNDERWEIGHT: 5,
+            SELL: 6,
+            STRONG_SELL: 7,
+            NO_REPORT: 8
+        }[signal] || 99;
+    }
+
+    function researchStockMatchesSearch(stock, query) {
+        if (!query) return true;
+        return [stock.code, stock.name, stock.pinyin, stock.group_name]
+            .some(value => String(value || '').toLowerCase().includes(query));
+    }
+
+    function researchStockMatchesMarket(stock) {
+        return window.StockMarketPermissions?.matchesFilter?.(stock.code, researchStockMarketFilter) ?? true;
+    }
+
+    function researchStockMatchesSignal(stock) {
+        return !researchStockSignalFilters.size || researchStockSignalFilters.has(researchStockLastSignal(stock));
+    }
+
+    function visibleResearchStocks() {
+        const query = normalizeResearchStockSearch(researchStockSearchText);
+        return researchStockCache
+            .filter(stock => researchStockMatchesSearch(stock, query))
+            .filter(researchStockMatchesMarket)
+            .filter(researchStockMatchesSignal)
+            .sort((a, b) => {
+                const ar = researchStockSignalRank(researchStockLastSignal(a));
+                const br = researchStockSignalRank(researchStockLastSignal(b));
+                if (ar !== br) return ar - br;
+                return String(a.code || '').localeCompare(String(b.code || ''));
+            });
+    }
+
+    function renderResearchStockPicker() {
+        const box = document.getElementById('researchStockList');
+        if (!box) return;
+        const stocks = visibleResearchStocks();
+        if (!stocks.length) {
+            box.innerHTML = '<div class="library-empty-state">暂无符合条件的股票</div>';
+            updateResearchStockSelectionSummary();
+            return;
+        }
+        box.innerHTML = stocks.map(stock => {
+            const code = String(stock.code || '');
+            const checked = selectedResearchStockCodes.has(code);
+            const signal = researchStockLastSignal(stock);
+            const signalLabel = signal === 'NO_REPORT' ? '无报告' : (SIG_LABEL[signal] || signal);
+            const signalClass = signal.toLowerCase().replace(/_/g, '-');
+            const market = window.StockMarketPermissions?.classify?.(code) || { label: '未知' };
+            const price = Number(stock.price || 0);
+            const changePct = Number(stock.change_pct || 0);
+            const cls = changePct > 0 ? 'up' : (changePct < 0 ? 'down' : 'flat');
+            const change = Number(stock.change || 0);
+            const changeText = Number.isFinite(change) && change
+                ? `${change >= 0 ? '+' : ''}${change.toFixed(3)}元`
+                : '--';
+            const priceText = Number.isFinite(price) && price > 0 ? price.toFixed(3) : '--';
+            const pctText = Number.isFinite(changePct) ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(3)}%` : '--';
+            return `<div class="stock-card research-stock-card ${checked ? 'active selected' : ''}" data-code="${escapeAttr(code)}" onclick="toggleResearchStockSelection('${escapeAttr(code)}')">
+                <div class="stock-card-inner research-stock-card-inner">
+                    <div class="research-stock-check" onclick="event.stopPropagation()">
+                        <input type="checkbox" aria-label="选择 ${escapeAttr(stock.name || code)}" ${checked ? 'checked' : ''} onchange="toggleResearchStockSelection('${escapeAttr(code)}', this.checked)">
+                    </div>
+                    <div class="sc-left">
+                        <div>
+                            <div class="sc-name">${escapeHtml(stock.name || code)}</div>
+                            <div class="sc-code">${escapeHtml(code)}</div>
+                        </div>
+                        <div class="sc-last-signal report-signal signal-${escapeHtml(signalClass)}">上次 ${escapeHtml(signalLabel)} · ${escapeHtml(market.label || '未知')}</div>
+                        <div class="sc-price ${cls}">${escapeHtml(priceText)}<span class="sc-price-unit">元</span></div>
+                    </div>
+                    <div class="sc-right">
+                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨跌幅</span><span class="sc-data-val ${cls}">${escapeHtml(pctText)}</span></div>
+                        <div class="sc-data-row"><span class="sc-data-lbl">分组</span><span class="sc-data-val">${escapeHtml(stock.group_name || '--')}</span></div>
+                        <div class="sc-data-row"><span class="sc-data-lbl">当日涨跌额</span><span class="sc-data-val ${cls}">${escapeHtml(changeText)}</span></div>
+                    </div>
+                </div>
+                <div class="stock-card-bar ${cls}"></div>
+            </div>`;
+        }).join('');
+        updateResearchStockSelectionSummary();
+    }
+
+    function toggleResearchStockSelection(code, explicitValue) {
+        const clean = String(code || '');
+        if (!clean) return;
+        const checked = explicitValue == null ? !selectedResearchStockCodes.has(clean) : !!explicitValue;
+        if (checked) selectedResearchStockCodes.add(clean);
+        else selectedResearchStockCodes.delete(clean);
+        renderResearchStockPicker();
+    }
+
+    function selectVisibleResearchStocks() {
+        visibleResearchStocks().forEach(stock => {
+            const code = String(stock.code || '');
+            if (code) selectedResearchStockCodes.add(code);
+        });
+        renderResearchStockPicker();
+    }
+
+    function clearResearchStockSelection() {
+        selectedResearchStockCodes.clear();
+        renderResearchStockPicker();
+    }
+
+    function updateResearchStockSelectionSummary() {
+        const count = document.getElementById('selectedResearchStockCount');
+        if (count) count.textContent = String(selectedResearchStockCodes.size);
+    }
+
+    function filterResearchStockPicker(value) {
+        researchStockSearchText = value || '';
+        renderResearchStockPicker();
+    }
+
+    function renderResearchStockMarketFilterState() {
+        document.querySelectorAll('#researchStockMarketFilters .signal-filter-chip').forEach(btn => {
+            btn.classList.toggle('active', (btn.dataset.market || 'tradable') === researchStockMarketFilter);
+        });
+    }
+
+    function setResearchStockMarketFilter(filter) {
+        researchStockMarketFilter = filter || 'tradable';
+        renderResearchStockMarketFilterState();
+        renderResearchStockPicker();
+    }
+
+    function renderResearchStockSignalFilterState() {
+        document.querySelectorAll('#researchStockSignalFilters .signal-filter-chip').forEach(btn => {
+            const signal = btn.dataset.signal || '';
+            btn.classList.toggle('active', signal ? researchStockSignalFilters.has(signal) : !researchStockSignalFilters.size);
+        });
+    }
+
+    function toggleResearchStockSignalFilter(signal) {
+        if (!signal) researchStockSignalFilters.clear();
+        else if (researchStockSignalFilters.has(signal)) researchStockSignalFilters.delete(signal);
+        else researchStockSignalFilters.add(signal);
+        renderResearchStockSignalFilterState();
+        renderResearchStockPicker();
+    }
+
+    function selectedResearchStockCodeList() {
+        return [...selectedResearchStockCodes]
+            .filter(code => window.StockMarketPermissions?.isAllowed?.(code) ?? true);
+    }
+
+    function researchStockTaskPayload(type) {
+        const codes = selectedResearchStockCodeList();
+        const depth = document.getElementById('researchStockDepthInput')?.value || 'standard';
+        const modelMode = document.getElementById('researchStockModelModeInput')?.value || 'balanced';
+        const forceReanalysis = !!document.getElementById('researchStockForceReanalysis')?.checked;
+        const modelTier = modelMode === 'economy' ? 'quick' : (depth === 'quick' ? 'quick' : 'deep');
+        return {
+            job_type: type,
+            codes,
+            allow_all: false,
+            skip_recent_days: type === 'data_prefetch' || forceReanalysis ? 0 : 30,
+            snapshot_concurrency: 3,
+            analysis_mode: type === 'report_generation' ? 'snapshot-tradingagents' : 'snapshot',
+            analysis_concurrency: 1,
+            analysis_depth: depth,
+            model_mode: modelMode,
+            snapshot_model_tier: modelTier,
+            plan_top_n: 10,
+            multi_role: type === 'position_plan',
+            source_page: 'research_center_stock_picker',
+            source_label: 'AI投研中心股票选择',
+            resilience_mode: 'robust',
+            quota_pause_scope: 'item',
+            failure_retry_mode: 'auto_switch_model',
+            max_auto_item_retries: 2,
+            auto_retry_delay_seconds: 60,
+            max_auto_retry_delay_seconds: 900,
+            max_runtime_cooldown_seconds: 300,
+            max_consecutive_failures: 20,
+            max_failure_rate: 0.6,
+            min_failure_rate_items: 20,
+            guard_window_items: 20
+        };
+    }
+
+    function openResearchStockTaskModal(defaultType = 'report_generation') {
+        const codes = selectedResearchStockCodeList();
+        if (!codes.length) return alert('请先在股票选择中勾选至少一只可交易股票');
+        const typeInput = document.getElementById('researchStockTaskTypeInput');
+        const summary = document.getElementById('researchStockTaskSummary');
+        if (typeInput) typeInput.value = defaultType;
+        if (summary) summary.textContent = `已选 ${codes.length} 只：${codes.slice(0, 12).join('、')}${codes.length > 12 ? '...' : ''}`;
+        document.getElementById('researchStockTaskModal')?.classList.add('show');
+    }
+
+    function closeResearchStockTaskModal() {
+        document.getElementById('researchStockTaskModal')?.classList.remove('show');
+    }
+
+    async function createBatchJobFromResearchStocks(type) {
+        const payload = researchStockTaskPayload(type);
+        if (!payload.codes.length) return alert('请先在股票选择中勾选至少一只可交易股票');
+        const labels = {
+            data_prefetch: '七层数据预取',
+            report_generation: '批量生成单股报告',
+            position_plan: '组合级多角色研究'
+        };
+        const preflight = await requestJson('/api/batch-research/preflight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const estimate = [
+            `任务：${labels[type] || type}`,
+            `股票数：${preflight.stock_count || payload.codes.length}`,
+            `预计模型调用：${preflight.estimated_role_calls || '--'} 次`,
+            `Worker：${preflight.worker_count || '--'} 个`,
+            `预计耗时：${preflight.estimated_duration_text || '--'}`,
+            ...(preflight.recommendations || [])
+        ].join('\n');
+        const warnings = preflight.warnings || [];
+        if (!confirm(`${estimate}${warnings.length ? `\n\n风险提示：\n${warnings.join('\n')}` : ''}\n\n创建任务吗？`)) return;
+        const resp = await requestJson('/api/batch-research/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        closeResearchStockTaskModal();
+        showReportToast(`任务已创建：${resp.job_id}`, 'success');
+        jobsLoaded = false;
+        switchReportTab('jobs');
+        await loadBatchJobs();
+    }
+
+    function submitResearchStockTaskModal() {
+        const type = document.getElementById('researchStockTaskTypeInput')?.value || 'report_generation';
+        return createBatchJobFromResearchStocks(type);
     }
 
     function formatPct(value) {
@@ -178,6 +587,35 @@
         }[value] || 'signal-hold';
     }
 
+    function adoptionStatusLabel(value) {
+        return {
+            pending: '待确认',
+            adopted: '已采纳',
+            ignored: '已忽略',
+            watching: '观察中'
+        }[value] || value || '待确认';
+    }
+
+    function dailyDecisionActionLabel(value) {
+        return {
+            hold: '持有',
+            reduce: '减仓',
+            sell: '卖出',
+            add: '加仓',
+            forbid_buy: '禁止买入',
+            watch: '观察'
+        }[String(value || '').trim().toLowerCase()] || positionActionLabel(value);
+    }
+
+    function decisionStatusLabel(value) {
+        return {
+            executed: '已执行',
+            not_executed: '未执行',
+            ignored: '忽略',
+            watching: '观察中'
+        }[value] || value || '未执行';
+    }
+
     function statusLabel(value) {
         return {
             pending: '等待',
@@ -187,6 +625,7 @@
             skipped: '已跳过',
             waiting_snapshot: '缺少快照',
             waiting_reports: '等待补报告',
+            report_refresh_created: '补报告已创建',
             report_refresh_failed: '补报告失败',
             cancelled: '已取消',
             manual_completed: '手动完成',
@@ -201,7 +640,7 @@
 
     function statusClass(value) {
         if (value === 'completed' || value === 'skipped' || value === 'manual_completed') return 'signal-buy';
-        if (value === 'running' || value === 'pending' || value === 'waiting_reports' || value === 'pausing' || value === 'paused' || value === 'quota_paused' || value === 'guard_paused') return 'signal-hold';
+        if (value === 'running' || value === 'pending' || value === 'waiting_reports' || value === 'report_refresh_created' || value === 'pausing' || value === 'paused' || value === 'quota_paused' || value === 'guard_paused') return 'signal-hold';
         return 'signal-sell';
     }
 
@@ -284,6 +723,13 @@
         return `${num >= 0 ? '+' : ''}${num.toFixed(3)}%`;
     }
 
+    function priceClass(value) {
+        const num = Number(value || 0);
+        if (num > 0) return 'up';
+        if (num < 0) return 'down';
+        return 'flat';
+    }
+
     function previewBackAction(jobId, title = '') {
         if (!jobId) return '';
         const encodedJobId = encodeURIComponent(jobId);
@@ -316,12 +762,12 @@
         const title = document.getElementById('reportTabTitle');
         const hint = document.getElementById('reportTabHint');
         const meta = {
-            reports: ['报告列表', '筛选、比较、勾选完整单股报告，并生成组合级多角色组合研究方案。'],
-            snapshots: ['数据快照', '查看七层数据底稿的完整性、批次、关联报告和快照详情。'],
+            reports: ['单股报告', '筛选、比较、勾选完整单股报告，并生成组合级多角色组合研究方案。'],
+            snapshots: ['七层数据', '查看七层数据底稿的完整性、批次、关联报告和快照详情。'],
             plans: ['组合研究方案', '长期保存、回看和对比多角色组合研究方案。'],
             'holding-reviews': ['每日 AI 决策报告', '回看每日持仓扫描、资产上下文、触发项和次日交易决策。'],
-            jobs: ['批量任务', '查看数据预取、报告生成和组合研究方案任务进度。']
-        }[tab] || ['报告列表', ''];
+            jobs: ['任务中心', '查看数据预取、报告生成和组合研究方案任务进度。']
+        }[tab] || ['单股报告', ''];
         if (title) title.textContent = meta[0];
         if (hint) hint.textContent = meta[1];
         if (tab === 'snapshots' && !snapshotsLoaded) loadSnapshots();
@@ -623,7 +1069,7 @@
                 <div class="preview-block">${formatMarkdown(report.risk_debate || '暂无')}</div>
                 <div class="preview-actions">
                     <a class="btn btn-sm btn-primary" href="/reports/${Number(id)}">打开完整详情页</a>
-                    <a class="btn btn-sm" href="/ai?report_id=${Number(id)}">在 AI 分析台打开</a>
+                    <a class="btn btn-sm" href="/ai?report_id=${Number(id)}">在智能盯盘打开</a>
                     <a class="btn btn-sm" href="/api/ai/report/${Number(id)}/pdf">PDF</a>
                 </div>
             `;
@@ -689,9 +1135,17 @@
             fallback_provider_ids: collectCheckedValues('planFallbackProviderGrid'),
             model_fallback_enabled: collectCheckedValues('planFallbackProviderGrid').length > 0,
             quota_exhausted_action: document.getElementById('planQuotaActionInput')?.value || 'switch_model',
-            max_consecutive_failures: 5,
-            max_failure_rate: 0.25,
-            min_failure_rate_items: 5,
+            resilience_mode: 'robust',
+            quota_pause_scope: 'item',
+            failure_retry_mode: 'auto_switch_model',
+            max_auto_item_retries: 2,
+            auto_retry_delay_seconds: 60,
+            max_auto_retry_delay_seconds: 900,
+            max_runtime_cooldown_seconds: 300,
+            max_consecutive_failures: 20,
+            max_failure_rate: 0.6,
+            min_failure_rate_items: 20,
+            guard_window_items: 20,
             title: document.getElementById('planTitleInput')?.value?.trim() || null
         };
         const preflight = await requestJson('/api/batch-research/preflight', {
@@ -987,6 +1441,14 @@
                 <td>${escapeHtml(positionActionLabel(item.action))}</td>
                 <td>${Number(item.suggested_amount || 0).toFixed(3)}</td>
                 <td>${Number(item.position_pct || 0).toFixed(3)}%</td>
+                <td><span class="report-signal ${escapeHtml(item.adoption_status === 'adopted' ? 'signal-buy' : item.adoption_status === 'ignored' ? 'signal-sell' : 'signal-hold')}">${escapeHtml(adoptionStatusLabel(item.adoption_status))}</span></td>
+                <td onclick="event.stopPropagation()">
+                    <div class="library-action-row">
+                        <button class="btn btn-xs" onclick="updatePositionPlanItemAdoption('${encodeURIComponent(planId)}', ${Number(item.id)}, 'adopted')">采纳</button>
+                        <button class="btn btn-xs" onclick="updatePositionPlanItemAdoption('${encodeURIComponent(planId)}', ${Number(item.id)}, 'watching')">观察</button>
+                        <button class="btn btn-xs" onclick="updatePositionPlanItemAdoption('${encodeURIComponent(planId)}', ${Number(item.id)}, 'ignored')">忽略</button>
+                    </div>
+                </td>
             </tr>`).join('');
             if (body) body.innerHTML = `
                 <div class="preview-signal">
@@ -1055,6 +1517,19 @@
         await previewPositionPlan(encodeURIComponent(planId));
     }
 
+    async function updatePositionPlanItemAdoption(encodedPlanId, itemId, adoptionStatus) {
+        const planId = decodeURIComponent(encodedPlanId);
+        await requestJson(`/api/position-plans/${encodeURIComponent(planId)}/items/${Number(itemId)}/adoption`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ adoption_status: adoptionStatus })
+        });
+        showReportToast(`组合研究明细已更新：${adoptionStatusLabel(adoptionStatus)}`, 'success');
+        plansLoaded = false;
+        await loadPositionPlans();
+        await previewPositionPlan(encodeURIComponent(planId));
+    }
+
     async function abandonPositionPlan(encodedPlanId) {
         const planId = decodeURIComponent(encodedPlanId);
         if (!confirm('确认放弃这份待确认组合研究方案？放弃后不会作为 AI 绩效基准。')) return;
@@ -1062,6 +1537,123 @@
         plansLoaded = false;
         await loadPositionPlans();
         await previewPositionPlan(encodeURIComponent(planId));
+    }
+
+    function selectedDailyDecisionSignals() {
+        return Array.from(dailyDecisionSignalFilters);
+    }
+
+    function updateDailyDecisionSignalState() {
+        document.querySelectorAll('[data-daily-signal]').forEach(button => {
+            button.classList.toggle('active', dailyDecisionSignalFilters.has(button.dataset.dailySignal));
+        });
+        const countEl = document.getElementById('dailyDecisionSignalCount');
+        const signals = selectedDailyDecisionSignals();
+        if (countEl) {
+            countEl.textContent = signals.length
+                ? `候选信号：${signals.map(signal => SIG_LABEL[signal] || signal).join('、')}`
+                : '未选择候选信号，仅分析当前持仓';
+        }
+    }
+
+    function toggleDailyDecisionSignal(signal) {
+        const cleanSignal = String(signal || '').trim().toUpperCase();
+        if (!cleanSignal || !SIG_LABEL[cleanSignal]) return;
+        if (dailyDecisionSignalFilters.has(cleanSignal)) dailyDecisionSignalFilters.delete(cleanSignal);
+        else dailyDecisionSignalFilters.add(cleanSignal);
+        updateDailyDecisionSignalState();
+    }
+
+    function clearDailyDecisionSignals() {
+        dailyDecisionSignalFilters.clear();
+        updateDailyDecisionSignalState();
+    }
+
+    function handleDailyDecisionSignalClick(event) {
+        const signalButton = event.target.closest('[data-daily-signal]');
+        if (signalButton) {
+            toggleDailyDecisionSignal(signalButton.dataset.dailySignal || '');
+            return;
+        }
+        const clearButton = event.target.closest('#dailyDecisionClearSignals');
+        if (clearButton) clearDailyDecisionSignals();
+    }
+
+    function bindDailyDecisionSignalButtons() {
+        if (!dailyDecisionSignalsBound) {
+            document.addEventListener('click', handleDailyDecisionSignalClick);
+            dailyDecisionSignalsBound = true;
+        }
+        updateDailyDecisionSignalState();
+    }
+
+    async function runDailyDecisionReport() {
+        const signalFilters = selectedDailyDecisionSignals();
+        const forceRefreshCandidates = Boolean(document.getElementById('dailyDecisionForceCandidates')?.checked);
+        const statusEl = document.getElementById('dailyDecisionRunStatus');
+        if (forceRefreshCandidates && !signalFilters.length) {
+            showReportToast('请先选择至少一个上次报告信号，再补跑候选报告。', 'warn');
+            return;
+        }
+        if (statusEl) statusEl.innerHTML = '<div class="empty-state"><p>正在提交每日 AI 决策报告任务...</p></div>';
+        try {
+            const review = await requestJson('/api/daily-decision-reports/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    account_id: selectedAccountId(),
+                    include_watchlist_candidates: signalFilters.length > 0,
+                    include_observation_pool: false,
+                    candidate_codes: [],
+                    candidate_signal_filters: selectedDailyDecisionSignals(),
+                    force_refresh_holdings: true,
+                    force_refresh_candidates: forceRefreshCandidates,
+                    refresh_snapshots_for_reports: true
+                })
+            });
+            if (review.status === 'waiting_reports' || review.status === 'report_refresh_created') {
+                const count = (review.rerun_report_codes || []).length;
+                const message = `补报告批量任务已创建：${count}只。完成后将自动生成最终每日 AI 决策报告。`;
+                if (statusEl) statusEl.innerHTML = `<div class="empty-state">
+                    <p>${escapeHtml(message)}</p>
+                    <div class="library-action-row" style="margin-top:8px;">
+                        <button class="btn btn-sm btn-primary" onclick="switchReportTab('jobs'); refreshBatchJobs()">查看批量任务</button>
+                        <button class="btn btn-sm" onclick="refreshHoldingReviews()">刷新日更</button>
+                    </div>
+                </div>`;
+                holdingReviewsLoaded = false;
+                await loadHoldingReviews();
+                showReportToast(message, 'success', 5000);
+                return;
+            }
+            if (review.status === 'report_refresh_failed') {
+                const message = review.message || `补报告任务创建失败：${review.error || '未知错误'}`;
+                if (statusEl) statusEl.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
+                showReportToast(message, 'error', 5000);
+                return;
+            }
+            holdingReviewsLoaded = false;
+            await loadHoldingReviews();
+            const message = `每日 AI 决策报告已生成：持仓${review.holding_count || 0}只，触发${review.trigger_count || 0}项`;
+            if (statusEl) statusEl.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
+            showReportToast(message, 'success');
+            if (review.review_id) await previewHoldingReview(encodeURIComponent(review.review_id));
+        } catch (err) {
+            const message = `每日 AI 决策报告生成失败：${err.message}`;
+            if (statusEl) statusEl.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
+            showReportToast(message, 'error', 5000);
+        }
+    }
+
+    async function updateDailyDecisionItemStatus(encodedReviewId, itemId, status) {
+        const reviewId = decodeURIComponent(encodedReviewId);
+        await requestJson(`/api/daily-decision-reports/${encodeURIComponent(reviewId)}/items/${Number(itemId)}/status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+        showReportToast(`每日决策建议已更新：${decisionStatusLabel(status)}`, 'success');
+        await previewHoldingReview(encodeURIComponent(reviewId));
     }
 
     async function loadHoldingReviews() {
@@ -1100,6 +1692,11 @@
         }
     }
 
+    async function refreshHoldingReviews() {
+        holdingReviewsLoaded = false;
+        await loadHoldingReviews();
+    }
+
     async function previewHoldingReview(encodedReviewId) {
         const reviewId = decodeURIComponent(encodedReviewId);
         const meta = document.getElementById('reportPreviewMeta');
@@ -1119,7 +1716,15 @@
                 <td>${Number(item.price || 0).toFixed(3)}</td>
                 <td>${Number(item.change_pct || 0).toFixed(3)}%</td>
                 <td>${Number(item.holding_pnl || 0).toFixed(3)}</td>
-                <td>${escapeHtml(positionActionLabel(item.action_hint))}</td>
+                <td>${escapeHtml(dailyDecisionActionLabel(item.decision_action || item.action_hint))}</td>
+                <td><span class="report-signal ${escapeHtml(item.decision_status === 'executed' ? 'signal-buy' : item.decision_status === 'ignored' ? 'signal-sell' : 'signal-hold')}">${escapeHtml(decisionStatusLabel(item.decision_status))}</span></td>
+                <td onclick="event.stopPropagation()">
+                    <div class="library-action-row">
+                        <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus('${encodeURIComponent(reviewId)}', ${Number(item.id)}, 'executed')">已执行</button>
+                        <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus('${encodeURIComponent(reviewId)}', ${Number(item.id)}, 'watching')">观察中</button>
+                        <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus('${encodeURIComponent(reviewId)}', ${Number(item.id)}, 'ignored')">忽略</button>
+                    </div>
+                </td>
             </tr>`).join('');
             const candidateRows = (items.items || []).filter(item => item.item_type === 'candidate').slice(0, 20).map(item => `<tr>
                 <td>${escapeHtml(item.name || item.code)}<span>${escapeHtml(item.code)}</span></td>
@@ -1127,6 +1732,15 @@
                 <td>${Number(item.price || 0).toFixed(3)}</td>
                 <td>${Number(item.change_pct || 0).toFixed(3)}%</td>
                 <td>${escapeHtml(item.latest_signal || '--')}</td>
+                <td>${escapeHtml(dailyDecisionActionLabel(item.decision_action || item.action_hint))}</td>
+                <td><span class="report-signal ${escapeHtml(item.decision_status === 'executed' ? 'signal-buy' : item.decision_status === 'ignored' ? 'signal-sell' : 'signal-hold')}">${escapeHtml(decisionStatusLabel(item.decision_status))}</span></td>
+                <td onclick="event.stopPropagation()">
+                    <div class="library-action-row">
+                        <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus('${encodeURIComponent(reviewId)}', ${Number(item.id)}, 'executed')">已执行</button>
+                        <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus('${encodeURIComponent(reviewId)}', ${Number(item.id)}, 'watching')">观察中</button>
+                        <button class="btn btn-xs" onclick="updateDailyDecisionItemStatus('${encodeURIComponent(reviewId)}', ${Number(item.id)}, 'ignored')">忽略</button>
+                    </div>
+                </td>
             </tr>`).join('');
             const flagHtml = (flags.flags || []).map(flag => `<li>
                 <strong>${escapeHtml(flag.name || flag.code)} ${escapeHtml(flag.code)}</strong>
@@ -1150,7 +1764,7 @@
                         <div><span>现金占比</span><strong>${Number(asset.cash_pct || 0).toFixed(3)}%</strong></div>
                     </div>
                 </div>
-                <h4>持仓明细</h4>
+                <h4>每日决策动作</h4>
                 <div class="preview-block"><table class="report-library-table"><tbody>${holdingRows || '<tr><td>暂无持仓</td></tr>'}</tbody></table></div>
                 <h4>触发项</h4>
                 <div class="preview-block"><ul class="structured-list">${flagHtml || '<li>暂无异常触发项</li>'}</ul></div>
@@ -1640,7 +2254,7 @@
         const fullItems = await fetchReportsForExport(items);
         const content = type === 'json'
             ? JSON.stringify(fullItems, null, 2)
-            : ['# AI报告库导出', '', `- 导出报告数：${fullItems.length}`, `- 导出时间：${formatTime(new Date().toISOString())}`, '', ...fullItems.map(formatReportMarkdown)].join('\n');
+            : ['# AI投研中心导出', '', `- 导出报告数：${fullItems.length}`, `- 导出时间：${formatTime(new Date().toISOString())}`, '', ...fullItems.map(formatReportMarkdown)].join('\n');
         const blob = new Blob([content], { type: type === 'json' ? 'application/json' : 'text/markdown;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1655,6 +2269,17 @@
     window.filterReportLibrary = filterReportLibrary;
     window.toggleSignalFilter = toggleSignalFilter;
     window.setReportMarketFilter = setReportMarketFilter;
+    window.switchResearchSidebarTab = switchResearchSidebarTab;
+    window.filterResearchStockPicker = filterResearchStockPicker;
+    window.setResearchStockMarketFilter = setResearchStockMarketFilter;
+    window.toggleResearchStockSignalFilter = toggleResearchStockSignalFilter;
+    window.toggleResearchStockSelection = toggleResearchStockSelection;
+    window.selectVisibleResearchStocks = selectVisibleResearchStocks;
+    window.clearResearchStockSelection = clearResearchStockSelection;
+    window.openResearchStockTaskModal = openResearchStockTaskModal;
+    window.closeResearchStockTaskModal = closeResearchStockTaskModal;
+    window.submitResearchStockTaskModal = submitResearchStockTaskModal;
+    window.createBatchJobFromResearchStocks = createBatchJobFromResearchStocks;
     window.toggleReportGroup = toggleReportGroup;
     window.toggleReportGroupSelection = toggleReportGroupSelection;
     window.switchReportTab = switchReportTab;
@@ -1662,10 +2287,23 @@
     window.previewSnapshot = previewSnapshot;
     window.previewPositionPlan = previewPositionPlan;
     window.loadHoldingReviews = loadHoldingReviews;
+    window.refreshHoldingReviews = refreshHoldingReviews;
     window.previewHoldingReview = previewHoldingReview;
+    window.runDailyDecisionReport = runDailyDecisionReport;
+    window.loadSelectionIntake = loadSelectionIntake;
+    window.clearSelectionIntake = clearSelectionIntake;
+    window.openSelectionTaskModal = openSelectionTaskModal;
+    window.closeSelectionTaskModal = closeSelectionTaskModal;
+    window.submitSelectionTaskModal = submitSelectionTaskModal;
+    window.createBatchJobFromSelection = createBatchJobFromSelection;
+    window.createPositionPlanFromSelection = createPositionPlanFromSelection;
+    window.updateDailyDecisionItemStatus = updateDailyDecisionItemStatus;
+    window.toggleDailyDecisionSignal = toggleDailyDecisionSignal;
+    window.clearDailyDecisionSignals = clearDailyDecisionSignals;
     window.archivePositionPlan = archivePositionPlan;
     window.adoptPositionPlan = adoptPositionPlan;
     window.partiallyAdoptPositionPlan = partiallyAdoptPositionPlan;
+    window.updatePositionPlanItemAdoption = updatePositionPlanItemAdoption;
     window.abandonPositionPlan = abandonPositionPlan;
     window.toggleReportSelection = toggleReportSelection;
     window.toggleAllReports = toggleAllReports;

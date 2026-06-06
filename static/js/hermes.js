@@ -216,9 +216,6 @@ function hermesToolRunDetail(run) {
     if (run.tool === 'set_position') {
         return `目标持仓 ${args.shares ?? '-'} 股${args.price ? `，参考价 ${args.price}` : ''}`;
     }
-    if (run.tool === 'create_conditional_order') {
-        return `${args.trade_action === 'sell' ? '卖出' : '买入'} · ${conditionLabel(args.condition_type)} ${args.target_price || '-'}`;
-    }
     if (run.tool === 'add_watchlist') {
         return '加入默认自选分组';
     }
@@ -234,7 +231,6 @@ function toolLabel(tool) {
         add_watchlist: '添加自选股',
         record_trade: '记录交易',
         set_position: '校准持仓',
-        create_conditional_order: '创建条件单',
     }[tool] || tool || '工具调用';
 }
 
@@ -469,23 +465,10 @@ function formatHermesDraftRows(draft) {
     } else if (action === 'set_position') {
         push('目标持仓', payload.shares ? `${payload.shares} 股` : '');
         push('参考价格', payload.price || '沿用现有均价');
-    } else if (action === 'create_conditional_order') {
-        push('方向', payload.trade_action === 'sell' ? '卖出' : '买入');
-        push('触发条件', `${conditionLabel(payload.condition_type)} ${payload.target_price || '待补充'}`);
-        push('数量', payload.shares ? `${payload.shares} 股` : '未指定');
     } else if (action === 'add_watchlist') {
         push('加入分组', '默认');
     }
     return rows.join('');
-}
-
-function conditionLabel(value) {
-    return {
-        price_lte: '价格不高于',
-        price_gte: '价格不低于',
-        change_pct_gte: '涨幅达到',
-        change_pct_lte: '跌幅达到',
-    }[value] || value || '';
 }
 
 async function sendHermesMessage(event) {

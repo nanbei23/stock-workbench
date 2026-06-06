@@ -11,7 +11,7 @@ from models import database
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION_SCRIPT = ROOT / "scripts" / "migrate_2_8_1_to_2_9.py"
+MIGRATION_SCRIPT = ROOT / "scripts" / "migrate_to_3_0.py"
 DEPLOY_SCRIPT = ROOT / "scripts" / "deploy_macos_x86.sh"
 BUILD_INSTALLER_SCRIPT = ROOT / "scripts" / "build_macos_x86_installer.sh"
 WORKER_INSTALL_SCRIPT = ROOT / "scripts" / "worker_install_launchd.sh"
@@ -21,6 +21,8 @@ BATCH_WORKER_SCRIPT = ROOT / "scripts" / "run_batch_worker.py"
 WORKER_POOL_SCRIPT = ROOT / "scripts" / "run_batch_worker_pool.py"
 SETTINGS_JS = ROOT / "static" / "js" / "settings.js"
 SETTINGS_TEMPLATE = ROOT / "templates" / "settings.html"
+ACCOUNT_JS = ROOT / "static" / "js" / "account.js"
+ACCOUNT_TEMPLATE = ROOT / "templates" / "account.html"
 STYLE_CSS = ROOT / "static" / "css" / "style.css"
 CHART_JS = ROOT / "static" / "js" / "chart.js"
 INDEX_TEMPLATE = ROOT / "templates" / "index.html"
@@ -31,10 +33,15 @@ PORTFOLIO_TEMPLATE = ROOT / "templates" / "portfolio.html"
 PORTFOLIO_JS = ROOT / "static" / "js" / "portfolio.js"
 REPORT_DETAIL_TEMPLATE = ROOT / "templates" / "report_detail.html"
 REPORT_DETAIL_JS = ROOT / "static" / "js" / "report-detail.js"
+SELF_EVOLUTION_TEMPLATE = ROOT / "templates" / "self_evolution.html"
+SELF_EVOLUTION_JS = ROOT / "static" / "js" / "self-evolution.js"
+BASE_TEMPLATE = ROOT / "templates" / "base.html"
+REPORTS_TEMPLATE = ROOT / "templates" / "reports.html"
+REPORTS_JS = ROOT / "static" / "js" / "reports.js"
 
 
 def load_migration_module():
-    spec = importlib.util.spec_from_file_location("migrate_2_8_1_to_2_9", MIGRATION_SCRIPT)
+    spec = importlib.util.spec_from_file_location("migrate_to_3_0", MIGRATION_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -42,6 +49,29 @@ def load_migration_module():
 
 
 class ReleaseMigrationTests(unittest.TestCase):
+    def test_two_layer_account_ui_is_exposed(self):
+        base_html = BASE_TEMPLATE.read_text(encoding="utf-8")
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+        account_html = ACCOUNT_TEMPLATE.read_text(encoding="utf-8")
+        account_js = ACCOUNT_JS.read_text(encoding="utf-8")
+        app_js = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+        portfolio_js = PORTFOLIO_JS.read_text(encoding="utf-8")
+
+        self.assertIn("loginUserBadge", base_html)
+        self.assertIn("登录账户", base_html)
+        self.assertIn("证券账户", base_html)
+        self.assertIn("账户管理", base_html)
+        self.assertIn("账户资料", account_html)
+        self.assertIn("证券账户", account_html)
+        self.assertIn("accountProfileForm", account_html)
+        self.assertIn("saveAccountProfile", account_js)
+        self.assertNotIn("loginUserManagementPanel", settings_html)
+        self.assertIn("/api/auth/session", app_js)
+        self.assertIn("must_change_credentials", app_js)
+        self.assertIn("证券账户：${escapeHtml(a.name)}", app_js)
+        self.assertIn("withAccount(`/api/pnl/calendar", portfolio_js)
+        self.assertIn("account_id: selectedAccountId()", portfolio_js)
+
     def test_deploy_plist_template_has_one_port_value(self):
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -50,7 +80,7 @@ class ReleaseMigrationTests(unittest.TestCase):
     def test_deploy_script_runs_release_migration(self):
         source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("scripts/migrate_2_8_1_to_2_9.py", source)
+        self.assertIn("scripts/migrate_to_3_0.py", source)
         self.assertNotIn("from models.database import init_db; asyncio.run(init_db())", source)
 
     def test_deploy_script_installs_batch_worker_service(self):
@@ -68,29 +98,104 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("--exclude 'data/batch_research'", source)
         self.assertIn("--exclude 'logs'", source)
 
-    def test_ai_batch_research_requires_selected_codes(self):
+    def test_smart_watch_and_research_center_naming_is_clear(self):
+        base = BASE_TEMPLATE.read_text(encoding="utf-8")
+        ai_html = AI_TEMPLATE.read_text(encoding="utf-8")
+        reports_html = REPORTS_TEMPLATE.read_text(encoding="utf-8")
+        reports_js = REPORTS_JS.read_text(encoding="utf-8")
+
+        self.assertIn("智能盯盘", base)
+        self.assertIn("AI投研中心", base)
+        self.assertIn("{% block title %}智能盯盘", ai_html)
+        self.assertIn("{% block title %}AI投研中心", reports_html)
+        self.assertIn("<h2>AI投研中心</h2>", reports_html)
+        self.assertIn("单股报告", reports_html)
+        self.assertIn("七层数据", reports_html)
+        self.assertIn("任务中心", reports_html)
+        self.assertIn("AI投研中心", reports_js)
+        self.assertNotIn(">AI分析台<", base)
+        self.assertNotIn(">报告库<", base)
+
+    def test_smart_watch_no_longer_owns_bulk_research_creation(self):
         js = AI_JS.read_text(encoding="utf-8")
         html = AI_TEMPLATE.read_text(encoding="utf-8")
 
-        self.assertIn("const rawCodes = getSelectedCodes();", js)
-        self.assertIn("StockMarketPermissions?.isAllowed", js)
-        self.assertIn("function getBatchResearchOptions()", js)
-        self.assertIn("请先在左侧自选股列表勾选", js)
-        self.assertIn("codes,", js)
-        self.assertIn("allow_all: false", js)
-        self.assertIn("analysis_depth: batchOptions.depth", js)
-        self.assertIn("model_mode: batchOptions.modelMode", js)
-        self.assertIn("snapshot_model_tier: batchOptions.modelTier", js)
-        self.assertIn("forceReanalysis", js)
-        self.assertIn("batchOptions.forceReanalysis ? 0 : 30", js)
-        self.assertIn("preflightBatchResearch(payload)", js)
-        self.assertIn("预计总调用", js)
+        self.assertIn("{% block title %}智能盯盘", html)
+        self.assertNotIn("sendSelectionToResearchCenter('jobs')", html)
+        self.assertNotIn("sendSelectionToResearchCenter('plans')", html)
+        self.assertNotIn('id="batchBar"', html)
+        self.assertNotIn('id="batchToggleBtn"', html)
+        self.assertNotIn("createReportSelectionSet", js)
+        self.assertNotIn("sendSelectionToResearchCenter", js)
+        self.assertNotIn("ai-sc-check", js)
         self.assertNotIn("group: 'all',\n            top_n: 0", js)
-        self.assertNotIn("snapshot_model_tier: 'deep'", js)
-        self.assertIn('id="batchDepthSelect"', html)
-        self.assertIn('id="batchModelModeSelect"', html)
-        self.assertIn('id="batchForceReanalysis"', html)
-        self.assertIn("生成所选报告", html)
+        self.assertNotIn("onclick=\"createBatchResearchJob", html)
+        self.assertNotIn('id="batchResearchPanel"', html)
+        self.assertNotIn('id="batchDepthSelect"', html)
+        self.assertNotIn('id="batchModelModeSelect"', html)
+        self.assertNotIn('id="batchForceReanalysis"', html)
+
+    def test_research_center_sidebar_has_stock_picker_and_report_filter_modes(self):
+        reports_html = REPORTS_TEMPLATE.read_text(encoding="utf-8")
+        reports_js = REPORTS_JS.read_text(encoding="utf-8")
+
+        self.assertIn("researchSidebarTabs", reports_html)
+        self.assertIn("researchStockPickerPanel", reports_html)
+        self.assertIn("reportFilterPanel", reports_html)
+        self.assertIn("股票选择", reports_html)
+        self.assertIn("报告筛选", reports_html)
+        self.assertIn("loadResearchStockPickerStocks", reports_js)
+        self.assertIn("/api/watchlist", reports_js)
+        self.assertIn("createBatchJobFromResearchStocks", reports_js)
+        self.assertIn("selectedResearchStockCodes", reports_js)
+
+    def test_research_center_stock_picker_creates_batch_jobs_directly(self):
+        reports_html = REPORTS_TEMPLATE.read_text(encoding="utf-8")
+        reports_js = REPORTS_JS.read_text(encoding="utf-8")
+
+        self.assertIn("生成所选报告", reports_html)
+        self.assertIn("预取七层数据", reports_html)
+        self.assertIn("生成组合研究", reports_html)
+        self.assertIn("researchStockTaskTypeInput", reports_html)
+        self.assertIn("researchStockDepthInput", reports_html)
+        self.assertIn("researchStockModelModeInput", reports_html)
+        self.assertIn("/api/batch-research/preflight", reports_js)
+        self.assertIn("/api/batch-research/jobs", reports_js)
+        self.assertIn("source_page: 'research_center_stock_picker'", reports_js)
+
+    def test_research_center_stock_cards_reuse_unified_stock_card_style(self):
+        reports_js = REPORTS_JS.read_text(encoding="utf-8")
+        css = STYLE_CSS.read_text(encoding="utf-8")
+
+        self.assertIn('class="stock-card research-stock-card', reports_js)
+        self.assertIn('class="stock-card-inner research-stock-card-inner"', reports_js)
+        self.assertIn('class="sc-left"', reports_js)
+        self.assertIn('class="sc-right"', reports_js)
+        self.assertIn('class="stock-card-bar ${cls}"', reports_js)
+        self.assertIn(".research-stock-check", css)
+        self.assertIn(".research-stock-card .sc-left", css)
+        self.assertIn(".research-stock-card .sc-right", css)
+        self.assertNotIn(".research-stock-main", css)
+        self.assertNotIn(".research-stock-price", css)
+
+    def test_research_center_imports_selection_sets_into_stock_picker(self):
+        js = REPORTS_JS.read_text(encoding="utf-8")
+        html = REPORTS_TEMPLATE.read_text(encoding="utf-8")
+        app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+        api_source = (ROOT / "api" / "report_selection_api.py").read_text(encoding="utf-8")
+        database_source = (ROOT / "models" / "database.py").read_text(encoding="utf-8")
+
+        self.assertIn("selectionIntakeBanner", html)
+        self.assertIn("loadSelectionIntake", js)
+        self.assertIn("/api/report-selections/${encodeURIComponent(selectionId)}", js)
+        self.assertIn("selectedSelectionCodes", js)
+        self.assertIn("selectedSelectionCodes.forEach", js)
+        self.assertIn("selectedResearchStockCodes.add", js)
+        self.assertIn("switchResearchSidebarTab('stocks')", js)
+        self.assertIn("openResearchStockTaskModal(defaultType)", js)
+        self.assertIn("report_selection_router", app_source)
+        self.assertIn('prefix="/report-selections"', api_source)
+        self.assertIn("CREATE TABLE IF NOT EXISTS report_selection_sets", database_source)
 
     def test_batch_worker_supports_model_provider_pool(self):
         content = BATCH_WORKER_SCRIPT.read_text(encoding="utf-8")
@@ -112,6 +217,28 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--timeout-seconds", type=int, default=3600)', script_source)
         self.assertNotIn("分析超时（15分钟）", tasks_source)
 
+    def test_self_evolution_page_and_api_are_exposed(self):
+        app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+        api_source = (ROOT / "api" / "self_evolution_api.py").read_text(encoding="utf-8")
+        html = SELF_EVOLUTION_TEMPLATE.read_text(encoding="utf-8")
+        js = SELF_EVOLUTION_JS.read_text(encoding="utf-8")
+
+        self.assertIn('@app.get("/self-evolution"', app_source)
+        self.assertIn("self_evolution.html", app_source)
+        self.assertIn('prefix="/self-evolution"', api_source)
+        self.assertIn('@router.post("/run")', api_source)
+        self.assertIn('@router.get("/attributions")', api_source)
+        self.assertIn('@router.post("/semantic-search")', api_source)
+        self.assertIn("selfEvolutionScore", html)
+        self.assertIn("selfEvolutionRules", html)
+        self.assertIn("selfEvolutionAttributions", html)
+        self.assertIn("runSelfEvolution", js)
+        self.assertIn("/api/self-evolution/latest", js)
+        self.assertIn("/api/self-evolution/semantic-search", js)
+        self.assertIn("function escapeHtml", js)
+        self.assertIn("escapeHtml(rule.rule", js)
+        self.assertIn("escapeHtml(item.summary", js)
+
     def test_worker_pool_has_config_script_and_settings_ui(self):
         script = WORKER_POOL_SCRIPT.read_text(encoding="utf-8")
         js = SETTINGS_JS.read_text(encoding="utf-8")
@@ -125,6 +252,81 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("/worker-pool/config", js)
         self.assertIn("saveWorkerPoolConfig", js)
         self.assertIn("workerPoolList", html)
+        self.assertIn("ai-panel-workers", html)
+        self.assertIn("openWorkerPoolEditor", js)
+        self.assertIn("workerPoolEditorModal", html)
+        self.assertIn("Worker 空闲时每隔多久检查新任务", html)
+        self.assertIn("多久无心跳后视为离线/可回收", html)
+        self.assertIn("workerEditPrimaryProviderId", html)
+        self.assertIn("workerEditFallbackProviderId", html)
+        self.assertNotIn("worker-provider-list", html)
+        self.assertNotIn("providerCheckboxes", js)
+        self.assertIn("renderWorkerPoolCard", js)
+        self.assertIn("updateSettingsActionsVisibility", js)
+        self.assertIn("['library', 'workers']", js)
+
+    def test_settings_notification_page_hides_non_push_legacy_toggles(self):
+        html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("浏览器异动通知", html)
+        self.assertIn("set-browser_notify_enabled", html)
+        self.assertIn("set-notification_digest_enabled", html)
+        self.assertNotIn("set-notify_order_trigger", html)
+        self.assertNotIn("set-notify_strategy_change", html)
+        self.assertNotIn("set-notify_analysis_done", html)
+        self.assertNotIn("条件单触发通知", html)
+        self.assertNotIn("策略状态变化通知", html)
+        self.assertNotIn("AI分析完成通知", html)
+
+    def test_conditional_order_feature_is_removed_from_active_surfaces(self):
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+        settings_js = SETTINGS_JS.read_text(encoding="utf-8")
+        ai_html = AI_TEMPLATE.read_text(encoding="utf-8")
+        ai_js = AI_JS.read_text(encoding="utf-8")
+        hermes_html = (ROOT / "templates" / "hermes.html").read_text(encoding="utf-8")
+        hermes_js = (ROOT / "static" / "js" / "hermes.js").read_text(encoding="utf-8")
+        scheduler_jobs = (ROOT / "scheduler" / "jobs.py").read_text(encoding="utf-8")
+        portfolio_api = (ROOT / "api" / "portfolio_api.py").read_text(encoding="utf-8")
+        ai_api = (ROOT / "api" / "ai_api.py").read_text(encoding="utf-8")
+        enhancement_api = (ROOT / "api" / "enhancement_api.py").read_text(encoding="utf-8")
+        hermes_registry = (ROOT / "services" / "hermes_tool_registry.py").read_text(encoding="utf-8")
+        ai_schema = (ROOT / "schemas" / "ai_task.py").read_text(encoding="utf-8")
+        vite_client = (ROOT / "frontend" / "src" / "ai-tasks.ts").read_text(encoding="utf-8")
+        vite_contracts = (ROOT / "frontend" / "src" / "contracts" / "ai.ts").read_text(encoding="utf-8")
+        legacy_client = (ROOT / "static" / "js" / "ai-task-client.js").read_text(encoding="utf-8")
+
+        for source in (settings_html, settings_js, ai_html, ai_js, hermes_html, hermes_js):
+            self.assertNotIn("条件单", source)
+            self.assertNotIn("conditional_order", source)
+
+        self.assertNotIn("conditional_order_checker", scheduler_jobs)
+        self.assertNotIn("/orders", portfolio_api)
+        self.assertNotIn("generate-cond-order", ai_api)
+        self.assertNotIn("conditional-order", ai_api)
+        self.assertNotIn("conditional-order", enhancement_api)
+        self.assertNotIn("BacktestPayload", enhancement_api)
+        self.assertNotIn("create_conditional_order", hermes_registry)
+        self.assertNotIn("ConditionalOrder", ai_schema)
+        self.assertNotIn("GenerateConditionalOrder", ai_schema)
+        self.assertNotIn("ConditionalOrder", vite_client)
+        self.assertNotIn("GenerateConditionalOrder", vite_client)
+        self.assertNotIn("ConditionalOrder", vite_contracts)
+        self.assertNotIn("GenerateConditionalOrder", vite_contracts)
+        self.assertNotIn("conditionalOrder", legacy_client)
+        self.assertNotIn("generateConditionalOrder", legacy_client)
+
+    def test_settings_promotes_tasks_and_tool_permissions_to_top_level_tabs(self):
+        html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("section-tasks", html)
+        self.assertIn("section-tools", html)
+        self.assertIn("switchSettingsTab(this, 'tasks')", html)
+        self.assertIn("switchSettingsTab(this, 'tools')", html)
+        self.assertNotIn("ai-panel-tasks", html)
+        self.assertNotIn("ai-panel-system", html)
+        self.assertNotIn("AI分析引擎（TradingAgents-astock）", html)
+        self.assertNotIn("批量 Worker 模型池</div>", html)
+        self.assertNotIn("AI记忆向量检索", html)
 
     def test_reports_page_exposes_worker_panel_preflight_and_failure_retry(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -206,6 +408,53 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("watch: '观察'", js)
         self.assertIn("avoid: '回避'", js)
 
+    def test_daily_decision_and_position_plan_are_visually_separated_and_actionable(self):
+        html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+        js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        css = STYLE_CSS.read_text(encoding="utf-8")
+        holding_detail_js = (ROOT / "static" / "js" / "holding-review-detail.js").read_text(encoding="utf-8")
+        plan_detail_js = (ROOT / "static" / "js" / "position-plan-detail.js").read_text(encoding="utf-8")
+        api_holding = (ROOT / "api" / "holding_review_api.py").read_text(encoding="utf-8")
+        api_plan = (ROOT / "api" / "position_plan_api.py").read_text(encoding="utf-8")
+
+        self.assertIn("daily-decision-domain-panel", html)
+        self.assertIn("portfolio-research-domain-panel", html)
+        self.assertIn("每日决策动作", js)
+        self.assertIn("updateDailyDecisionItemStatus", js)
+        self.assertIn("updatePositionPlanItemAdoption", js)
+        self.assertIn("decisionStatusLabel", holding_detail_js)
+        self.assertIn("adoptionStatusLabel", plan_detail_js)
+        self.assertIn("/daily-decision-reports/{review_id}/items/{item_id}/status", api_holding)
+        self.assertIn("/position-plans/{plan_id}/items/{item_id}/adoption", api_plan)
+        self.assertIn(".daily-decision-domain-panel", css)
+        self.assertIn(".portfolio-research-domain-panel", css)
+
+    def test_suggestion_execution_review_is_exposed_in_performance_and_details(self):
+        shadow_html = (ROOT / "templates" / "shadow.html").read_text(encoding="utf-8")
+        shadow_js = (ROOT / "static" / "js" / "shadow.js").read_text(encoding="utf-8")
+        holding_html = (ROOT / "templates" / "holding_review_detail.html").read_text(encoding="utf-8")
+        holding_js = (ROOT / "static" / "js" / "holding-review-detail.js").read_text(encoding="utf-8")
+        plan_html = (ROOT / "templates" / "position_plan_detail.html").read_text(encoding="utf-8")
+        plan_js = (ROOT / "static" / "js" / "position-plan-detail.js").read_text(encoding="utf-8")
+        performance_api = (ROOT / "api" / "performance_api.py").read_text(encoding="utf-8")
+        performance_service = (ROOT / "services" / "performance_service.py").read_text(encoding="utf-8")
+
+        self.assertIn('data-tab="execution"', shadow_html)
+        self.assertIn("建议执行闭环", shadow_html)
+        self.assertIn("executionReviewSummary", shadow_html)
+        self.assertIn("renderExecutionReview", shadow_js)
+        self.assertIn("overview.execution_review", shadow_js)
+        self.assertIn("实际执行", holding_html)
+        self.assertIn("执行偏差", holding_html)
+        self.assertIn("loadDailyDecisionExecution", holding_js)
+        self.assertIn("renderExecutionCell", holding_js)
+        self.assertIn("实际执行", plan_html)
+        self.assertIn("执行偏差", plan_html)
+        self.assertIn("loadPositionPlanExecution", plan_js)
+        self.assertIn("renderExecutionCell", plan_js)
+        self.assertIn('@router.get("/suggestion-execution")', performance_api)
+        self.assertIn("execution_review_service.overview", performance_service)
+
     def test_report_detail_renders_holding_context_and_two_layer_signals(self):
         html = REPORT_DETAIL_TEMPLATE.read_text(encoding="utf-8")
         js = REPORT_DETAIL_JS.read_text(encoding="utf-8")
@@ -242,31 +491,48 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("historical_pnl", js)
         self.assertIn("持仓盈亏明细", js)
         self.assertIn("stock.js?v=2.9.20-pnl-pct", index_html)
-        self.assertIn("ai.js?v=2.9.20-pnl-pct", ai_html)
+        self.assertIn("ai.js?v=2.9.24-smart-watch", ai_html)
         self.assertIn("(price - avg_cost) * total_shares", scheduler_source)
         self.assertNotIn("(price - prev_close) * total_shares", scheduler_source)
 
-    def test_portfolio_holding_review_exposes_force_report_refresh_options(self):
-        js = PORTFOLIO_JS.read_text(encoding="utf-8")
-        html = PORTFOLIO_TEMPLATE.read_text(encoding="utf-8")
+    def test_report_library_holding_review_exposes_force_report_refresh_options(self):
+        reports_js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
+        reports_html = (ROOT / "templates" / "reports.html").read_text(encoding="utf-8")
+        portfolio_html = PORTFOLIO_TEMPLATE.read_text(encoding="utf-8")
         batch_service = (ROOT / "services" / "batch_report_service.py").read_text(encoding="utf-8")
 
-        self.assertIn('id="holdingReviewForceHoldings"', html)
-        self.assertIn('id="holdingReviewForceCandidates"', html)
-        self.assertIn('id="holdingReviewRefreshSnapshots"', html)
-        self.assertIn("后台补跑持仓报告", html)
-        self.assertIn("后台补跑候选报告", html)
-        self.assertIn("补跑前刷新七层快照", html)
-        self.assertIn("force_refresh_holdings: forceRefreshHoldings", js)
-        self.assertIn("force_refresh_candidates: forceRefreshCandidates", js)
-        self.assertIn("refresh_snapshots_for_reports: refreshSnapshots", js)
-        self.assertIn("请先勾选“从自选股选择候选”并选择候选股，再补跑候选报告。", js)
-        self.assertIn("刷新七层快照需要配合持仓或候选报告补跑使用。", js)
-        self.assertIn("review.status === 'waiting_reports'", js)
-        self.assertIn("完成后自动生成每日 AI 决策报告", js)
+        self.assertIn('id="dailyDecisionForceCandidates"', reports_html)
+        self.assertNotIn('id="dailyDecisionForceHoldings"', reports_html)
+        self.assertNotIn('id="dailyDecisionRefreshSnapshots"', reports_html)
+        self.assertNotIn("后台补跑持仓报告", reports_html)
+        self.assertIn("强制重跑候选股评估报告", reports_html)
+        self.assertIn("持仓股默认重跑并刷新七层快照", reports_html)
+        self.assertIn("默认仅分析当前持仓", reports_html)
+        self.assertIn("daily-decision-policy-grid", reports_html)
+        self.assertIn("daily-decision-policy-card", reports_html)
+        self.assertIn("daily-decision-option-row", reports_html)
+        self.assertIn("daily-decision-actions", reports_html)
+        self.assertNotIn('<span class="signal-filter-chip active">默认仅分析当前持仓</span>', reports_html)
+        self.assertIn("按上次报告信号加入候选", reports_html)
+        self.assertIn("dailyDecisionSignalFilter", reports_html)
+        self.assertNotIn('id="dailyDecisionCandidatePanel"', reports_html)
+        self.assertIn("runDailyDecisionReport", reports_js)
+        self.assertIn("handleDailyDecisionSignalClick", reports_js)
+        self.assertIn("closest('[data-daily-signal]')", reports_js)
+        self.assertIn("candidate_signal_filters: selectedDailyDecisionSignals()", reports_js)
+        self.assertIn("force_refresh_holdings: true", reports_js)
+        self.assertIn("force_refresh_candidates: forceRefreshCandidates", reports_js)
+        self.assertIn("refresh_snapshots_for_reports: true", reports_js)
+        self.assertIn("请先选择至少一个上次报告信号，再补跑候选报告。", reports_js)
+        self.assertNotIn("刷新七层快照需要配合持仓或候选报告补跑使用。", reports_js)
+        self.assertIn("review.status === 'waiting_reports' || review.status === 'report_refresh_created'", reports_js)
+        self.assertIn("完成后将自动生成最终每日 AI 决策报告", reports_js)
+        self.assertIn("refreshHoldingReviews", reports_js)
+        self.assertNotIn("补报告完成后，请回到这里重新点击生成每日决策报告。", reports_js)
+        self.assertNotIn('id="holdingReviewForceHoldings"', portfolio_html)
+        self.assertNotIn('id="holdingReviewCandidatePanel"', portfolio_html)
         self.assertIn("finalize_waiting_reviews_for_batch_job", batch_service)
         self.assertIn("holding_review_finalized", batch_service)
-        reports_js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
         self.assertIn("waiting_reports: '等待补报告'", reports_js)
         self.assertIn("report_refresh_failed: '补报告失败'", reports_js)
 
@@ -282,9 +548,17 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("每日 AI 决策报告", reports_js)
         self.assertIn("/api/daily-decision-reports?limit=100", reports_js)
         self.assertIn("/daily-decision-reports/${encodedId}", reports_js)
-        self.assertIn("每日 AI 决策报告", portfolio_html)
-        self.assertIn("/api/daily-decision-reports/run", portfolio_js)
+        self.assertIn("最近每日 AI 决策摘要", portfolio_html)
+        self.assertIn("生成、补跑、候选选择和历史回看统一放在 AI投研中心", portfolio_html)
+        self.assertNotIn("/api/daily-decision-reports/run", portfolio_js)
         self.assertIn("/daily-decision-reports/${encodeURIComponent(review.review_id)}", portfolio_js)
+        self.assertIn("portfolio-decision-summary-head", portfolio_js)
+        self.assertIn("portfolio-decision-empty", portfolio_js)
+        self.assertIn("去 AI投研中心生成", portfolio_js)
+        self.assertNotIn("runDailyDecisionReport", portfolio_html)
+        self.assertNotIn("dailyDecisionForceCandidates", portfolio_html)
+        self.assertNotIn("补跑持仓报告", portfolio_html)
+        self.assertIn(".portfolio-decision-empty", STYLE_CSS.read_text(encoding="utf-8"))
         self.assertIn("每日 AI 决策报告详情", detail_html)
         self.assertIn("/api/daily-decision-reports/", detail_js)
 
@@ -310,7 +584,7 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("const d = parseAppTime(value);", js)
         self.assertIn("function formatTime(value)", js)
         self.assertIn("function formatDate(value)", js)
-        self.assertIn("reports.js?v=2.9.13-holding-review-refresh-flow", html)
+        self.assertIn("reports.js?v=2.9.24-research-center", html)
 
     def test_reports_page_links_to_full_report_detail(self):
         js = (ROOT / "static" / "js" / "reports.js").read_text(encoding="utf-8")
@@ -440,20 +714,20 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("/api/ai/reports/${encodeURIComponent(report.id)}", js)
         self.assertIn("formatReportMarkdown", js)
         self.assertIn("请选择要导出的报告", js)
-        self.assertIn("reports.js?v=2.9.13-holding-review-refresh-flow", html)
+        self.assertIn("reports.js?v=2.9.24-research-center", html)
 
-    def test_ai_page_supports_last_report_signal_filter_and_batch_select(self):
+    def test_ai_page_supports_last_report_signal_filter(self):
         js = AI_JS.read_text(encoding="utf-8")
         html = AI_TEMPLATE.read_text(encoding="utf-8")
 
         self.assertIn("aiLastSignalFilters", html)
-        self.assertIn("selectVisibleAIStocks", html)
-        self.assertIn("selectAIStocksByLastSignals", html)
         self.assertIn("AI_SIGNAL_RANK", js)
         self.assertIn("last_report_signal", js)
         self.assertIn("selectedLastReportSignals", js)
         self.assertIn("renderAIStockCards", js)
-        self.assertIn("selectAIStocksByLastSignals", js)
+        self.assertNotIn("selectVisibleAIStocks", html)
+        self.assertNotIn("selectAIStocksByLastSignals", html)
+        self.assertNotIn("selectAIStocksByLastSignals", js)
 
     def test_left_stock_panels_expose_unified_search(self):
         ai_js = AI_JS.read_text(encoding="utf-8")
@@ -613,10 +887,17 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("自动生成每日 AI 决策报告", settings_html)
         self.assertIn("set-daily_decision_auto_enabled", settings_html)
         self.assertIn("set-daily_decision_auto_time", settings_html)
-        self.assertIn("set-daily_decision_candidate_mode", settings_html)
-        self.assertIn("set-daily_decision_candidate_group", settings_html)
-        self.assertIn("set-daily_decision_signal_filter", settings_html)
-        self.assertIn("页面临时勾选", settings_html)
+        self.assertIn("set-daily_decision_account_id", settings_html)
+        self.assertNotIn("set-daily_decision_candidate_mode", settings_html)
+        self.assertNotIn("set-daily_decision_candidate_group", settings_html)
+        self.assertNotIn("set-daily_decision_signal_filter", settings_html)
+        self.assertNotIn("set-daily_decision_include_observation_pool", settings_html)
+        self.assertNotIn("set-daily_decision_force_refresh_candidates", settings_html)
+        self.assertNotIn("候选范围", settings_html)
+        self.assertNotIn("固定候选分组", settings_html)
+        self.assertNotIn("信号筛选", settings_html)
+        self.assertNotIn("包含观察池", settings_html)
+        self.assertNotIn("强制补跑候选报告", settings_html)
 
     def test_investment_profile_settings_and_report_detail_are_exposed(self):
         settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
@@ -649,7 +930,100 @@ class ReleaseMigrationTests(unittest.TestCase):
         self.assertIn("交易纪律手册", report_detail_js)
         self.assertIn("strategy_checklist", report_detail_js)
         self.assertIn("style_match", report_detail_js)
-        self.assertIn("raw.investment_profile", report_detail_js)
+
+    def test_embedding_memory_settings_and_backfill_controls_are_exposed(self):
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+        settings_js = SETTINGS_JS.read_text(encoding="utf-8")
+        portfolio_api = (ROOT / "api/portfolio_api.py").read_text(encoding="utf-8")
+
+        self.assertIn("记忆向量配置", settings_html)
+        self.assertIn("set-embedding_provider_id", settings_html)
+        self.assertIn("set-embedding_api_key", settings_html)
+        self.assertNotIn('id="set-embedding_model"', settings_html)
+        self.assertIn("embeddingModelSummary", settings_html)
+        self.assertIn("set-embedding_endpoint", settings_html)
+        self.assertIn("embeddingIndexStatus", settings_html)
+        self.assertIn("embeddingConnectionResult", settings_html)
+        self.assertIn("Endpoint 和 Key 只在模型库维护", settings_html)
+        self.assertIn("backfillTradeMemoryEmbeddings", settings_html)
+        self.assertIn("testTradeMemoryEmbeddingConnection", settings_html)
+        self.assertIn("text-embedding-v4", settings_html)
+        self.assertIn("provider_id", settings_js)
+        self.assertIn("loadTradeMemoryEmbeddingStatus", settings_js)
+        self.assertIn("renderEmbeddingConnectionResult", settings_js)
+        self.assertIn("onEmbeddingProviderChange", settings_js)
+        self.assertIn("/trade-memories/embeddings/status", settings_js)
+        self.assertIn("/trade-memories/embeddings/backfill", settings_js)
+        self.assertIn("/trade-memories/embeddings/test-connection", settings_js)
+        self.assertIn("provider_id: str", portfolio_api)
+        self.assertIn("@router.get(\"/trade-memories/embeddings/status\")", portfolio_api)
+        self.assertIn("@router.post(\"/trade-memories/embeddings/test-connection\")", portfolio_api)
+
+    def test_ai_engine_settings_are_split_into_model_library_panels(self):
+        settings_html = SETTINGS_TEMPLATE.read_text(encoding="utf-8")
+        settings_js = SETTINGS_JS.read_text(encoding="utf-8")
+        enhancement_api = (ROOT / "api/enhancement_api.py").read_text(encoding="utf-8")
+        enhancement_service = (ROOT / "services/enhancement_service.py").read_text(encoding="utf-8")
+        database_py = (ROOT / "models/database.py").read_text(encoding="utf-8")
+
+        self.assertIn("aiSettingsSubtab", settings_html)
+        self.assertIn("运行模型", settings_html)
+        self.assertIn("模型库", settings_html)
+        self.assertIn("记忆向量", settings_html)
+        self.assertIn("任务调度", settings_html)
+        self.assertIn("工具权限", settings_html)
+        self.assertIn("section-tasks", settings_html)
+        self.assertIn("section-tools", settings_html)
+        self.assertNotIn("ai-panel-tasks", settings_html)
+        self.assertNotIn("ai-panel-system", settings_html)
+        self.assertNotIn("高级设置", settings_html)
+        self.assertNotIn("模型配置池", settings_html)
+        self.assertIn("providerEditModal", settings_html)
+        self.assertIn("set-ai_primary_provider_id", settings_html)
+        self.assertIn("set-verification_provider_id", settings_html)
+        self.assertIn("set-embedding_provider_id", settings_html)
+        self.assertNotIn('id="set-ai_quick_model"', settings_html)
+        self.assertNotIn('id="set-ai_deep_model"', settings_html)
+        self.assertNotIn('id="set-verification_model"', settings_html)
+        self.assertNotIn('id="set-embedding_model"', settings_html)
+        self.assertIn("aiRuntimeModelSummary", settings_html)
+        self.assertIn("verificationModelSummary", settings_html)
+        self.assertIn("embeddingModelSummary", settings_html)
+        self.assertIn("实际模型", settings_html)
+        self.assertIn("新增模型源", settings_html)
+        self.assertIn("刷新列表", settings_html)
+        self.assertIn("放弃更改", settings_html)
+        self.assertIn("providerEditFetchModelsBtn", settings_html)
+        self.assertIn("providerEditFetchModelsResult", settings_html)
+        self.assertIn('type="hidden" id="providerEditModels"', settings_html)
+        self.assertNotIn("providerEditModelsRawField", settings_html)
+        self.assertNotIn("模型列表\n        <textarea", settings_html)
+        self.assertIn("providerEditChatModelFields", settings_html)
+        self.assertIn("providerEditEmbeddingFields", settings_html)
+        self.assertIn("providerEditQuickModel", settings_html)
+        self.assertIn("providerEditDeepModel", settings_html)
+        self.assertIn("providerEditDefaultModel", settings_html)
+        self.assertIn("onAiProviderChange", settings_js)
+        self.assertIn("syncLegacyAiProviderFields", settings_js)
+        self.assertIn("provider_id", settings_js)
+        self.assertIn("openModelProviderEditor", settings_js)
+        self.assertIn("saveModelProviderEdit", settings_js)
+        self.assertIn("fetchProviderEditModels", settings_js)
+        self.assertIn("inferProviderEditUsage", settings_js)
+        self.assertIn("onProviderEditUsageChange", settings_js)
+        self.assertNotIn("function fetchRemoteModels", settings_js)
+        self.assertNotIn("function fetchVerificationModels", settings_js)
+        self.assertNotIn("function saveCurrentModelProvider", settings_js)
+        self.assertNotIn("function saveVerificationModelProvider", settings_js)
+        self.assertNotIn("applyEmbeddingProviderPreset", settings_js)
+        self.assertNotIn("EMBEDDING_PROVIDER_PRESETS", settings_js)
+        self.assertNotIn("applyModelProvider('${id}','ai')", settings_js)
+        self.assertNotIn("用于AI", settings_js)
+        self.assertIn("PUT", settings_js)
+        self.assertIn("/model-providers/${id}", settings_js)
+        self.assertIn("@router.put(\"/model-providers/{provider_id}\")", enhancement_api)
+        self.assertIn("def update_model_provider", enhancement_service)
+        self.assertIn("CREATE TABLE IF NOT EXISTS model_providers", database_py)
 
     def test_position_plans_have_decision_market_snapshot_columns(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -748,14 +1122,54 @@ class ReleaseMigrationTests(unittest.TestCase):
                 step_columns = {row[1] for row in db.execute("PRAGMA table_info(batch_job_item_steps)")}
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 status, error = db.execute("SELECT status, error FROM batch_jobs WHERE job_id='old-running'").fetchone()
+                user_columns = {row[1] for row in db.execute("PRAGMA table_info(login_users)")}
+                memory_columns = {row[1] for row in db.execute("PRAGMA table_info(trade_memories)")}
+                evolution_columns = {row[1] for row in db.execute("PRAGMA table_info(self_evolution_snapshots)")}
 
             self.assertIn("lease_owner", job_columns)
             self.assertIn("runtime_json", job_columns)
             self.assertIn("error_type", item_columns)
             self.assertIn("model_config_json", step_columns)
             self.assertIn("position_plans", tables)
+            self.assertIn("login_users", tables)
+            self.assertIn("securities_accounts", tables)
+            self.assertIn("trade_memories", tables)
+            self.assertIn("trade_memory_embeddings", tables)
+            self.assertIn("self_evolution_snapshots", tables)
+            self.assertIn("recommendation_attributions", tables)
+            self.assertIn("must_change_credentials", user_columns)
+            self.assertIn("lesson_tags_json", memory_columns)
+            self.assertIn("system_score", evolution_columns)
             self.assertEqual(status, "interrupted")
-            self.assertIn("2.9", error)
+            self.assertIn("3.0", error)
+
+    def test_migration_script_preserves_legacy_accounts_table_without_broker_column(self):
+        module = load_migration_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "workbench.db"
+            with sqlite3.connect(db_path) as db:
+                db.executescript(
+                    """
+                    CREATE TABLE accounts (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL
+                    );
+                    INSERT INTO accounts (id, name) VALUES ('default', '旧默认账户');
+                    """
+                )
+                db.commit()
+
+            result = module.migrate_database(db_path, create_backup=False)
+
+            self.assertEqual(result["status"], "ok")
+            with sqlite3.connect(db_path) as db:
+                account_columns = {row[1] for row in db.execute("PRAGMA table_info(accounts)")}
+                securities = db.execute(
+                    "SELECT name, broker FROM securities_accounts WHERE id = 'default'"
+                ).fetchone()
+
+            self.assertIn("broker", account_columns)
+            self.assertEqual(securities, ("旧默认账户", ""))
 
 
 if __name__ == "__main__":

@@ -55,6 +55,58 @@ class SettingsServiceTests(unittest.TestCase):
         self.assertEqual(result["daily_decision_force_refresh_holdings"], "true")
         self.assertEqual(result["daily_decision_refresh_snapshots"], "true")
 
+    def test_bulk_update_provider_references_shadow_legacy_model_fields_server_side(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO model_providers
+                    (id, name, base_url, api_key, models_json, quick_model, deep_model, default_model, embedding_model, embedding_dimensions, usage_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "provider-main",
+                    "Provider Main",
+                    "https://provider-main.example.com/v1",
+                    "sk-main",
+                    json.dumps(["provider-fast", "provider-deep", "provider-default", "provider-embed"], ensure_ascii=False),
+                    "provider-fast",
+                    "provider-deep",
+                    "provider-default",
+                    "provider-embed",
+                    1536,
+                    json.dumps(["ai", "verification", "embedding"], ensure_ascii=False),
+                ),
+            )
+            db.commit()
+
+        settings_service.bulk_update_settings(
+            {
+                "ai_primary_provider_id": "provider-main",
+                "ai_quick_model": "stale-fast-override",
+                "ai_deep_model": "stale-deep-override",
+                "verification_provider_id": "provider-main",
+                "verification_model": "stale-verification-override",
+                "embedding_provider_id": "provider-main",
+                "embedding_model": "stale-embedding-override",
+                "api_key": "********",
+                "verification_api_key": "********",
+                "embedding_api_key": "********",
+            }
+        )
+
+        saved = settings_repository.fetch_settings()
+
+        self.assertEqual(saved["custom_endpoint"], "https://provider-main.example.com/v1")
+        self.assertEqual(saved["api_key"], "sk-main")
+        self.assertEqual(saved["quick_think_model"], "provider-fast")
+        self.assertEqual(saved["deep_think_model"], "provider-deep")
+        self.assertEqual(saved["verification_endpoint"], "https://provider-main.example.com/v1")
+        self.assertEqual(saved["verification_api_key"], "sk-main")
+        self.assertEqual(saved["verification_model"], "provider-default")
+        self.assertEqual(saved["embedding_endpoint"], "https://provider-main.example.com/v1")
+        self.assertEqual(saved["embedding_api_key"], "sk-main")
+        self.assertEqual(saved["embedding_model"], "provider-embed")
+
     def test_investment_profile_defaults_are_available(self):
         result = settings_service.get_all_settings()
 
@@ -250,6 +302,38 @@ class SettingsServiceTests(unittest.TestCase):
             )
             self.assertIsNone(db.execute("SELECT value FROM settings WHERE key='transient_only'").fetchone())
 
+    def test_restore_uploaded_database_file_replaces_current_database(self):
+        settings_service.update_setting("model_mode", "current")
+        upload_path = Path(self.tmp.name) / "uploaded.db"
+        with sqlite3.connect(upload_path) as db:
+            db.executescript(database.SCHEMA)
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("model_mode", "uploaded"))
+            db.execute(
+                """
+                INSERT INTO batch_jobs (job_id, name, job_type, status, total_count)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("job-upload", "上传数据库任务", "report_generation", "completed", 1),
+            )
+            db.commit()
+
+        result = settings_service.restore_uploaded_database_file(upload_path, original_filename="uploaded.db")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["restored_type"], "sqlite")
+        self.assertEqual(result["filename"], "uploaded.db")
+        self.assertTrue(Path(result["pre_restore_backup_path"]).exists())
+        self.assertTrue(result["restart_required"])
+        with sqlite3.connect(self.db_path) as db:
+            self.assertEqual(
+                db.execute("SELECT value FROM settings WHERE key='model_mode'").fetchone()[0],
+                "uploaded",
+            )
+            self.assertEqual(
+                db.execute("SELECT name FROM batch_jobs WHERE job_id='job-upload'").fetchone()[0],
+                "上传数据库任务",
+            )
+
     def test_poll_notifications_sorts_recent_items(self):
         with sqlite3.connect(self.db_path) as db:
             db.execute(
@@ -383,6 +467,29 @@ class SettingsApiTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 502)
         self.assertIn("未返回模型", resp.json()["detail"])
+
+    def test_restore_uploaded_database_route_accepts_db_file(self):
+        seen = {}
+
+        def fake_restore(path, *, original_filename):
+            seen["exists_during_call"] = Path(path).exists()
+            seen["path"] = Path(path)
+            return {"status": "ok", "filename": original_filename, "restart_required": True}
+
+        with patch(
+            "services.settings_service.restore_uploaded_database_file",
+            side_effect=fake_restore,
+        ) as restore:
+            resp = self.client.post(
+                "/api/settings/backup/restore-upload",
+                files={"file": ("restore.db", b"SQLite bytes", "application/vnd.sqlite3")},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["filename"], "restore.db")
+        restore.assert_called_once()
+        self.assertTrue(seen["exists_during_call"])
+        self.assertFalse(seen["path"].exists())
 
 
 if __name__ == "__main__":

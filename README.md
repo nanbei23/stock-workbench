@@ -1,6 +1,6 @@
 # 炒股小牛马 Stock Workbench
 
-本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `2.9.15`。
+本地运行的 A 股盯盘、持仓、AI 分析和自然语言操作工作台。当前发布版本为 `3.0.0`。
 
 本项目面向个人研究和交易工作流辅助，不构成投资建议。所有写库操作都应由用户确认后执行。
 
@@ -9,14 +9,15 @@
 | 模块 | 能力 |
 | --- | --- |
 | 自选股 | 腾讯行情、K 线分时、异动监控、新闻/公告/研报聚合、AI 报告入口 |
-| 持仓 | 多账户资产看板、合并视图、交易记录、盈亏统计、交易计划、条件单 |
-| AI 分析台 | TradingAgents-astock 分析任务、后台批量研究、数据预取、报告生成、建仓建议、队列状态、失败原因、重试和续跑 |
-| 报告库 | 大批量 AI 报告筛选、预览、导出、勾选完整报告生成组合级多角色建仓建议 |
+| 持仓 | 多账户资产看板、合并视图、交易记录、盈亏统计、交易计划 |
+| 智能盯盘 | TradingAgents-astock 单股分析任务、持仓/自选观察、近期报告和账户动作信号 |
+| AI 投研中心 | 大批量 AI 报告生成、七层数据预取、报告筛选、预览、导出、任务状态、失败原因、重试续跑和组合级多角色研究方案 |
 | 热点主线 | 市场状态、热点主题、研究节奏、策略生命周期、实时研究进度 |
 | Hermes 对话台 | 自然语言意图识别、Hermes session 历史、多步任务计划、写库草稿、分步确认/跳过、审计记录 |
 | AI 绩效 | 信号验证、AI 影子盘、执行偏差、模型校准、置信度 Brier Score 和实盘对比 |
 | 运营中心 | 数据可信、全局风控、投资组合专业化、AI质量闭环、备份升级、通知和诊断总控 |
-| 设置 | OpenAI 兼容模型供应商、Base URL 获取模型、快速/深度/旁观者模型、迁移状态、备份恢复 |
+| 设置 | OpenAI 兼容模型供应商、Base URL 获取模型、快速/深度/旁观者模型、Worker 配置、迁移状态、备份恢复 |
+| 自我进化 | 交易记忆、推荐归因、规则沉淀、语义检索和系统评分 |
 | 前端 | Vite + TypeScript 渐进式构建、Vanilla JS 页面、四套主题、竖屏盯盘优化、全局 Hermes 侧栏 |
 
 ## 快速开始
@@ -65,14 +66,15 @@ http://127.0.0.1:8000
 
 - `/` 自选股
 - `/portfolio` 持仓
-- `/ai` AI 分析台
-- `/reports` AI 报告库
+- `/ai` 智能盯盘
+- `/reports` AI 投研中心
 - `/hotspots` 热点主线
 - `/hermes` Hermes 对话台
 - `/shadow` AI 绩效
 - `/performance` 兼容跳转到 AI 绩效
 - `/ops` 运营中心
 - `/settings` 设置
+- `/self-evolution` 自我进化
 
 ### Intel macOS 自动部署
 
@@ -106,7 +108,7 @@ scripts/deploy_macos_x86.sh
 .venv312/bin/python scripts/batch_research.py --group all --top-n 0 --skip-recent-days 30 --analysis-mode snapshot --analysis-concurrency 1 --apply
 ```
 
-125 只级别的报告不要再挤在 `/ai` 右下角阅读，统一进入 `/reports` 做筛选、对比、导出。勾选完整报告后，建仓建议会把选中报告全文作为上下文，进入组合经理、风控经理、交易员、反方审查和最终裁决的多角色讨论。
+125 只级别的批量研究不要再从 `/ai` 创建或阅读，统一进入 `/reports` 的 AI 投研中心做股票选择、七层数据预取、报告生成、筛选、对比和导出。勾选完整报告后，组合研究方案会把选中报告全文作为上下文，进入组合经理、风控经理、交易员、反方审查和最终裁决的多角色讨论。
 
 完整步骤见 [docs/data_initialization_and_batch_research.md](docs/data_initialization_and_batch_research.md)。
 
@@ -141,22 +143,22 @@ scripts/worker_stop.sh
 - 连续失败或失败率超过阈值会进入 `guard_paused`，避免错误状态下继续烧时间和额度。
 - `/reports` 的“批量任务”页签会显示 worker 在线状态、最近心跳、lease、熔断原因和模型额度状态。
 
-### 从 2.8.1 升级到 2.9
+### 从旧版本升级到 3.0
 
-部署机器已经运行 2.8.1 时，拉取 2.9 代码后执行：
+部署机器已经运行 2.8.1 或 2.9.x 时，拉取 3.0 代码后执行：
 
 ```bash
 cd /path/to/stock-workbench-local
-.venv312/bin/python scripts/migrate_2_8_1_to_2_9.py
+.venv312/bin/python scripts/migrate_to_3_0.py
 scripts/deploy_macos_x86.sh --install-service
 ```
 
-迁移脚本会先备份当前 SQLite 数据库，再补齐 2.9 的批量任务、建仓计划和 worker lease 字段。迁移时如果发现旧版本仍标记为 `running` 的批量任务，会转为 `interrupted`，可以在 `/reports` 继续。
+迁移脚本会先备份当前 SQLite 数据库，再补齐 3.0 的登录账户、证券账户、AI 投研中心、Worker、交易记忆、自我进化和推荐归因表/字段。迁移时如果发现旧版本仍标记为 `running` 的批量任务，会转为 `interrupted`，可以在 `/reports` 继续。
 
 如果数据库路径不是默认的 `data/workbench.db`：
 
 ```bash
-.venv312/bin/python scripts/migrate_2_8_1_to_2_9.py --db-path /absolute/path/workbench.db
+.venv312/bin/python scripts/migrate_to_3_0.py --db-path /absolute/path/workbench.db
 ```
 
 ## Hermes 写库安全模型
@@ -166,7 +168,6 @@ Hermes 只允许通过受控工具写入本地数据库：
 - `add_watchlist`
 - `record_trade`
 - `set_position`
-- `create_conditional_order`
 
 流程是：
 

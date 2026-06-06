@@ -64,8 +64,8 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
                                     '{"plan":{"title":"茅台观察计划","steps":['
                                     '{"title":"先查平安银行持仓","action":"query_position","code":"000001","name":"平安银行"},'
                                     '{"title":"加入茅台自选","tool":"add_watchlist","args":{"code":"600519","name":"贵州茅台"}},'
-                                    '{"title":"创建茅台条件单","tool":"create_conditional_order","args":{"code":"600519","name":"贵州茅台",'
-                                    '"trade_action":"buy","condition_type":"price_lte","target_price":1680,"shares":100}}'
+                                    '{"title":"记录茅台试仓","tool":"record_trade","args":{"code":"600519","name":"贵州茅台",'
+                                    '"direction":"buy","price":1680,"shares":100}}'
                                     ']}}'
                                 )
                             }
@@ -96,7 +96,7 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         with patch("services.hermes_console_service._llm_settings", new=fake_settings), patch(
             "services.hermes_console_service.httpx.AsyncClient", new=FakeClient
         ):
-            return await hermes_console_service.handle_message("查平安银行持仓，把茅台加自选，并低于1680建100股买入条件单")
+            return await hermes_console_service.handle_message("查平安银行持仓，把茅台加自选，并记录1680买入100股")
 
     async def test_add_watchlist_requires_confirmation_then_writes(self):
         parsed = await hermes_console_service.handle_message("新增 600519 贵州茅台 到自选")
@@ -415,8 +415,8 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
                                     '{"plan":{"title":"茅台观察计划","steps":['
                                     '{"title":"先查平安银行持仓","action":"query_position","code":"000001","name":"平安银行"},'
                                     '{"title":"加入茅台自选","tool":"add_watchlist","args":{"code":"600519","name":"贵州茅台"}},'
-                                    '{"title":"创建茅台条件单","tool":"create_conditional_order","args":{"code":"600519","name":"贵州茅台",'
-                                    '"trade_action":"buy","condition_type":"price_lte","target_price":1680,"shares":100}}'
+                                    '{"title":"记录茅台试仓","tool":"record_trade","args":{"code":"600519","name":"贵州茅台",'
+                                    '"direction":"buy","price":1680,"shares":100}}'
                                     ']}}'
                                 )
                             }
@@ -447,7 +447,7 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         with patch("services.hermes_console_service._llm_settings", new=fake_settings), patch(
             "services.hermes_console_service.httpx.AsyncClient", new=FakeClient
         ):
-            parsed = await hermes_console_service.handle_message("查平安银行持仓，把茅台加自选，并低于1680建100股买入条件单")
+            parsed = await hermes_console_service.handle_message("查平安银行持仓，把茅台加自选，并记录1680买入100股")
 
         draft = parsed["draft"]
         self.assertEqual(draft["action"], "multi_step_plan")
@@ -458,26 +458,27 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(draft["plan_steps"][1]["tool_call"]["tool"], "add_watchlist")
         self.assertEqual(draft["plan_steps"][1]["impact_preview"]["status"], "ready")
         self.assertIn("默认自选", draft["plan_steps"][1]["impact_preview"]["summary"])
+        self.assertEqual(draft["plan_steps"][2]["tool_call"]["tool"], "record_trade")
         self.assertEqual(draft["plan_steps"][2]["impact_preview"]["status"], "ready")
-        self.assertIn("待执行条件单", draft["plan_steps"][2]["impact_preview"]["summary"])
+        self.assertIn("增加到", draft["plan_steps"][2]["impact_preview"]["summary"])
 
         result = await hermes_console_service.confirm_draft(parsed["session_id"], draft["id"])
 
         self.assertEqual(result["status"], "ok")
         with sqlite3.connect(self.db_path) as db:
             watch = db.execute("SELECT code, name FROM watchlist WHERE code='600519'").fetchone()
-            order = db.execute("SELECT code, action, shares, target_price FROM conditional_orders WHERE code='600519'").fetchone()
+            trade = db.execute("SELECT code, direction, shares, price FROM trades WHERE code='600519'").fetchone()
             runs = db.execute(
                 "SELECT draft_id, tool, status FROM hermes_tool_runs WHERE session_id=? ORDER BY id",
                 (parsed["session_id"],),
             ).fetchall()
         self.assertEqual(watch, ("600519", "贵州茅台"))
-        self.assertEqual(order, ("600519", "buy", 100, 1680.0))
+        self.assertEqual(trade, ("600519", "buy", 100, 1680.0))
         self.assertEqual(len(runs), 2)
         self.assertTrue(runs[0][0].endswith(":step-2"))
         self.assertEqual(runs[0][1:], ("add_watchlist", "ok"))
         self.assertTrue(runs[1][0].endswith(":step-3"))
-        self.assertEqual(runs[1][1:], ("create_conditional_order", "ok"))
+        self.assertEqual(runs[1][1:], ("record_trade", "ok"))
 
     async def test_llm_plan_persists_task_timeline(self):
         parsed = await self._make_llm_multi_step_plan()
@@ -527,7 +528,7 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["status"], "ok")
         with sqlite3.connect(self.db_path) as db:
             watch = db.execute("SELECT code, name FROM watchlist WHERE code='600519'").fetchone()
-            order = db.execute("SELECT code, action, shares, target_price FROM conditional_orders WHERE code='600519'").fetchone()
+            trade = db.execute("SELECT code, direction, shares, price FROM trades WHERE code='600519'").fetchone()
             task_status = db.execute("SELECT status FROM hermes_tasks WHERE task_id=?", (draft["id"],)).fetchone()[0]
             step_statuses = db.execute(
                 "SELECT step_id, status FROM hermes_task_steps WHERE task_id=? ORDER BY position",
@@ -535,7 +536,7 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             ).fetchall()
 
         self.assertEqual(watch, ("600519", "贵州茅台"))
-        self.assertEqual(order, ("600519", "buy", 100, 1680.0))
+        self.assertEqual(trade, ("600519", "buy", 100, 1680.0))
         self.assertEqual(task_status, "ok")
         self.assertEqual(step_statuses, [("step-1", "done"), ("step-2", "ok"), ("step-3", "ok")])
 
@@ -547,12 +548,12 @@ class HermesConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "skipped")
         with sqlite3.connect(self.db_path) as db:
-            order = db.execute("SELECT code FROM conditional_orders WHERE code='600519'").fetchone()
+            trade = db.execute("SELECT code FROM trades WHERE code='600519'").fetchone()
             step_status = db.execute(
                 "SELECT status FROM hermes_task_steps WHERE task_id=? AND step_id='step-3'",
                 (draft["id"],),
             ).fetchone()[0]
-        self.assertIsNone(order)
+        self.assertIsNone(trade)
         self.assertEqual(step_status, "skipped")
 
     async def test_common_stock_alias_fills_missing_code(self):

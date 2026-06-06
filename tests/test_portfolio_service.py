@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 import models.database as database
 from api.portfolio_api import router as portfolio_router
-from services import portfolio_service
+from services import auth_service, portfolio_service
 
 
 class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -521,6 +521,62 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ledger["entries"][0]["direction"], "trade_sell")
         self.assertEqual(ledger["entries"][0]["amount"], 438.736)
 
+    async def test_add_trade_auto_calculates_fees_from_settings_when_empty(self):
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("commission_rate", "0.0003"),
+                    ("commission_min", "5"),
+                    ("stamp_tax_rate", "0.0005"),
+                    ("transfer_fee_rate", "0.00001"),
+                ],
+            )
+            db.commit()
+
+        await portfolio_service.set_cash_balance("default", 100000, "初始资金")
+        buy = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="buy",
+            price=10.0,
+            shares=1000,
+            commission=None,
+            stamp_tax=None,
+            transfer_fee=None,
+            notes="自动费率买入",
+            trade_time=None,
+            account_id="default",
+        )
+        sell = SimpleNamespace(
+            code="000001",
+            name="平安银行",
+            direction="sell",
+            price=12.0,
+            shares=500,
+            commission=None,
+            stamp_tax=None,
+            transfer_fee=None,
+            notes="自动费率卖出",
+            trade_time=None,
+            account_id="default",
+        )
+
+        await portfolio_service.add_trade(buy)
+        await portfolio_service.add_trade(sell)
+
+        with sqlite3.connect(self.db_path) as db:
+            rows = db.execute(
+                """
+                SELECT direction, commission, stamp_tax, transfer_fee, total_cost
+                FROM trades
+                ORDER BY id
+                """
+            ).fetchall()
+
+        self.assertEqual(rows[0], ("buy", 5.0, 0.0, 0.1, 10005.1))
+        self.assertEqual(rows[1], ("sell", 5.0, 3.0, 0.06, 6008.06))
+
     async def test_portfolio_overview_includes_realized_pnl_from_closed_positions(self):
         await portfolio_service.set_cash_balance("default", 100000, "初始资金")
         buy = SimpleNamespace(
@@ -778,8 +834,21 @@ class PortfolioServiceTests(unittest.IsolatedAsyncioTestCase):
 class PortfolioApiTests(unittest.TestCase):
     def setUp(self):
         app = FastAPI()
+        app.dependency_overrides[auth_service.require_login_user] = lambda: {
+            "id": "admin",
+            "default_securities_account_id": "default",
+        }
         app.include_router(portfolio_router, prefix="/api")
         self.client = TestClient(app)
+        self.resolve_account_patch = patch(
+            "api.portfolio_api.auth_service.resolve_securities_account_id",
+            new=AsyncMock(return_value="default"),
+        )
+        self.resolve_account_patch.start()
+
+    def tearDown(self):
+        self.resolve_account_patch.stop()
+        self.client.close()
 
     def test_pnl_calendar_route_uses_service_layer(self):
         with patch(
@@ -790,7 +859,7 @@ class PortfolioApiTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["year"], 2026)
-        get_pnl_calendar.assert_awaited_once_with(2026, 5, None)
+        get_pnl_calendar.assert_awaited_once_with(2026, 5, None, "default")
 
     def test_pnl_calendar_snapshot_route_uses_service_layer(self):
         with patch(

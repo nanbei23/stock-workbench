@@ -35,7 +35,7 @@ from data.quote import get_batch_quotes  # noqa: E402
 from models.database import SCHEMA  # noqa: E402
 from scheduler.ai_engine import extract_confidence, extract_risk_score, extract_signal, extract_target_price  # noqa: E402
 from services.investment_profile_service import investment_profile_from_db, style_match_assessment  # noqa: E402
-from services import ai_analysis_service, ai_task_service, holding_context_service  # noqa: E402
+from services import ai_analysis_service, ai_task_service, holding_context_service, model_provider_resolver  # noqa: E402
 
 
 TERMINAL_STATUS = {"completed", "failed", "timeout", "cancelled"}
@@ -111,6 +111,44 @@ def _loads(value: Any, fallback: Any):
         return parsed if parsed is not None else fallback
     except (TypeError, ValueError):
         return fallback
+
+
+def _model_provider_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "base_url": row["base_url"],
+        "api_key": row["api_key"],
+        "models": _loads(row["models_json"], []),
+        "quick_model": row["quick_model"],
+        "deep_model": row["deep_model"],
+        "default_model": row["default_model"],
+        "context_length": row["context_length"],
+        "embedding_model": row["embedding_model"],
+        "embedding_dimensions": row["embedding_dimensions"],
+        "usage": _loads(row["usage_json"], []),
+    }
+
+
+def _load_model_providers(db_path: Path) -> list[dict[str, Any]]:
+    with _connect(db_path) as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, name, base_url, api_key, models_json, quick_model, deep_model,
+                       default_model, context_length, embedding_model, embedding_dimensions,
+                       usage_json
+                FROM model_providers
+                ORDER BY updated_at DESC, name ASC
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        if rows:
+            return [_model_provider_from_row(row) for row in rows]
+        row = conn.execute("SELECT value FROM settings WHERE key = 'model_providers'").fetchone()
+    providers = _loads(row["value"] if row else "[]", [])
+    return [provider for provider in providers if isinstance(provider, dict)]
 
 
 def _canonical_signal(value: Any) -> str:
@@ -557,32 +595,11 @@ def _settings_map(db_path: Path) -> dict[str, str]:
 
 
 def _snapshot_llm_config(db_path: Path, *, model_tier: str = "deep") -> dict[str, str]:
-    settings = _settings_map(db_path)
-    provider = (settings.get("llm_provider") or "deepseek").upper()
-    api_key = (
-        settings.get("api_key")
-        or os.environ.get(f"{provider}_API_KEY")
-        or os.environ.get("DEEPSEEK_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or ""
-    )
-    model = settings.get("deep_think_model" if model_tier == "deep" else "quick_think_model") or ""
-    if not model:
-        model = settings.get("quick_think_model") or settings.get("deep_think_model") or ""
-    return {
-        "base_url": settings.get("custom_endpoint") or "",
-        "api_key": api_key,
-        "model": model,
-    }
+    return model_provider_resolver.resolve_ai_config(_settings_map(db_path), db_path=db_path, model_tier=model_tier)
 
 
 def _verification_llm_config(db_path: Path) -> dict[str, str]:
-    settings = _settings_map(db_path)
-    return {
-        "base_url": settings.get("verification_endpoint") or "",
-        "api_key": settings.get("verification_api_key") or "",
-        "model": settings.get("verification_model") or "",
-    }
+    return model_provider_resolver.resolve_verification_config(_settings_map(db_path), db_path=db_path)
 
 
 def _latest_snapshot(db_path: Path, code: str) -> dict[str, Any] | None:
@@ -1396,9 +1413,9 @@ def _save_snapshot_report(
                  policy_report, hot_money_report, lockup_report,
                  investment_debate, risk_debate, final_decision, trader_plan,
                  raw_state, duration_seconds, market_snapshot, fact_check,
-                 depth, model_mode)
+                 depth, model_mode, login_user_id)
             VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -1430,6 +1447,7 @@ def _save_snapshot_report(
                 ),
                 depth,
                 model_mode,
+                "admin",
             ),
         )
         conn.commit()
@@ -1727,8 +1745,6 @@ async def submit_snapshot_reports(
     timeout_seconds: int,
 ) -> list[RankedCandidate]:
     config = _snapshot_llm_config(db_path, model_tier=model_tier)
-    investment_profile = investment_profile_from_db(db_path)
-    investment_profile_context = investment_profile["context"]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def worker(item: RankedCandidate) -> None:
@@ -1746,6 +1762,8 @@ async def submit_snapshot_reports(
             started = datetime.now()
             try:
                 holding_context = await holding_context_service.build_holding_context(item.code)
+                investment_profile = investment_profile_from_db(db_path, code=item.code, report_text=item.name)
+                investment_profile_context = investment_profile["context"]
                 result = await _call_snapshot_llm(
                     _snapshot_prompt(item, snapshot_row, investment_profile_context, holding_context=holding_context),
                     config,
@@ -1783,8 +1801,6 @@ async def submit_snapshot_debate_reports(
     timeout_seconds: int,
 ) -> list[RankedCandidate]:
     config = _snapshot_llm_config(db_path, model_tier=model_tier)
-    investment_profile = investment_profile_from_db(db_path)
-    investment_profile_context = investment_profile["context"]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def worker(item: RankedCandidate) -> None:
@@ -1802,6 +1818,8 @@ async def submit_snapshot_debate_reports(
             started = datetime.now()
             try:
                 holding_context = await holding_context_service.build_holding_context(item.code)
+                investment_profile = investment_profile_from_db(db_path, code=item.code, report_text=item.name)
+                investment_profile_context = investment_profile["context"]
                 role_discussion: list[dict[str, str]] = []
                 for role_key, role_name, role_goal in SNAPSHOT_DEBATE_ROLES:
                     role = {"role_key": role_key, "role_name": role_name, "role_goal": role_goal}
@@ -1851,8 +1869,6 @@ async def submit_snapshot_tradingagents_reports(
     timeout_seconds: int,
 ) -> list[RankedCandidate]:
     config = _snapshot_llm_config(db_path, model_tier=model_tier)
-    investment_profile = investment_profile_from_db(db_path)
-    investment_profile_context = investment_profile["context"]
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def worker(item: RankedCandidate) -> None:
@@ -1870,6 +1886,8 @@ async def submit_snapshot_tradingagents_reports(
             started = datetime.now()
             try:
                 holding_context = await holding_context_service.build_holding_context(item.code)
+                investment_profile = investment_profile_from_db(db_path, code=item.code, report_text=item.name)
+                investment_profile_context = investment_profile["context"]
                 graph_result = await _run_snapshot_tradingagents_graph(
                     item,
                     snapshot_row,
@@ -2163,7 +2181,7 @@ def build_position_plan(db_path: Path, stocks: list[StockCandidate], *, top_n: i
         "investment_profile": investment_profile,
         "recommendations": recommendations,
         "notes": [
-            "组合研究方案只作为研究资产，基于已入库 AI 分析报告生成，不自动写入交易流水或条件单。",
+            "组合研究方案只作为研究资产，基于已入库 AI 分析报告生成，不自动写入交易流水或交易计划。",
             f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，同板块不超过 {max_sector_pct:.3f}%，总仓位不超过 {max_total_pct:.3f}%。",
             f"初始试仓按当前投资风格首批比例 {initial_entry_fraction:.3f} 生成，后续加仓必须重新满足交易纪律手册。",
         ],
@@ -2617,9 +2635,7 @@ def _resolve_role_model_configs(db_path: Path, role_models: dict[str, Any] | Non
     role_models = role_models or {}
     if not role_models:
         return {}
-    with _connect(db_path) as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = 'model_providers'").fetchone()
-    providers = _loads(row["value"] if row else "[]", [])
+    providers = _load_model_providers(db_path)
     providers_by_id = {str(provider.get("id")): provider for provider in providers if isinstance(provider, dict)}
     resolved: dict[str, dict[str, str]] = {}
     for role_key, spec in role_models.items():
@@ -2741,7 +2757,7 @@ def _build_position_plan_from_report_rows(db_path: Path, rows: list[sqlite3.Row]
         "investment_profile": investment_profile,
         "recommendations": buyable + watchers,
         "notes": [
-            "组合研究方案只作为研究资产，基于已勾选并入库的 AI 分析报告生成，不自动写入交易流水或条件单。",
+            "组合研究方案只作为研究资产，基于已勾选并入库的 AI 分析报告生成，不自动写入交易流水或交易计划。",
             f"单票建议金额不超过当前投资风格上限 {max_single_pct:.3f}%，用于空仓后的分批建仓参考。",
         ],
     }
@@ -2824,7 +2840,7 @@ async def build_multi_role_position_plan(
         "notes": [
             "组合研究方案由组合经理、风控经理、交易员、反方审查和最终裁决多角色顺序讨论生成。",
             "上下文包含已勾选并入库的完整 AI 报告内容，以及生成组合研究方案当下采集的实时行情/K线快照。",
-            "组合研究方案只作为研究资产，不自动写入交易流水或条件单。",
+            "组合研究方案只作为研究资产，不自动写入交易流水或交易计划。",
         ],
     }
 

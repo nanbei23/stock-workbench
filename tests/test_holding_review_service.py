@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import models.database as database
-from services import holding_review_service
+from services import batch_report_service, holding_review_service
 
 
 class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -75,9 +75,9 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(review["asset_snapshot"]["position_usage_pct"], 10.891)
         self.assertIn("所有建议必须基于当前真实仓位和可用资金", review["tomorrow_plan_markdown"])
         roles = review["tomorrow_plan"]["role_discussion"]
-        self.assertEqual([role["role"] for role in roles], ["持仓经理", "风控经理", "交易员/最终执行"])
+        self.assertEqual([role["role"] for role in roles], ["交易员", "风控", "组合经理"])
         self.assertIn("三角色讨论", review["tomorrow_plan_markdown"])
-        self.assertIn("持仓经理", review["tomorrow_plan_markdown"])
+        self.assertIn("组合经理", review["tomorrow_plan_markdown"])
 
         flags = await holding_review_service.get_review_flags(review["review_id"])
         flag_types = {flag["flag_type"] for flag in flags["flags"]}
@@ -86,7 +86,7 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
 
         saved_review = await holding_review_service.get_review(review["review_id"])
         saved_roles = saved_review["tomorrow_plan"]["role_discussion"]
-        self.assertEqual(saved_roles[1]["role"], "风控经理")
+        self.assertEqual(saved_roles[1]["role"], "风控")
         self.assertIn("信号冲突", saved_roles[1]["view"])
 
     async def test_run_review_builds_tomorrow_trading_battle_plan_context(self):
@@ -162,6 +162,115 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         saved_review = await holding_review_service.get_review(review["review_id"])
         self.assertEqual(saved_review["tomorrow_plan"]["report_refresh_job"]["job_id"], "re-补报告")
 
+    async def test_run_review_uses_three_llm_roles_and_persists_structured_actions(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO settings (key, value) VALUES (?, ?)",
+                [
+                    ("cash_balance_default", "9000"),
+                    ("custom_endpoint", "https://api.example.com/v1"),
+                    ("api_key", "sk-test"),
+                    ("deep_think_model", "model-deep"),
+                ],
+            )
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, final_decision, trader_plan, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("000001", "today-r1", "BUY", 30, "股票研究偏多", "等回踩加仓", "2026-06-04 10:00:00"),
+            )
+            db.execute(
+                """
+                INSERT INTO stock_data_snapshots (code, name, snapshot_json, validation_json, summary_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", "{}", "{\"ok\": true}", "{}", "2026-06-04 10:00:00"),
+            )
+            db.commit()
+
+        role_outputs = [
+            {
+                "role": "交易员",
+                "stance": "执行优先",
+                "view": "已有低仓位，满足条件后可小幅加仓。",
+                "action_items": ["等待回踩确认"],
+                "actions": [{"code": "000001", "action": "add", "reason": "低仓位且研究信号偏多", "target_position_pct": 12.5}],
+            },
+            {
+                "role": "风控",
+                "stance": "约束仓位",
+                "view": "单票不可超过纪律上限。",
+                "action_items": ["止损线必须明确"],
+                "actions": [{"code": "000001", "action": "hold", "reason": "等待风控确认"}],
+            },
+            {
+                "role": "组合经理",
+                "stance": "最终裁决",
+                "view": "现金充足，但先保持观察，回踩后再加仓。",
+                "action_items": ["观察回踩"],
+                "actions": [{"code": "000001", "action": "watch", "reason": "未触发回踩买入", "target_position_pct": 10.0}],
+            },
+        ]
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 11.0, "change_pct": 1.2, "name": "平安银行"}}),
+        ), patch(
+            "services.holding_review_service._call_daily_decision_role_llm",
+            new=AsyncMock(side_effect=role_outputs),
+            create=True,
+        ) as call_role:
+            review = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                force_refresh_holdings=False,
+                refresh_snapshots_for_reports=False,
+                wait_for_report_refresh=False,
+            )
+
+        self.assertEqual(call_role.await_count, 3)
+        roles = review["tomorrow_plan"]["role_discussion"]
+        self.assertEqual([role["role"] for role in roles], ["交易员", "风控", "组合经理"])
+        self.assertEqual(review["tomorrow_plan"]["structured_actions"][0]["action"], "watch")
+        self.assertIn("结构化动作", review["tomorrow_plan_markdown"])
+        self.assertIn("观察", review["tomorrow_plan_markdown"])
+
+        items = await holding_review_service.get_review_items(review["review_id"])
+        self.assertEqual(items["items"][0]["decision_action"], "watch")
+        self.assertEqual(items["items"][0]["decision_status"], "not_executed")
+        self.assertEqual(items["items"][0]["decision_reason"], "未触发回踩买入")
+
+    async def test_update_review_item_decision_status(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO holding_review_items
+                    (review_id, date, account_id, item_type, code, name, decision_action, decision_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("hr-1", "2026-06-04", "default", "holding", "000001", "平安银行", "hold", "not_executed"),
+            )
+            item_id = db.execute("SELECT id FROM holding_review_items").fetchone()[0]
+            db.commit()
+
+        result = await holding_review_service.update_review_item_decision_status(
+            "hr-1",
+            item_id,
+            "executed",
+        )
+
+        self.assertEqual(result["decision_status"], "executed")
+
     async def test_run_review_only_includes_selected_watchlist_candidates_without_mixing_holdings(self):
         await database.init_db()
         with sqlite3.connect(self.db_path) as db:
@@ -209,6 +318,7 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                 include_watchlist_candidates=True,
                 include_observation_pool=False,
                 candidate_codes=["000002"],
+                wait_for_report_refresh=False,
             )
 
         self.assertEqual(review["holding_count"], 1)
@@ -316,23 +426,91 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                 refresh_snapshots_for_reports=True,
             )
 
+        self.assertEqual(review["status"], "waiting_reports")
+        self.assertEqual(review["batch_job_id"], "re-force")
         self.assertEqual(review["rerun_report_codes"], ["000001", "000002"])
         self.assertEqual(review["tomorrow_plan"]["report_refresh_job"]["job_id"], "re-force")
-        self.assertEqual(review["status"], "waiting_reports")
-        self.assertTrue(review["tomorrow_plan"]["report_refresh_policy"]["force_refresh_holdings"])
-        self.assertTrue(review["tomorrow_plan"]["report_refresh_policy"]["force_refresh_candidates"])
-        self.assertTrue(review["tomorrow_plan"]["report_refresh_policy"]["refresh_snapshots"])
-        self.assertFalse(review["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
+        self.assertTrue(review["report_refresh_policy"]["force_refresh_holdings"])
+        self.assertTrue(review["report_refresh_policy"]["force_refresh_candidates"])
+        self.assertTrue(review["report_refresh_policy"]["refresh_snapshots"])
+        self.assertFalse(review["report_refresh_policy"]["plan_deferred_until_manual_run"])
+        self.assertTrue(review["report_refresh_policy"]["auto_finalize_after_refresh"])
         self.assertIn("等待补报告完成", review["tomorrow_plan_markdown"])
+        self.assertIn("补报告完成后将自动生成最终", review["tomorrow_plan_markdown"])
+        self.assertIn("review_id", review)
 
-        items = await holding_review_service.get_review_items(review["review_id"])
-        by_code = {item["code"]: item for item in items["items"]}
-        self.assertEqual(by_code["000001"]["needs_report"], 1)
-        self.assertEqual(by_code["000002"]["needs_report"], 1)
-        self.assertIn("持有", by_code["000001"]["reason"])
-        self.assertIn("已强制加入补报告队列", by_code["000001"]["reason"])
+        with sqlite3.connect(self.db_path) as db:
+            saved_count = db.execute("SELECT COUNT(*) FROM holding_daily_reviews").fetchone()[0]
+            item_count = db.execute("SELECT COUNT(*) FROM holding_review_items").fetchone()[0]
+            flag_count = db.execute("SELECT COUNT(*) FROM holding_trigger_flags").fetchone()[0]
+        self.assertEqual(saved_count, 1)
+        self.assertEqual(item_count, 2)
+        self.assertGreaterEqual(flag_count, 0)
 
-    async def test_run_review_waits_for_forced_reports_then_finalizes_with_latest_reports(self):
+    async def test_run_review_adds_watchlist_candidates_by_latest_report_signal_filter(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "5000"))
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            for code, name, group_name in [
+                ("000002", "万科A", "默认"),
+                ("000003", "观察股", "观察池"),
+                ("000004", "持有信号", "默认"),
+                ("000001", "平安银行", "默认"),
+            ]:
+                db.execute(
+                    "INSERT INTO watchlist (code, name, group_name, sort_order) VALUES (?, ?, ?, ?)",
+                    (code, name, group_name, 1),
+                )
+            for code, signal in [
+                ("000001", "HOLD"),
+                ("000002", "BUY"),
+                ("000003", "OVERWEIGHT"),
+                ("000004", "HOLD"),
+            ]:
+                db.execute(
+                    """
+                    INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (code, f"r-{code}", signal, 30, "2026-06-04 10:00:00"),
+                )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(
+                return_value={
+                    "000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"},
+                    "000002": {"price": 20.0, "change_pct": 2.0, "name": "万科A"},
+                    "000003": {"price": 8.0, "change_pct": 1.0, "name": "观察股"},
+                    "000004": {"price": 6.0, "change_pct": -1.0, "name": "持有信号"},
+                }
+            ),
+        ):
+            review = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                include_watchlist_candidates=True,
+                include_observation_pool=False,
+                candidate_signal_filters=["BUY", "OVERWEIGHT"],
+                wait_for_report_refresh=False,
+            )
+
+        self.assertEqual(review["status"], "completed")
+        self.assertEqual(review["holding_count"], 1)
+        self.assertEqual(review["candidate_count"], 1)
+        self.assertEqual(review["candidate_scope"], "signal_filter:BUY,OVERWEIGHT")
+        self.assertEqual([item["code"] for item in review["candidate_context"]["items"]], ["000002"])
+        self.assertEqual(review["candidate_context"]["items"][0]["latest_signal"], "BUY")
+
+    async def test_run_review_persists_waiting_review_and_auto_finalizes_after_forced_reports(self):
         await database.init_db()
         with sqlite3.connect(self.db_path) as db:
             db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "5000"))
@@ -369,18 +547,20 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             "services.batch_report_service.create_research_job",
             new=AsyncMock(side_effect=fake_create_job),
         ):
-            pending = await holding_review_service.run_daily_review(
+            result = await holding_review_service.run_daily_review(
                 account_id="default",
                 date_text="2026-06-04",
                 force_refresh_holdings=True,
             )
 
-        self.assertEqual(pending["status"], "waiting_reports")
-        self.assertEqual(pending["batch_job_id"], "re-force")
-        self.assertIn("等待补报告完成", pending["tomorrow_plan_markdown"])
-        self.assertFalse(pending["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
+        self.assertEqual(result["status"], "waiting_reports")
+        self.assertEqual(result["batch_job_id"], "re-force")
+        self.assertIn("等待补报告完成", result["summary"])
+        review_id = result["review_id"]
 
         with sqlite3.connect(self.db_path) as db:
+            waiting = db.execute("SELECT status, batch_job_id FROM holding_daily_reviews WHERE review_id=?", (review_id,)).fetchone()
+            self.assertEqual(waiting, ("waiting_reports", "re-force"))
             db.execute(
                 """
                 INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
@@ -404,12 +584,15 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             result = await holding_review_service.finalize_waiting_reviews_for_batch_job("re-force")
 
         self.assertEqual(result["finalized"], 1)
-        saved = await holding_review_service.get_review(pending["review_id"])
-        self.assertEqual(saved["status"], "completed")
-        self.assertEqual(saved["review_id"], pending["review_id"])
-        self.assertTrue(saved["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
-        items = await holding_review_service.get_review_items(pending["review_id"])
-        self.assertEqual(items["items"][0]["latest_signal"], "SELL")
+        self.assertEqual(result["pending"], 0)
+        with sqlite3.connect(self.db_path) as db:
+            saved = db.execute(
+                "SELECT status, batch_job_id, tomorrow_plan_json FROM holding_daily_reviews WHERE review_id=?",
+                (review_id,),
+            ).fetchone()
+        self.assertEqual(saved[0], "completed")
+        self.assertEqual(saved[1], "re-force")
+        self.assertIn('"plan_uses_refreshed_reports": true', saved[2])
 
     async def test_list_reviews_reconciles_waiting_review_after_completed_refresh_job(self):
         await database.init_db()
@@ -441,13 +624,13 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             "services.batch_report_service.create_research_job",
             new=AsyncMock(side_effect=fake_create_job),
         ):
-            pending = await holding_review_service.run_daily_review(
+            result = await holding_review_service.run_daily_review(
                 account_id="default",
                 date_text="2026-06-04",
                 force_refresh_holdings=True,
             )
 
-        self.assertEqual(pending["status"], "waiting_reports")
+        self.assertEqual(result["status"], "waiting_reports")
 
         with sqlite3.connect(self.db_path) as db:
             db.execute(
@@ -472,10 +655,78 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
         ):
             reviews = await holding_review_service.list_reviews(limit=1)
 
-        self.assertEqual(reviews["reviews"][0]["review_id"], pending["review_id"])
+        self.assertEqual(len(reviews["reviews"]), 1)
         self.assertEqual(reviews["reviews"][0]["status"], "completed")
-        self.assertTrue(reviews["reviews"][0]["tomorrow_plan"]["report_refresh_policy"]["plan_uses_refreshed_reports"])
-        self.assertNotIn("等待补报告完成", reviews["reviews"][0]["tomorrow_plan_markdown"])
+        self.assertIn("基于补跑后的最新入库报告", reviews["reviews"][0]["tomorrow_plan"]["report_refresh_policy"]["note"])
+
+    async def test_batch_completion_hook_auto_generates_waiting_daily_decision_report(self):
+        await database.init_db()
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("cash_balance_default", "5000"))
+            db.execute(
+                """
+                INSERT INTO portfolio (code, name, total_shares, avg_cost, account_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "平安银行", 100, 10.0, "default"),
+            )
+            db.execute(
+                """
+                INSERT INTO batch_jobs (job_id, job_type, status, total_count, completed_count)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("re-hook", "report_generation", "pending", 1, 0),
+            )
+            db.commit()
+
+        async def fake_create_job(**kwargs):
+            return {"job_id": "re-hook", "job_type": "report_generation", "status": "pending", "total_count": 1}
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 10.0, "change_pct": 0.0, "name": "平安银行"}}),
+        ), patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(side_effect=fake_create_job),
+        ):
+            waiting = await holding_review_service.run_daily_review(
+                account_id="default",
+                date_text="2026-06-04",
+                force_refresh_holdings=True,
+            )
+
+        self.assertEqual(waiting["status"], "waiting_reports")
+        with sqlite3.connect(self.db_path) as db:
+            db.execute(
+                """
+                INSERT INTO analysis_reports (code, task_id, signal, risk_score, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("000001", "new-holding", "SELL", 90, "2026-06-04 11:00:00"),
+            )
+            db.execute(
+                """
+                UPDATE batch_jobs
+                SET status='completed', completed_count=1, completed_at=datetime('now')
+                WHERE job_id='re-hook'
+                """
+            )
+            db.commit()
+
+        with patch(
+            "services.portfolio_service.get_batch_quotes",
+            new=AsyncMock(return_value={"000001": {"price": 9.5, "change_pct": -1.0, "name": "平安银行"}}),
+        ):
+            await batch_report_service._run_report_generation_completion_hooks("re-hook")
+
+        with sqlite3.connect(self.db_path) as db:
+            row = db.execute(
+                "SELECT status, completed_at, tomorrow_plan_json FROM holding_daily_reviews WHERE review_id=?",
+                (waiting["review_id"],),
+            ).fetchone()
+        self.assertEqual(row[0], "completed")
+        self.assertIsNotNone(row[1])
+        self.assertIn('"plan_uses_refreshed_reports": true', row[2])
 
     async def test_run_review_marks_failed_when_report_refresh_job_cannot_be_created(self):
         await database.init_db()
@@ -504,8 +755,10 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(review["status"], "report_refresh_failed")
         self.assertIn("worker unavailable", review["error"])
-        self.assertEqual(review["tomorrow_plan"]["battle_plan"], {})
-        self.assertIn("未生成最终每日 AI 决策报告", review["tomorrow_plan_markdown"])
+        self.assertIn("补报告任务创建失败", review["tomorrow_plan_markdown"])
+        self.assertIn("review_id", review)
+        with sqlite3.connect(self.db_path) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM holding_daily_reviews").fetchone()[0], 1)
 
     async def test_scheduled_review_uses_persistent_candidate_group_without_page_selection(self):
         await database.init_db()
@@ -556,6 +809,11 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             db.commit()
 
+        async def fake_create_job(**kwargs):
+            self.assertEqual(kwargs["codes"], ["000001"])
+            self.assertTrue(kwargs["refresh_snapshots"])
+            return {"job_id": "re-scheduled", "job_type": "report_generation", "status": "pending", "total_count": 1}
+
         with patch(
             "services.portfolio_service.get_batch_quotes",
             new=AsyncMock(
@@ -564,10 +822,18 @@ class HoldingReviewServiceTests(unittest.IsolatedAsyncioTestCase):
                     "000002": {"price": 20.0, "change_pct": 1.0, "name": "万科A"},
                 }
             ),
+        ), patch(
+            "services.batch_report_service.create_research_job",
+            new=AsyncMock(side_effect=fake_create_job),
         ):
             review = await holding_review_service.run_scheduled_daily_decision_report(date_text="2026-06-04")
 
+        self.assertEqual(review["status"], "waiting_reports")
+        self.assertEqual(review["batch_job_id"], "re-scheduled")
         self.assertEqual(review["candidate_count"], 1)
         self.assertEqual(review["candidate_scope"], "fixed_group:每日决策候选")
         self.assertEqual([item["code"] for item in review["candidate_context"]["items"]], ["000002"])
-        self.assertEqual(review["tomorrow_plan"]["pending_request"], {})
+        self.assertEqual(review["rerun_report_codes"], ["000001"])
+        self.assertTrue(review["report_refresh_policy"]["force_refresh_holdings"])
+        self.assertFalse(review["report_refresh_policy"]["force_refresh_candidates"])
+        self.assertTrue(review["report_refresh_policy"]["refresh_snapshots"])

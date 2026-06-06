@@ -49,21 +49,6 @@ Hermes 对话台允许 LLM 把自然语言转换为受控工具调用。LLM 只�
 
 对应工具：`set_position`
 
-### conditional_orders
-
-用途：条件单和到价提醒。
-
-关键字段：
-
-- `code`: 6 位股票代码。
-- `name`: 股票名称。
-- `condition_type`: `price_lte`、`price_gte`、`change_pct_gte`、`change_pct_lte`。
-- `target_price`: 触发价。
-- `action`: `buy` 或 `sell`。
-- `shares`: 计划股数，可为 0。
-
-对应工具：`create_conditional_order`
-
 ## 工具参数
 
 ### add_watchlist
@@ -109,22 +94,6 @@ Hermes 对话台允许 LLM 把自然语言转换为受控工具调用。LLM 只�
 
 `price` 可为空；为空时后端优先使用已有持仓均价。如果没有均价，草稿不可执行。
 
-### create_conditional_order
-
-```json
-{
-  "tool": "create_conditional_order",
-  "args": {
-    "code": "600519",
-    "name": "贵州茅台",
-    "trade_action": "buy",
-    "condition_type": "price_lte",
-    "target_price": 1680,
-    "shares": 100
-  }
-}
-```
-
 ## 返回格式
 
 LLM 应返回单个 JSON object：
@@ -168,19 +137,6 @@ LLM 应返回单个 JSON object：
         "args": {
           "code": "600519",
           "name": "贵州茅台"
-        },
-        "requires_confirmation": true
-      },
-      {
-        "title": "创建买入条件单",
-        "tool": "create_conditional_order",
-        "args": {
-          "code": "600519",
-          "name": "贵州茅台",
-          "trade_action": "buy",
-          "condition_type": "price_lte",
-          "target_price": 1680,
-          "shares": 100
         },
         "requires_confirmation": true
       }

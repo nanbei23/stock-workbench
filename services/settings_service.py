@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from models.database import MIGRATIONS
 from repositories import settings_repository as repo
 from services.investment_profile_service import DEFAULT_INVESTMENT_SETTINGS
+from services import model_provider_resolver
 
 
 DEFAULTS = {
@@ -26,11 +27,15 @@ DEFAULTS = {
     "quick_think_model": "",
     "llm_model_options": "[]",
     "llm_context_length": "",
+    "ai_primary_provider_id": "",
+    "ai_quick_model": "",
+    "ai_deep_model": "",
     "api_key": "",
     "custom_endpoint": "",
     "output_language": "zh",
     "verification_name": "",
     "verification_model": "",
+    "verification_provider_id": "",
     "verification_model_options": "[]",
     "verification_context_length": "",
     "debate_rounds": "1",
@@ -51,8 +56,14 @@ DEFAULTS = {
     "daily_decision_candidate_group": "每日决策候选",
     "daily_decision_signal_filter": "STRONG_BUY,BUY,OVERWEIGHT",
     "daily_decision_include_observation_pool": "false",
+    "self_evolution_auto_enabled": "true",
+    "self_evolution_auto_time": "15:45",
+    "embedding_model": "text-embedding-3-small",
+    "embedding_provider_id": "",
+    "embedding_dimensions": "1536",
+    "embedding_endpoint": "https://api.openai.com/v1/embeddings",
+    "embedding_api_key": "",
     "notify_strategy_change": "true",
-    "notify_order_trigger": "true",
     "notify_anomaly": "true",
     "notify_analysis_done": "true",
     "browser_notify_enabled": "false",
@@ -81,7 +92,6 @@ DEFAULTS = {
             "add_watchlist": "draft",
             "record_trade": "draft",
             "set_position": "draft",
-            "create_conditional_order": "draft",
         },
         ensure_ascii=False,
     ),
@@ -110,15 +120,65 @@ def get_all_settings():
     return result
 
 
+def _shadow_provider_reference_settings(settings: dict) -> dict:
+    enriched = dict(settings)
+    db_path = _db_path()
+    ai_provider = model_provider_resolver.provider_by_id(str(enriched.get("ai_primary_provider_id") or ""), db_path)
+    if ai_provider:
+        models = ai_provider.get("models") or []
+        quick = ai_provider.get("quick_model") or ai_provider.get("default_model") or ai_provider.get("deep_model") or ""
+        deep = ai_provider.get("deep_model") or ai_provider.get("default_model") or ai_provider.get("quick_model") or ""
+        enriched.update(
+            {
+                "llm_name": ai_provider.get("name") or "",
+                "custom_endpoint": ai_provider.get("base_url") or "",
+                "api_key": ai_provider.get("api_key") or "",
+                "quick_think_model": quick,
+                "deep_think_model": deep,
+                "llm_model_options": json.dumps(models, ensure_ascii=False),
+                "llm_context_length": ai_provider.get("context_length") or "",
+            }
+        )
+
+    verification_provider = model_provider_resolver.provider_by_id(str(enriched.get("verification_provider_id") or ""), db_path)
+    if verification_provider:
+        models = verification_provider.get("models") or []
+        model = verification_provider.get("default_model") or verification_provider.get("deep_model") or verification_provider.get("quick_model") or ""
+        enriched.update(
+            {
+                "verification_name": verification_provider.get("name") or "",
+                "verification_endpoint": verification_provider.get("base_url") or "",
+                "verification_api_key": verification_provider.get("api_key") or "",
+                "verification_model": model,
+                "verification_model_options": json.dumps(models, ensure_ascii=False),
+                "verification_context_length": verification_provider.get("context_length") or "",
+            }
+        )
+
+    embedding_provider = model_provider_resolver.provider_by_id(str(enriched.get("embedding_provider_id") or ""), db_path)
+    if embedding_provider:
+        model = embedding_provider.get("embedding_model") or embedding_provider.get("default_model") or embedding_provider.get("quick_model") or ""
+        enriched.update(
+            {
+                "embedding_endpoint": embedding_provider.get("base_url") or "",
+                "embedding_api_key": embedding_provider.get("api_key") or "",
+                "embedding_model": model,
+                "embedding_dimensions": str(embedding_provider.get("embedding_dimensions") or enriched.get("embedding_dimensions") or 1536),
+            }
+        )
+    return enriched
+
+
 def bulk_update_settings(settings: dict):
     existing = repo.fetch_settings()
     sanitized = {}
-    secret_keys = {"api_key", "verification_api_key"}
+    secret_keys = {"api_key", "verification_api_key", "embedding_api_key"}
     for key, value in settings.items():
         if key in secret_keys and str(value or "").strip() == "********":
             if existing.get(key):
                 continue
         sanitized[key] = value
+    sanitized = _shadow_provider_reference_settings(sanitized)
     repo.upsert_settings(sanitized)
     return {"status": "ok", "updated": len(sanitized)}
 
@@ -214,20 +274,14 @@ def set_model_mode(value):
 
 def llm_test_config():
     settings = repo.fetch_settings()
-    return {
-        "api_key": settings.get("api_key", ""),
-        "endpoint": settings.get("custom_endpoint", ""),
-        "model": settings.get("quick_think_model", "deepseek-chat"),
-    }
+    config = model_provider_resolver.resolve_ai_config(settings, db_path=_db_path(), model_tier="quick")
+    return {"api_key": config.get("api_key", ""), "endpoint": config.get("base_url", ""), "model": config.get("model", "")}
 
 
 def verification_test_config():
-    settings = repo.fetch_settings_like("verification_%")
-    return {
-        "model": settings.get("verification_model") or "mimo-v2.5-pro",
-        "endpoint": settings.get("verification_endpoint") or "https://token-plan-cn.xiaomimimo.com/v1",
-        "api_key": settings.get("verification_api_key") or "",
-    }
+    settings = repo.fetch_settings()
+    config = model_provider_resolver.resolve_verification_config(settings, db_path=_db_path())
+    return {"model": config.get("model") or "mimo-v2.5-pro", "endpoint": config.get("base_url") or "", "api_key": config.get("api_key") or ""}
 
 
 def export_payload():
@@ -364,6 +418,46 @@ def restore_latest_backup():
         "database_path": str(db_file),
         "pre_restore_backup_path": pre_restore_backup_path,
         "integrity": integrity,
+    }
+
+
+def restore_uploaded_database_file(uploaded_path: Path | str, *, original_filename: str = ""):
+    source = Path(uploaded_path).resolve()
+    if not source.exists():
+        raise HTTPException(404, "上传的数据库文件不存在")
+    filename = Path(original_filename or source.name).name
+    integrity = _sqlite_integrity(source)
+    if not integrity["ok"]:
+        raise HTTPException(400, f"上传数据库校验失败: {integrity['integrity']}")
+
+    db_file = _db_path()
+    pre_restore_backup_path = ""
+    if db_file.exists():
+        pre_restore = _backup_dir() / _backup_filename("stock-workbench-db-pre-upload-restore")
+        _copy_sqlite_database(db_file, pre_restore)
+        pre_restore_backup_path = str(pre_restore)
+
+    temp_restore = db_file.with_suffix(f"{db_file.suffix}.upload-restore-tmp")
+    temp_restore.unlink(missing_ok=True)
+    try:
+        shutil.copy2(source, temp_restore)
+        final_integrity = _sqlite_integrity(temp_restore)
+        if not final_integrity["ok"]:
+            raise HTTPException(400, f"上传数据库临时校验失败: {final_integrity['integrity']}")
+        shutil.move(str(temp_restore), str(db_file))
+    finally:
+        temp_restore.unlink(missing_ok=True)
+
+    return {
+        "status": "ok",
+        "restored_type": "sqlite",
+        "filename": filename,
+        "path": str(source),
+        "database_path": str(db_file),
+        "pre_restore_backup_path": pre_restore_backup_path,
+        "integrity": integrity,
+        "restart_required": True,
+        "message": "数据库文件已恢复，建议重启服务以释放旧连接并重新加载数据",
     }
 
 

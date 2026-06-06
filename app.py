@@ -59,6 +59,14 @@ async def page_watchlist(request: Request):
 async def page_portfolio(request: Request):
     return templates.TemplateResponse(request=request, name="portfolio.html")
 
+@app.get("/login", response_class=HTMLResponse)
+async def page_login(request: Request):
+    return templates.TemplateResponse(request=request, name="login.html")
+
+@app.get("/account", response_class=HTMLResponse)
+async def page_account(request: Request):
+    return templates.TemplateResponse(request=request, name="account.html")
+
 @app.get("/ai", response_class=HTMLResponse)
 async def page_ai(request: Request):
     return templates.TemplateResponse(request=request, name="ai.html")
@@ -115,6 +123,10 @@ async def page_ops(request: Request):
 async def page_shadow(request: Request):
     return templates.TemplateResponse(request=request, name="shadow.html")
 
+@app.get("/self-evolution", response_class=HTMLResponse)
+async def page_self_evolution(request: Request):
+    return templates.TemplateResponse(request=request, name="self_evolution.html")
+
 @app.get("/settings", response_class=HTMLResponse)
 async def page_settings(request: Request):
     return templates.TemplateResponse(request=request, name="settings.html")
@@ -134,13 +146,16 @@ from api.layer_api import router as layer_router
 from api.strategy_api import router as strategy_router
 from api.pdf_export import router as pdf_router
 from api.signal_api import router as signal_router
+from api.auth_api import router as auth_router
 from api.enhancement_api import router as enhancement_router
 from api.hermes_api import router as hermes_router
 from api.shadow_api import router as shadow_router
 from api.performance_api import router as performance_router
+from api.self_evolution_api import router as self_evolution_router
 from api.batch_report_api import router as batch_report_router
 from api.position_plan_api import router as position_plan_router
 from api.holding_review_api import router as holding_review_router
+from api.report_selection_api import router as report_selection_router
 
 app.include_router(quote_router, prefix="/api")
 app.include_router(portfolio_router, prefix="/api")
@@ -151,13 +166,16 @@ app.include_router(layer_router, prefix="/api")
 app.include_router(strategy_router, prefix="/api")
 app.include_router(pdf_router, prefix="/api")
 app.include_router(signal_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
 app.include_router(enhancement_router, prefix="/api")
 app.include_router(hermes_router, prefix="/api")
 app.include_router(shadow_router, prefix="/api")
 app.include_router(performance_router, prefix="/api")
+app.include_router(self_evolution_router, prefix="/api")
 app.include_router(batch_report_router, prefix="/api")
 app.include_router(position_plan_router, prefix="/api")
 app.include_router(holding_review_router, prefix="/api")
+app.include_router(report_selection_router, prefix="/api")
 
 # === WebSocket 实时行情 ===
 @app.websocket("/ws/quotes")
